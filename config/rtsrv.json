@@ -1,0 +1,38 @@
+{
+    "daemon": {
+        "pid_file": "/run/rtsrv/rtsrv.pid",
+        "log_file": "/var/log/rtsrv/rtsrv.log",
+        "log_level": "info",
+        "working_dir": "/"
+    },
+    "servers": [
+        {
+            "id": "primary",
+            "host": "server1.example.com",
+            "port": 50051,
+            "auth_token": "",
+            "tls_enabled": false,
+            "tls_ca_cert": "",
+            "tls_client_cert": "",
+            "tls_client_key": "",
+            "connect_timeout_s": 10,
+            "heartbeat_interval_s": 30,
+            "reconnect_delay_s": 5,
+            "max_reconnect_attempts": 0
+        },
+        {
+            "id": "secondary",
+            "host": "server2.example.com",
+            "port": 50051,
+            "auth_token": "change-me-bearer-token",
+            "tls_enabled": true,
+            "tls_ca_cert": "/etc/rtsrv/ca.pem",
+            "tls_client_cert": "/etc/rtsrv/client.pem",
+            "tls_client_key": "/etc/rtsrv/client.key",
+            "connect_timeout_s": 15,
+            "heartbeat_interval_s": 60,
+            "reconnect_delay_s": 10,
+            "max_reconnect_attempts": 0
+        }
+    ]
+}

@@ -1,0 +1,83 @@
+# /lib/systemd/system/rtsrv.service
+#
+# Systemd unit file for the rtsrv real-time service daemon.
+#
+# The daemon performs its own classic double-fork daemonisation and writes a
+# PID file, so the unit type is "forking".
+#
+# Installation:
+#   sudo cp systemd/rtsrv.service /lib/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rtsrv
+#
+# Management:
+#   sudo systemctl start   rtsrv   # Start the daemon
+#   sudo systemctl stop    rtsrv   # Send SIGTERM (graceful shutdown)
+#   sudo systemctl reload  rtsrv   # Send SIGHUP  (configuration reload)
+#   sudo systemctl status  rtsrv   # Show status and recent log lines
+#   journalctl -u rtsrv -f         # Follow the systemd journal
+
+[Unit]
+Description=rtsrv Real-Time Service Daemon
+Documentation=man:rtsrv(8)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# The daemon performs its own double-fork; systemd tracks the PID file.
+Type=forking
+PIDFile=/run/rtsrv/rtsrv.pid
+
+# Run as a dedicated unprivileged user/group
+User=rtsrv
+Group=rtsrv
+
+# Runtime directory – created by systemd, removed on stop
+RuntimeDirectory=rtsrv
+RuntimeDirectoryMode=0750
+
+# Log and config directories must exist before the daemon starts
+# (created by the package post-install script or tmpfiles.d)
+ExecStartPre=/usr/bin/install -d -o rtsrv -g rtsrv -m 0750 /var/log/rtsrv
+ExecStartPre=/usr/bin/install -d -o rtsrv -g rtsrv -m 0750 /run/rtsrv
+
+ExecStart=/usr/local/sbin/rtsrv --config /etc/rtsrv/rtsrv.json
+
+# Send SIGHUP to reload the configuration without restarting
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Send SIGTERM for graceful shutdown; fall back to SIGKILL after 30 s
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+FinalKillSignal=SIGKILL
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+# Hard resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/rtsrv /var/log/rtsrv /etc/rtsrv
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Logging: redirect stdout/stderr to the journal
+# (the daemon itself also writes to /var/log/rtsrv/rtsrv.log via Boost.Log)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rtsrv
+
+[Install]
+WantedBy=multi-user.target

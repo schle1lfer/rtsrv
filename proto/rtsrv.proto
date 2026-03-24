@@ -1,0 +1,230 @@
+/**
+ * @file rtsrv.proto
+ * @brief gRPC protocol definition for the rtsrv real-time service daemon.
+ *
+ * Defines the RtService gRPC service used for bidirectional communication
+ * between the rtsrv daemon and remote server endpoints. The protocol supports
+ * session establishment, periodic heartbeating, event publishing, and
+ * bidirectional event streaming.
+ *
+ * @version 1.0
+ */
+
+syntax = "proto3";
+
+package rtsrv.v1;
+
+option cc_enable_arenas = true;
+
+// ---------------------------------------------------------------------------
+// Common message types
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Severity level for events and log messages.
+ */
+enum Severity
+{
+    SEVERITY_UNSPECIFIED = 0; ///< Default / unset severity.
+    SEVERITY_DEBUG = 1;       ///< Debug-level event.
+    SEVERITY_INFO = 2;        ///< Informational event.
+    SEVERITY_WARNING = 3;     ///< Warning condition.
+    SEVERITY_ERROR = 4;       ///< Non-fatal error.
+    SEVERITY_CRITICAL = 5;    ///< Critical / fatal error.
+}
+
+/**
+ * @brief Identifies the originating daemon instance.
+ */
+message DaemonIdentity
+{
+    string daemon_id = 1;   ///< Unique daemon instance identifier (UUID v4).
+    string hostname = 2;    ///< Hostname of the machine running the daemon.
+    string version = 3;     ///< Daemon software version string (semver).
+    int64 start_time_us = 4; ///< Unix epoch start time in microseconds.
+}
+
+// ---------------------------------------------------------------------------
+// Connect / Disconnect
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request sent by the daemon when establishing a new session.
+ */
+message ConnectRequest
+{
+    DaemonIdentity identity = 1; ///< Identity of the connecting daemon.
+    string auth_token = 2; ///< Optional bearer token for server-side auth.
+    repeated string capabilities = 3; ///< Feature capabilities advertised by
+                                      ///< this daemon instance.
+}
+
+/**
+ * @brief Response returned by the server on session establishment.
+ */
+message ConnectResponse
+{
+    string session_id = 1; ///< Opaque server-assigned session identifier.
+    bool accepted = 2;     ///< True when the server accepted the connection.
+    string message = 3; ///< Human-readable acceptance or rejection reason.
+    int32 heartbeat_interval_s = 4; ///< Requested heartbeat interval in
+                                    ///< seconds (0 = no heartbeat required).
+}
+
+/**
+ * @brief Request sent by the daemon when cleanly closing a session.
+ */
+message DisconnectRequest
+{
+    string session_id = 1; ///< Session identifier returned by ConnectResponse.
+    string reason = 2;     ///< Human-readable reason for disconnecting.
+}
+
+/**
+ * @brief Acknowledgement returned by the server on session teardown.
+ */
+message DisconnectResponse
+{
+    bool acknowledged = 1; ///< True when the server recorded the disconnect.
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Periodic liveness ping sent by the daemon.
+ */
+message HeartbeatRequest
+{
+    string session_id = 1;    ///< Active session identifier.
+    int64 timestamp_us = 2;   ///< Current client time in Unix microseconds.
+    uint64 sequence_number = 3; ///< Monotonically increasing sequence counter.
+}
+
+/**
+ * @brief Server response to a heartbeat ping.
+ */
+message HeartbeatResponse
+{
+    int64 server_timestamp_us = 1; ///< Server time in Unix microseconds.
+    uint64 sequence_number = 2;    ///< Echo of the request sequence number.
+    bool session_valid = 3; ///< False when the session has expired server-side.
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief A single event payload published by the daemon.
+ */
+message Event
+{
+    string event_id = 1;      ///< Unique event identifier (UUID v4).
+    string session_id = 2;    ///< Session this event belongs to.
+    int64 timestamp_us = 3;   ///< Event creation time in Unix microseconds.
+    Severity severity = 4;    ///< Event severity level.
+    string source = 5;        ///< Subsystem or component that raised the event.
+    string category = 6;      ///< Logical grouping / category string.
+    string message = 7;       ///< Human-readable event description.
+    map<string, string> attributes = 8; ///< Arbitrary key-value metadata.
+}
+
+/**
+ * @brief Request wrapping one or more events for publication.
+ */
+message PublishEventsRequest
+{
+    repeated Event events = 1; ///< Batch of events to publish.
+}
+
+/**
+ * @brief Server acknowledgement for a batch of published events.
+ */
+message PublishEventsResponse
+{
+    uint32 accepted_count = 1; ///< Number of events accepted by the server.
+    uint32 rejected_count = 2; ///< Number of events rejected (e.g. malformed).
+    repeated string rejected_ids = 3; ///< Event IDs that were rejected.
+}
+
+/**
+ * @brief Request to open a bidirectional event stream.
+ */
+message StreamEventsRequest
+{
+    string session_id = 1; ///< Active session identifier.
+    repeated string filter_categories = 2; ///< Optional category filter list;
+                                           ///< empty means all categories.
+    Severity min_severity = 3; ///< Minimum severity to receive from server.
+}
+
+/**
+ * @brief A single event message carried over the bidirectional stream.
+ */
+message StreamEventsMessage
+{
+    oneof payload
+    {
+        Event event = 1;               ///< An event from either side.
+        HeartbeatRequest ping = 2;     ///< In-band heartbeat ping.
+        HeartbeatResponse pong = 3;    ///< In-band heartbeat response.
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Service definition
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief The primary gRPC service exposed by each remote server endpoint.
+ *
+ * The rtsrv daemon acts as a **client**. Each remote server exposes this
+ * service. The daemon:
+ *  1. Calls Connect() to establish an authenticated session.
+ *  2. Periodically calls Heartbeat() to keep the session alive.
+ *  3. Calls PublishEvents() to forward batches of local events.
+ *  4. Optionally opens StreamEvents() for full-duplex event exchange.
+ *  5. Calls Disconnect() when shutting down cleanly.
+ */
+service RtService
+{
+    /**
+     * @brief Establish a new daemon session with the remote server.
+     *
+     * Must be the first RPC call on a new channel. The returned session_id
+     * must be included in all subsequent RPCs.
+     */
+    rpc Connect(ConnectRequest) returns (ConnectResponse);
+
+    /**
+     * @brief Cleanly terminate an active session.
+     */
+    rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+
+    /**
+     * @brief Send a liveness ping and receive a server timestamp echo.
+     *
+     * Should be called at the interval specified in ConnectResponse. A
+     * session_valid=false response means the session must be re-established.
+     */
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+    /**
+     * @brief Publish a batch of events to the remote server.
+     *
+     * Supports up to 1000 events per call. Larger batches should be split
+     * across multiple calls.
+     */
+    rpc PublishEvents(PublishEventsRequest) returns (PublishEventsResponse);
+
+    /**
+     * @brief Open a bidirectional event stream for real-time exchange.
+     *
+     * Either side may send Event, HeartbeatRequest, or HeartbeatResponse
+     * messages. The stream remains open until the daemon or server closes it.
+     */
+    rpc StreamEvents(stream StreamEventsMessage)
+        returns (stream StreamEventsMessage);
+}

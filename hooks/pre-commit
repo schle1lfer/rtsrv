@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# hooks/pre-commit
+#
+# Git pre-commit hook that runs clang-format on all staged C/C++ source files.
+#
+# Installation (run once from the repository root):
+#   cp hooks/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# Or use the CMake helper target (after configuring the build):
+#   cmake --build build --target install-hooks
+#
+# The hook aborts the commit if any staged file differs from the
+# clang-format output, printing a diff so the developer can see what
+# needs to change.  The developer may then either:
+#   - Run:  clang-format -i <file>   (or: git clang-format HEAD~1)
+#   - Or:   git commit --no-verify   (skip the hook – not recommended)
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+CLANG_FORMAT="${CLANG_FORMAT:-clang-format}"
+EXTENSIONS_RE='\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$'
+
+# ---------------------------------------------------------------------------
+# Sanity-check: clang-format must be in PATH
+# ---------------------------------------------------------------------------
+if ! command -v "${CLANG_FORMAT}" &>/dev/null; then
+    echo "pre-commit: clang-format not found in PATH; skipping format check." >&2
+    echo "  Install it with:  sudo apt install clang-format" >&2
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Collect staged C/C++ source files
+# ---------------------------------------------------------------------------
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM \
+    | grep -E "${EXTENSIONS_RE}" || true)
+
+if [[ -z "${STAGED_FILES}" ]]; then
+    exit 0  # Nothing to format
+fi
+
+# ---------------------------------------------------------------------------
+# Check each file
+# ---------------------------------------------------------------------------
+FORMAT_ERRORS=()
+
+while IFS= read -r file; do
+    # Compare the staged content with the clang-format output.
+    # We use git show to get the exact staged content (not the working tree).
+    STAGED_CONTENT=$(git show ":${file}")
+    FORMATTED_CONTENT=$(echo "${STAGED_CONTENT}" \
+        | "${CLANG_FORMAT}" --style=file --assume-filename="${file}")
+
+    if [[ "${STAGED_CONTENT}" != "${FORMATTED_CONTENT}" ]]; then
+        FORMAT_ERRORS+=("${file}")
+        echo "--- pre-commit: clang-format diff for ${file} ---" >&2
+        diff <(echo "${STAGED_CONTENT}") <(echo "${FORMATTED_CONTENT}") \
+            --unified --color=always >&2 || true
+        echo "" >&2
+    fi
+done <<< "${STAGED_FILES}"
+
+# ---------------------------------------------------------------------------
+# Report and abort if any file had formatting issues
+# ---------------------------------------------------------------------------
+if [[ ${#FORMAT_ERRORS[@]} -gt 0 ]]; then
+    echo "pre-commit: the following file(s) are not clang-format compliant:" >&2
+    for f in "${FORMAT_ERRORS[@]}"; do
+        echo "  ${f}" >&2
+    done
+    echo "" >&2
+    echo "Fix with:" >&2
+    echo "  clang-format -i ${FORMAT_ERRORS[*]}" >&2
+    echo "  git add ${FORMAT_ERRORS[*]}" >&2
+    echo "" >&2
+    exit 1
+fi
+
+exit 0
