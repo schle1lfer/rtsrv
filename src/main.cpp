@@ -19,15 +19,16 @@
  *   rtsrv [options]
  *
  *   Options:
- *     -c, --config <path>   Path to JSON config  [default:
- * /etc/rtsrv/rtsrv.json] -f, --foreground      Run in foreground (no
- * daemonisation) -v, --version         Print version and exit -h, --help Print
- * this help and exit
+ *     -c, --config <path>   Path to JSON config [default:/etc/rtsrv/rtsrv.json]
+ *     -f, --foreground      Run in foreground (no daemonisation)
+ *     -v, --version         Print version and exit
+ *     -h, --help            Print this help and exit
  * @endcode
  *
  * @version 1.0
  */
 
+#include "build_info.hpp"
 #include "config.hpp"
 #include "daemon.hpp"
 #include "grpc_client.hpp"
@@ -58,10 +59,9 @@ namespace keywords = boost::log::keywords;
 namespace expr = boost::log::expressions;
 
 // ---------------------------------------------------------------------------
-// Version string
+// Constants
 // ---------------------------------------------------------------------------
 
-static constexpr std::string_view kVersion = "1.0.0";
 static constexpr std::string_view kDefaultConfig = "/etc/rtsrv/rtsrv.json";
 
 // ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ int main(int argc, char* argv[])
     // clang-format off
     desc.add_options()
         ("help,h",       "Print this help message and exit")
-        ("version,v",    "Print version and exit")
+        ("version,v",    "Print full version (semver + build number) and exit")
         ("config,c",
             po::value<std::string>()->default_value(
                 std::string(kDefaultConfig)),
@@ -238,7 +238,14 @@ int main(int argc, char* argv[])
     }
     if (vm.count("version"))
     {
-        std::cout << "rtsrv " << kVersion << '\n';
+        // Print the full version: semver + build number + build timestamp
+        std::cout << std::format("rtsrv {}\n"
+                                 "  Build : #{} ({})\n"
+                                 "  Binary: {}\n",
+                                 rtsrv::build::kProjectVersion,
+                                 rtsrv::build::kBuildNumber,
+                                 rtsrv::build::kBuildTimestamp,
+                                 rtsrv::build::kVersionedBinaryName);
         return EXIT_SUCCESS;
     }
 
@@ -302,11 +309,17 @@ int main(int argc, char* argv[])
         }
     }
 
-    BOOST_LOG_TRIVIAL(info)
-        << std::format("rtsrv {} starting (pid={} foreground={})",
-                       kVersion,
-                       ::getpid(),
-                       foreground);
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "rtsrv starting  version={}  build=#{}  built={}  pid={}  "
+        "foreground={}",
+        rtsrv::build::kProjectVersion,
+        rtsrv::build::kBuildNumber,
+        rtsrv::build::kBuildTimestamp,
+        ::getpid(),
+        foreground);
+
+    BOOST_LOG_TRIVIAL(info) << std::format("Binary snapshot: {}",
+                                           rtsrv::build::kVersionedBinaryName);
 
     // -----------------------------------------------------------------------
     // gRPC client manager
@@ -320,8 +333,10 @@ int main(int argc, char* argv[])
                        hostname,
                        config.servers.size());
 
+    // Pass the full version string (semver+build) to each gRPC Connect RPC
+    const std::string fullVersion = std::string(rtsrv::build::kFullVersion);
     rtsrv::GrpcClientManager clientMgr(
-        config.servers, daemonId, hostname, std::string(kVersion));
+        config.servers, daemonId, hostname, fullVersion);
 
     // Register SIGHUP reload handler
     daemon.setSighupHandler([&] {
@@ -364,6 +379,7 @@ int main(int argc, char* argv[])
     BOOST_LOG_TRIVIAL(info) << "Shutdown signal received; stopping clients";
     clientMgr.stopAll();
 
-    BOOST_LOG_TRIVIAL(info) << "rtsrv exiting cleanly";
+    BOOST_LOG_TRIVIAL(info) << std::format("rtsrv build #{} exiting cleanly",
+                                           rtsrv::build::kBuildNumber);
     return EXIT_SUCCESS;
 }

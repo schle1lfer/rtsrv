@@ -9,6 +9,19 @@
 # Minimum required CMake version: 3.25 (for C++23 standard support and the
 # modern FindProtobuf / gRPC integration).
 #
+# Build numbering
+# ---------------
+# Every `cmake --build` increments a persistent counter stored in
+# <build-dir>/build_number.txt.  The counter and a compact UTC timestamp are
+# baked into the compiled binary via the auto-generated header
+# <build-dir>/generated/build_info.hpp (namespace rtsrv::build).
+#
+# After linking, a versioned copy of the binary is placed alongside the
+# primary output:
+#   rtsrv                              – primary binary (used by systemd)
+#   rtsrv-<padded_build>-<timestamp>   – immutable versioned snapshot
+#   rtsrv-latest                       – alias to the most recent build
+#
 # Usage:
 # @code
 #   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -152,6 +165,34 @@ add_custom_command(
 add_custom_target(generate_proto ALL DEPENDS "${PROTO_SRCS}" "${GRPC_SRCS}")
 
 # ---------------------------------------------------------------------------
+# Build number and timestamp (auto-incremented on every build)
+# ---------------------------------------------------------------------------
+# The generated directory must exist before cmake tries to resolve include
+# paths at configure time.  The actual header is written by the custom target.
+set(BUILD_INFO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${BUILD_INFO_GEN_DIR}")
+
+# Custom target: runs cmake/IncrementBuildNumber.cmake as a cmake -P script
+# before any C++ translation unit is compiled.  Declared with ALL so it
+# participates in the default build target.
+add_custom_target(
+    increment_build_number
+    ALL
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DPROJECT_VERSION=${PROJECT_VERSION}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/IncrementBuildNumber.cmake"
+    BYPRODUCTS
+        "${CMAKE_CURRENT_BINARY_DIR}/build_number.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/build_timestamp.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/build_versioned_name.txt"
+        "${BUILD_INFO_GEN_DIR}/build_info.hpp"
+    COMMENT "Incrementing build number and generating build_info.hpp"
+    VERBATIM
+)
+
+# ---------------------------------------------------------------------------
 # rtsrv executable
 # ---------------------------------------------------------------------------
 add_executable(
@@ -164,8 +205,10 @@ add_executable(
     ${GRPC_SRCS}
 )
 
-# The executable depends on proto generation
-add_dependencies(rtsrv generate_proto)
+# The executable depends on proto generation and build-number generation.
+# increment_build_number must complete before any source is compiled so that
+# build_info.hpp exists on disk.
+add_dependencies(rtsrv generate_proto increment_build_number)
 
 # Include paths
 target_include_directories(
@@ -173,6 +216,7 @@ target_include_directories(
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${PROTO_GEN_DIR}"
+        "${BUILD_INFO_GEN_DIR}" # auto-generated build_info.hpp
         ${Boost_INCLUDE_DIRS}
 )
 
@@ -193,6 +237,27 @@ target_compile_definitions(
     PRIVATE
         BOOST_LOG_DYN_LINK
         BOOST_ALL_DYN_LINK
+)
+
+# ---------------------------------------------------------------------------
+# POST-BUILD: create versioned binary copy
+# ---------------------------------------------------------------------------
+# After the linker produces the primary binary (named "rtsrv") this command
+# invokes cmake/CreateVersionedBinary.cmake which:
+#   1. Reads <build-dir>/build_versioned_name.txt written by the PRE-BUILD
+#      step (e.g. "rtsrv-000001-20260324T143022z").
+#   2. Copies the primary binary to that versioned name.
+#   3. Copies the primary binary to "rtsrv-latest" as a stable alias.
+add_custom_command(
+    TARGET rtsrv
+    POST_BUILD
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DTARGET_FILE=$<TARGET_FILE:rtsrv>"
+        "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CreateVersionedBinary.cmake"
+    COMMENT "Creating versioned binary snapshot"
+    VERBATIM
 )
 
 # ---------------------------------------------------------------------------
@@ -252,8 +317,12 @@ add_custom_target(
 # ---------------------------------------------------------------------------
 message(STATUS "")
 message(STATUS "=== rtsrv build configuration ===")
-message(STATUS "  Version       : ${PROJECT_VERSION}")
-message(STATUS "  Build type    : ${CMAKE_BUILD_TYPE}")
-message(STATUS "  C++ standard  : ${CMAKE_CXX_STANDARD}")
-message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "  Version         : ${PROJECT_VERSION}")
+message(STATUS "  Build type      : ${CMAKE_BUILD_TYPE}")
+message(STATUS "  C++ standard    : ${CMAKE_CXX_STANDARD}")
+message(STATUS "  Install prefix  : ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "  Build number    : auto-incremented each build")
+message(STATUS "                    (stored in build_number.txt)")
+message(STATUS "  Versioned binary: rtsrv-<NNNNNN>-<YYYYMMDDTHHMMSSz>")
+message(STATUS "  Latest alias    : rtsrv-latest")
 message(STATUS "")
