@@ -1,0 +1,18 @@
+{
+  "switches": [
+    {
+      "name":      "sw-core-01",
+      "ipv4":      "192.168.1.10",
+      "grpc_port": 50051,
+      "login":     "admin",
+      "password":  "changeme"
+    },
+    {
+      "name":      "sw-core-02",
+      "ipv4":      "192.168.1.11",
+      "grpc_port": 50051,
+      "login":     "admin",
+      "password":  "changeme"
+    }
+  ]
+}

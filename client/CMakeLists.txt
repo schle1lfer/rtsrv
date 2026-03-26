@@ -7,6 +7,7 @@ add_executable(
     sra
     src/main.cpp
     src/route_client.cpp
+    src/switch_config.cpp
     ${PROTO_SRCS}
     ${GRPC_SRCS}
 )
@@ -28,6 +29,7 @@ target_link_libraries(
         Threads::Threads
         protobuf::libprotobuf
         gRPC::grpc++
+        Boost::json
         Boost::program_options
         Boost::system
 )

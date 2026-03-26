@@ -38,16 +38,23 @@ public:
     /**
      * @brief Constructs the client.
      *
-     * @param serverAddress  gRPC target string, e.g. "localhost:50051".
+     * @param serverAddress  gRPC target string, e.g. "192.168.1.10:50051".
      * @param useTls         When true, attempts a TLS channel.
      * @param caCert         Path to PEM CA certificate (TLS only; empty =
      *                       system roots).
      * @param timeoutSeconds Default per-RPC deadline in seconds.
+     * @param login          Optional login credential; sent as the
+     *                       @c x-login gRPC call-metadata header on every RPC.
+     * @param password       Optional password credential; sent as the
+     *                       @c x-password gRPC call-metadata header on every
+     *                       RPC.
      */
     explicit RouteClient(std::string serverAddress,
                          bool useTls = false,
                          std::string caCert = {},
-                         int timeoutSeconds = 10);
+                         int timeoutSeconds = 10,
+                         std::string login = {},
+                         std::string password = {});
 
     ~RouteClient() = default;
 
@@ -141,6 +148,8 @@ private:
 
     std::string serverAddress_;              ///< gRPC target address.
     int timeoutSeconds_;                     ///< Per-RPC deadline.
+    std::string login_;                      ///< Optional login credential.
+    std::string password_;                   ///< Optional password credential.
     std::shared_ptr<grpc::Channel> channel_; ///< Underlying channel.
     std::unique_ptr<srmd::v1::SwitchRouteManager::Stub> stub_; ///< RPC stub.
 };

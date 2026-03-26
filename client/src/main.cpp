@@ -3,28 +3,30 @@
  * @brief Entry point for sra – the Switch Route Application.
  *
  * sra is a command-line client for the srmd Switch Route Manager daemon.
- * It connects to a running srmd instance via gRPC and exposes route
- * management commands.
+ * It connects to one or more running srmd instances via gRPC and exposes
+ * route management commands.
  *
  * Usage:
  * @code
  *   sra [options] <command> [command-args]
  *
  *   Global options:
- *     -s, --server <addr>   srmd address  [default: localhost:50051]
- *     -t, --timeout <sec>   RPC deadline  [default: 10]
- *         --tls             Use TLS channel
- *         --ca-cert <path>  CA certificate for TLS verification
- *     -v, --version         Print version and exit
- *     -h, --help            Print this help and exit
+ *     -s, --server   <addr>   Single srmd address  [default: localhost:50051]
+ *     -w, --switches <path>   Path to switch_config.json (multi-server mode)
+ *     -t, --timeout  <sec>    RPC deadline         [default: 10]
+ *         --tls               Use TLS channel
+ *         --ca-cert  <path>   CA certificate for TLS verification
+ *     -v, --version           Print version and exit
+ *     -h, --help              Print this help and exit
  *
  *   Commands:
- *     test                  Run a full Echo + CRUD round-trip test sequence
- *     echo  <message>       Send an Echo RPC and print the response
+ *     test                    Run a full Echo + CRUD round-trip test sequence
+ *                             (single server, or all servers when --switches)
+ *     echo  <message>         Send an Echo RPC and print the response
  *     add   <dest> [gw] [iface] [metric]   Add a route
- *     remove <id>           Remove a route by ID
- *     get    <id>           Retrieve a route by ID
- *     list  [--active]      List all routes (--active filters to active only)
+ *     remove <id>             Remove a route by ID
+ *     get    <id>             Retrieve a route by ID
+ *     list  [--active]        List all routes (--active filters to active only)
  * @endcode
  *
  * @version 1.0
@@ -32,6 +34,7 @@
 
 #include "build_info.hpp"
 #include "client/route_client.hpp"
+#include "client/switch_config.hpp"
 
 #include <boost/program_options.hpp>
 #include <chrono>
@@ -81,8 +84,17 @@ static void printRoute(const srmd::v1::Route& route, int indent = 2)
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Runs the full test sequence: Echo → AddRoute → GetRoute →
- *        ListRoutes → RemoveRoute → ListRoutes.
+ * @brief Runs the full test sequence against a single server.
+ *
+ * Steps performed:
+ *  1. Echo
+ *  2. Heartbeat
+ *  3. AddRoute (default via 192.168.1.1/eth0)
+ *  4. AddRoute (10.0.0.0/8 via 10.0.0.1/eth1)
+ *  5. ListRoutes
+ *  6. GetRoute (first added)
+ *  7. RemoveRoute (first added)
+ *  8. ListRoutes (verify removal)
  *
  * @param client  Connected RouteClient.
  * @return EXIT_SUCCESS if all steps pass; EXIT_FAILURE otherwise.
@@ -256,6 +268,67 @@ static int cmdTest(sra::RouteClient& client)
     return allOk ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/**
+ * @brief Runs @c cmdTest() against every server listed in @p switches.
+ *
+ * For each @c SwitchEntry a new @c RouteClient is constructed using that
+ * entry's IPv4/port and credentials.  Results are aggregated and a final
+ * per-server summary is printed.
+ *
+ * @param switches     Parsed switch configuration entries.
+ * @param useTls       Whether to use a TLS gRPC channel.
+ * @param caCert       Path to PEM CA certificate (empty = system roots).
+ * @param timeout      Per-RPC deadline in seconds.
+ * @return EXIT_SUCCESS if every server's test passed; EXIT_FAILURE otherwise.
+ */
+static int cmdMultiTest(const std::vector<sra::SwitchEntry>& switches,
+                        bool useTls,
+                        const std::string& caCert,
+                        int timeout)
+{
+    struct Result
+    {
+        std::string label;
+        int exitCode;
+    };
+    std::vector<Result> results;
+    results.reserve(switches.size());
+
+    for (const auto& sw : switches)
+    {
+        const std::string header(60, '=');
+        std::println("\n{}", header);
+        std::println("Switch : {}  ({})", sw.label(), sw.target());
+        std::println("Login  : {}", sw.login);
+        std::println("{}", header);
+
+        sra::RouteClient client(
+            sw.target(), useTls, caCert, timeout, sw.login, sw.password);
+
+        const int rc = cmdTest(client);
+        results.push_back({sw.label(), rc});
+    }
+
+    // Print aggregate summary
+    std::println("\n{}", std::string(60, '='));
+    std::println("Multi-server test summary  ({} server(s))", switches.size());
+    std::println("{}", std::string(60, '-'));
+
+    bool anyFailed = false;
+    for (const auto& r : results)
+    {
+        const bool passed = (r.exitCode == EXIT_SUCCESS);
+        if (!passed)
+        {
+            anyFailed = true;
+        }
+        std::println("  {}  {}", passed ? "[PASS]" : "[FAIL]", r.label);
+    }
+    std::println("{}", std::string(60, '='));
+
+    return anyFailed ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -279,7 +352,10 @@ int main(int argc, char* argv[])
         ("version,v","Print version and exit")
         ("server,s",
             po::value<std::string>()->default_value("localhost:50051"),
-            "srmd server address  [host:port]")
+            "srmd server address  [host:port]  (single-server mode)")
+        ("switches,w",
+            po::value<std::string>()->default_value(std::string{}),
+            "Path to switch_config.json  (multi-server mode)")
         ("timeout,t",
             po::value<int>()->default_value(10),
             "Per-RPC timeout in seconds")
@@ -344,6 +420,7 @@ int main(int argc, char* argv[])
     }
 
     const std::string server = vm["server"].as<std::string>();
+    const std::string switchesPath = vm["switches"].as<std::string>();
     const int timeout = vm["timeout"].as<int>();
     const bool useTls = vm.count("tls") > 0;
     const std::string caCert = vm["ca-cert"].as<std::string>();
@@ -353,19 +430,37 @@ int main(int argc, char* argv[])
         vm.count("args") ? vm["args"].as<std::vector<std::string>>()
                          : std::vector<std::string>{};
 
+    // -----------------------------------------------------------------------
+    // Multi-server test via switch_config.json
+    // -----------------------------------------------------------------------
+    if (command == "test" && !switchesPath.empty())
+    {
+        std::println("sra  build #{}  switches={}  tls={}",
+                     rtsrv::build::kBuildNumber,
+                     switchesPath,
+                     useTls);
+
+        auto cfgResult = sra::loadSwitchConfig(switchesPath);
+        if (!cfgResult)
+        {
+            std::println(std::cerr,
+                         "Error loading switch config: {}",
+                         cfgResult.error());
+            return EXIT_FAILURE;
+        }
+        return cmdMultiTest(*cfgResult, useTls, caCert, timeout);
+    }
+
+    // -----------------------------------------------------------------------
+    // Single-server commands
+    // -----------------------------------------------------------------------
     std::println("sra  build #{}  server={}  tls={}",
                  rtsrv::build::kBuildNumber,
                  server,
                  useTls);
 
-    // -----------------------------------------------------------------------
-    // Connect
-    // -----------------------------------------------------------------------
     sra::RouteClient client(server, useTls, caCert, timeout);
 
-    // -----------------------------------------------------------------------
-    // Dispatch command
-    // -----------------------------------------------------------------------
     if (command == "test")
     {
         return cmdTest(client);

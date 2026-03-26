@@ -26,8 +26,11 @@ using namespace std::chrono_literals;
 RouteClient::RouteClient(std::string serverAddress,
                          bool useTls,
                          std::string caCert,
-                         int timeoutSeconds)
-    : serverAddress_(std::move(serverAddress)), timeoutSeconds_(timeoutSeconds)
+                         int timeoutSeconds,
+                         std::string login,
+                         std::string password)
+    : serverAddress_(std::move(serverAddress)), timeoutSeconds_(timeoutSeconds),
+      login_(std::move(login)), password_(std::move(password))
 {
     if (useTls)
     {
@@ -58,6 +61,14 @@ grpc::ClientContext RouteClient::makeContext() const
     grpc::ClientContext ctx;
     ctx.set_deadline(std::chrono::system_clock::now() +
                      std::chrono::seconds(timeoutSeconds_));
+    if (!login_.empty())
+    {
+        ctx.AddMetadata("x-login", login_);
+    }
+    if (!password_.empty())
+    {
+        ctx.AddMetadata("x-password", password_);
+    }
     return ctx;
 }
 
