@@ -1,59 +1,58 @@
 ##
 # @file CMakeLists.txt
-# @brief Top-level CMake build script for the rtsrv Linux daemon.
+# @brief Top-level CMake build script for the srmd / sra project.
 #
-# Builds the rtsrv daemon with C++23, gRPC / Protobuf generated sources,
-# and Boost libraries. Installs the binary, default configuration file, and
-# the systemd unit file.
+# Builds two executables:
+#   srmd  – Switch Route Manager Daemon  (server, daemonises on Linux)
+#   sra   – Switch Route Application     (CLI client)
 #
-# Minimum required CMake version: 3.25 (for C++23 standard support and the
-# modern FindProtobuf / gRPC integration).
+# Both targets share:
+#   - C++26 standard
+#   - Proto / gRPC generated sources (compiled once into a shared OBJECT lib)
+#   - common_lib (Boost.JSON config loader)
+#   - Auto-incrementing build number baked into build_info.hpp
 #
 # Build numbering
 # ---------------
-# Every `cmake --build` increments a persistent counter stored in
-# <build-dir>/build_number.txt.  The counter and a compact UTC timestamp are
-# baked into the compiled binary via the auto-generated header
-# <build-dir>/generated/build_info.hpp (namespace rtsrv::build).
-#
-# After linking, a versioned copy of the binary is placed alongside the
-# primary output:
-#   rtsrv                              – primary binary (used by systemd)
-#   rtsrv-<padded_build>-<timestamp>   – immutable versioned snapshot
-#   rtsrv-latest                       – alias to the most recent build
+# Every `cmake --build` increments <build-dir>/build_number.txt and bakes
+# the counter + UTC timestamp into <build-dir>/generated/build_info.hpp.
+# After linking each target, a versioned copy is placed alongside it:
+#   srmd-<NNNNNN>-<YYYYMMDDTHHMMSSz>
+#   sra-<NNNNNN>-<YYYYMMDDTHHMMSSz>
 #
 # Usage:
 # @code
 #   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build -j$(nproc)
 #   cmake --install build --prefix /usr/local
+#
+#   # Quick smoke-test (two terminals):
+#   build/server/srmd --foreground --config config/srmd.json
+#   build/client/sra test
 # @endcode
 ##
 
 cmake_minimum_required(VERSION 3.25)
 
 project(
-    rtsrv
+    srmd_sra
     VERSION 1.0.0
-    DESCRIPTION "Real-Time Service Daemon – gRPC-connected Linux daemon"
+    DESCRIPTION "Switch Route Manager Daemon + Switch Route Application"
     LANGUAGES CXX
 )
 
 # ---------------------------------------------------------------------------
-# C++23 standard – required by the entire project
+# C++26 – required for std::expected, std::print, and all C++26 features
 # ---------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ---------------------------------------------------------------------------
-# Build-type defaults
+# Build type default
 # ---------------------------------------------------------------------------
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE
-        "RelWithDebInfo"
-        CACHE STRING "Build type" FORCE
-    )
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -85,29 +84,28 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Dependencies
 # ---------------------------------------------------------------------------
 
-# --- Threads ---------------------------------------------------------------
 find_package(Threads REQUIRED)
 
-# --- Protobuf --------------------------------------------------------------
+# --- Protobuf ---------------------------------------------------------------
 find_package(Protobuf REQUIRED)
 message(STATUS "Found Protobuf: ${Protobuf_VERSION}")
 
-# --- gRPC ------------------------------------------------------------------
+# --- gRPC -------------------------------------------------------------------
 find_package(gRPC CONFIG REQUIRED)
 if(NOT gRPC_FOUND)
-    # Fallback: locate via pkg-config
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GRPC REQUIRED grpc++)
 endif()
 message(STATUS "Found gRPC: ${gRPC_VERSION}")
 
-# --- Boost -----------------------------------------------------------------
+# --- Boost ------------------------------------------------------------------
 set(BOOST_MIN_VERSION "1.81")
 find_package(
     Boost ${BOOST_MIN_VERSION}
     REQUIRED
     COMPONENTS
         filesystem
+        json
         log
         log_setup
         program_options
@@ -119,62 +117,49 @@ message(STATUS "Found Boost: ${Boost_VERSION}")
 # ---------------------------------------------------------------------------
 # Proto / gRPC code generation
 # ---------------------------------------------------------------------------
-set(PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/proto")
-set(PROTO_FILE "${PROTO_DIR}/rtsrv.proto")
-
-# Directories where generated sources are placed
+set(PROTO_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/proto")
+set(PROTO_FILE    "${PROTO_DIR}/srmd.proto")
 set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
 file(MAKE_DIRECTORY "${PROTO_GEN_DIR}")
 
-# Derived output file names
-set(PROTO_SRCS "${PROTO_GEN_DIR}/rtsrv.pb.cc")
-set(PROTO_HDRS "${PROTO_GEN_DIR}/rtsrv.pb.h")
-set(GRPC_SRCS "${PROTO_GEN_DIR}/rtsrv.grpc.pb.cc")
-set(GRPC_HDRS "${PROTO_GEN_DIR}/rtsrv.grpc.pb.h")
+set(PROTO_SRCS "${PROTO_GEN_DIR}/srmd.pb.cc")
+set(PROTO_HDRS "${PROTO_GEN_DIR}/srmd.pb.h")
+set(GRPC_SRCS  "${PROTO_GEN_DIR}/srmd.grpc.pb.cc")
+set(GRPC_HDRS  "${PROTO_GEN_DIR}/srmd.grpc.pb.h")
 
 # Locate the gRPC C++ plugin
 if(TARGET gRPC::grpc_cpp_plugin)
-    get_target_property(GRPC_CPP_PLUGIN_EXECUTABLE gRPC::grpc_cpp_plugin
-                        LOCATION
-    )
+    get_target_property(GRPC_CPP_PLUGIN_EXECUTABLE
+                        gRPC::grpc_cpp_plugin LOCATION)
 else()
     find_program(GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin REQUIRED)
 endif()
 
-# Custom command: compile the .proto file
 add_custom_command(
-    OUTPUT
-        "${PROTO_SRCS}"
-        "${PROTO_HDRS}"
-        "${GRPC_SRCS}"
-        "${GRPC_HDRS}"
-    COMMAND
-        ${Protobuf_PROTOC_EXECUTABLE}
-        ARGS
+    OUTPUT  "${PROTO_SRCS}" "${PROTO_HDRS}" "${GRPC_SRCS}" "${GRPC_HDRS}"
+    COMMAND ${Protobuf_PROTOC_EXECUTABLE}
+    ARGS
         "--proto_path=${PROTO_DIR}"
         "--cpp_out=${PROTO_GEN_DIR}"
         "--grpc_out=${PROTO_GEN_DIR}"
         "--plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN_EXECUTABLE}"
         "${PROTO_FILE}"
     DEPENDS "${PROTO_FILE}"
-    COMMENT "Generating Protobuf / gRPC C++ sources from rtsrv.proto"
+    COMMENT "Generating Protobuf / gRPC C++ sources from srmd.proto"
     VERBATIM
 )
 
-# Convenience target so IDEs pick up the generated headers
 add_custom_target(generate_proto ALL DEPENDS "${PROTO_SRCS}" "${GRPC_SRCS}")
+
+# PROTO_SRCS and GRPC_SRCS are already in the top-level scope;
+# subdirectories inherit them automatically.
 
 # ---------------------------------------------------------------------------
 # Build number and timestamp (auto-incremented on every build)
 # ---------------------------------------------------------------------------
-# The generated directory must exist before cmake tries to resolve include
-# paths at configure time.  The actual header is written by the custom target.
 set(BUILD_INFO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${BUILD_INFO_GEN_DIR}")
 
-# Custom target: runs cmake/IncrementBuildNumber.cmake as a cmake -P script
-# before any C++ translation unit is compiled.  Declared with ALL so it
-# participates in the default build target.
 add_custom_target(
     increment_build_number
     ALL
@@ -193,87 +178,27 @@ add_custom_target(
 )
 
 # ---------------------------------------------------------------------------
-# rtsrv executable
+# Subdirectories
 # ---------------------------------------------------------------------------
-add_executable(
-    rtsrv
-    src/main.cpp
-    src/config.cpp
-    src/daemon.cpp
-    src/grpc_client.cpp
-    ${PROTO_SRCS}
-    ${GRPC_SRCS}
-)
-
-# The executable depends on proto generation and build-number generation.
-# increment_build_number must complete before any source is compiled so that
-# build_info.hpp exists on disk.
-add_dependencies(rtsrv generate_proto increment_build_number)
-
-# Include paths
-target_include_directories(
-    rtsrv
-    PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${PROTO_GEN_DIR}"
-        "${BUILD_INFO_GEN_DIR}" # auto-generated build_info.hpp
-        ${Boost_INCLUDE_DIRS}
-)
-
-# Link libraries
-target_link_libraries(
-    rtsrv
-    PRIVATE
-        Threads::Threads
-        protobuf::libprotobuf
-        gRPC::grpc++
-        gRPC::grpc++_reflection
-        ${Boost_LIBRARIES}
-)
-
-# Boost.Log requires these definitions
-target_compile_definitions(
-    rtsrv
-    PRIVATE
-        BOOST_LOG_DYN_LINK
-        BOOST_ALL_DYN_LINK
-)
-
-# ---------------------------------------------------------------------------
-# POST-BUILD: create versioned binary copy
-# ---------------------------------------------------------------------------
-# After the linker produces the primary binary (named "rtsrv") this command
-# invokes cmake/CreateVersionedBinary.cmake which:
-#   1. Reads <build-dir>/build_versioned_name.txt written by the PRE-BUILD
-#      step (e.g. "rtsrv-000001-20260324T143022z").
-#   2. Copies the primary binary to that versioned name.
-#   3. Copies the primary binary to "rtsrv-latest" as a stable alias.
-add_custom_command(
-    TARGET rtsrv
-    POST_BUILD
-    COMMAND
-        "${CMAKE_COMMAND}"
-        "-DTARGET_FILE=$<TARGET_FILE:rtsrv>"
-        "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CreateVersionedBinary.cmake"
-    COMMENT "Creating versioned binary snapshot"
-    VERBATIM
-)
+add_subdirectory(common)
+add_subdirectory(server)
+add_subdirectory(client)
 
 # ---------------------------------------------------------------------------
 # Installation
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 
-install(TARGETS rtsrv RUNTIME DESTINATION "${CMAKE_INSTALL_SBINDIR}")
+install(TARGETS srmd RUNTIME DESTINATION "${CMAKE_INSTALL_SBINDIR}")
+install(TARGETS sra  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 install(
-    FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/rtsrv.json"
-    DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/rtsrv"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/srmd.json"
+    DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/srmd"
 )
 
 install(
-    FILES "${CMAKE_CURRENT_SOURCE_DIR}/systemd/rtsrv.service"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/systemd/srmd.service"
     DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/systemd/system"
 )
 
@@ -282,19 +207,20 @@ install(
 # ---------------------------------------------------------------------------
 find_package(Doxygen OPTIONAL_COMPONENTS dot)
 if(DOXYGEN_FOUND)
-    set(DOXYGEN_PROJECT_NAME "rtsrv")
-    set(DOXYGEN_PROJECT_BRIEF "Real-Time Service Daemon")
+    set(DOXYGEN_PROJECT_NAME    "srmd / sra")
+    set(DOXYGEN_PROJECT_BRIEF   "Switch Route Manager Daemon and Application")
     set(DOXYGEN_PROJECT_VERSION "${PROJECT_VERSION}")
     set(DOXYGEN_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/docs")
-    set(DOXYGEN_GENERATE_HTML YES)
-    set(DOXYGEN_GENERATE_MAN NO)
-    set(DOXYGEN_EXTRACT_ALL YES)
-    set(DOXYGEN_RECURSIVE YES)
-    set(DOXYGEN_USE_MDFILE_AS_MAINPAGE "README.md")
+    set(DOXYGEN_GENERATE_HTML   YES)
+    set(DOXYGEN_GENERATE_MAN    NO)
+    set(DOXYGEN_EXTRACT_ALL     YES)
+    set(DOXYGEN_RECURSIVE       YES)
 
     doxygen_add_docs(
         docs
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/common"
+        "${CMAKE_CURRENT_SOURCE_DIR}/server"
+        "${CMAKE_CURRENT_SOURCE_DIR}/client"
         "${CMAKE_CURRENT_SOURCE_DIR}/proto"
         COMMENT "Generating Doxygen documentation"
     )
@@ -305,8 +231,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_custom_target(
     install-hooks
-    COMMAND
-        "${CMAKE_CURRENT_SOURCE_DIR}/hooks/install-hooks.sh"
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/hooks/install-hooks.sh"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Installing git hooks from hooks/"
     VERBATIM
@@ -316,13 +241,12 @@ add_custom_target(
 # Summary
 # ---------------------------------------------------------------------------
 message(STATUS "")
-message(STATUS "=== rtsrv build configuration ===")
+message(STATUS "=== srmd / sra build configuration ===")
 message(STATUS "  Version         : ${PROJECT_VERSION}")
 message(STATUS "  Build type      : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ standard    : ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Install prefix  : ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "  Targets         : srmd (server)  sra (client)")
 message(STATUS "  Build number    : auto-incremented each build")
-message(STATUS "                    (stored in build_number.txt)")
-message(STATUS "  Versioned binary: rtsrv-<NNNNNN>-<YYYYMMDDTHHMMSSz>")
-message(STATUS "  Latest alias    : rtsrv-latest")
+message(STATUS "  Versioned names : srmd-<N>-<ts>  sra-<N>-<ts>")
 message(STATUS "")

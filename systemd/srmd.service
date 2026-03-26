@@ -1,0 +1,74 @@
+# /lib/systemd/system/srmd.service
+#
+# Systemd unit file for srmd – the Switch Route Manager Daemon.
+#
+# Installation:
+#   sudo cp systemd/srmd.service /lib/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now srmd
+#
+# Management:
+#   sudo systemctl start   srmd   # Start the daemon
+#   sudo systemctl stop    srmd   # Send SIGTERM (graceful shutdown)
+#   sudo systemctl reload  srmd   # Send SIGHUP  (configuration reload)
+#   sudo systemctl status  srmd   # Show status and recent log lines
+#   journalctl -u srmd -f         # Follow the systemd journal
+
+[Unit]
+Description=srmd Switch Route Manager Daemon
+Documentation=man:srmd(8)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# Type=forking: srmd performs its own double-fork; tracked via PIDFile.
+Type=forking
+PIDFile=/run/srmd/srmd.pid
+
+# Run as a dedicated unprivileged user
+User=srmd
+Group=srmd
+
+# Runtime directory – created by systemd, removed on stop
+RuntimeDirectory=srmd
+RuntimeDirectoryMode=0750
+
+# Ensure log and run directories exist before start
+ExecStartPre=/usr/bin/install -d -o srmd -g srmd -m 0750 /var/log/srmd
+ExecStartPre=/usr/bin/install -d -o srmd -g srmd -m 0750 /run/srmd
+
+ExecStart=/usr/local/sbin/srmd --config /etc/srmd/srmd.json
+
+# SIGHUP reloads configuration without restarting
+ExecReload=/bin/kill -HUP $MAINPID
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+FinalKillSignal=SIGKILL
+
+Restart=on-failure
+RestartSec=5s
+
+LimitNOFILE=65536
+LimitNPROC=512
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/srmd /var/log/srmd /etc/srmd
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=srmd
+
+[Install]
+WantedBy=multi-user.target

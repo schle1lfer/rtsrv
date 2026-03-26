@@ -1,20 +1,20 @@
 ##
 # @file cmake/CreateVersionedBinary.cmake
-# @brief POST-BUILD CMake script that copies the linked binary to a versioned
-#        filename in the same directory.
+# @brief POST-BUILD CMake script that copies a linked binary to a versioned
+#        filename alongside the primary output.
 #
-# The versioned filename is derived from build_versioned_name.txt which was
-# written by IncrementBuildNumber.cmake during the PRE-BUILD phase.
+# Required -D arguments:
+#   TARGET_FILE   – Absolute path of the freshly linked binary.
+#   BUILD_DIR     – CMAKE_CURRENT_BINARY_DIR of the top-level project
+#                   (contains build_versioned_name.txt).
 #
-# Required -D arguments (passed from CMakeLists.txt POST_BUILD command):
-#   TARGET_FILE  – Absolute path of the freshly linked binary
-#                  (i.e. $<TARGET_FILE:rtsrv>).
-#   BUILD_DIR    – CMAKE_CURRENT_BINARY_DIR of the top-level project.
+# Optional -D arguments:
+#   BINARY_NAME   – Base name for the versioned copy (e.g. "srmd" or "sra").
+#                   Defaults to the stem of TARGET_FILE when omitted.
 #
-# Side-effects:
-#   Creates <binary-dir>/rtsrv-<padded_build>-<timestamp>  (hard copy)
-#   Creates <binary-dir>/rtsrv-latest                       (copy alias)
-#   Prints the versioned name to the build log.
+# Outputs (placed next to TARGET_FILE):
+#   <BINARY_NAME>-<padded_build>-<timestamp>   versioned immutable snapshot
+#   <BINARY_NAME>-latest                        stable alias to newest build
 ##
 
 cmake_minimum_required(VERSION 3.25)
@@ -24,7 +24,8 @@ cmake_minimum_required(VERSION 3.25)
 # ---------------------------------------------------------------------------
 foreach(_req TARGET_FILE BUILD_DIR)
     if(NOT DEFINED ${_req})
-        message(FATAL_ERROR
+        message(
+            FATAL_ERROR
             "CreateVersionedBinary.cmake: missing required argument "
             "-D${_req}=..."
         )
@@ -32,58 +33,71 @@ foreach(_req TARGET_FILE BUILD_DIR)
 endforeach()
 
 if(NOT EXISTS "${TARGET_FILE}")
-    message(FATAL_ERROR
-        "CreateVersionedBinary.cmake: TARGET_FILE does not exist: "
-        "'${TARGET_FILE}'"
+    message(
+        FATAL_ERROR
+        "CreateVersionedBinary.cmake: TARGET_FILE not found: '${TARGET_FILE}'"
     )
 endif()
 
 # ---------------------------------------------------------------------------
-# Read the versioned basename written by IncrementBuildNumber.cmake
+# Resolve binary base name
 # ---------------------------------------------------------------------------
-set(_name_file "${BUILD_DIR}/build_versioned_name.txt")
-if(NOT EXISTS "${_name_file}")
-    message(FATAL_ERROR
-        "CreateVersionedBinary.cmake: versioned name file not found: "
-        "'${_name_file}'. "
+if(NOT DEFINED BINARY_NAME OR BINARY_NAME STREQUAL "")
+    get_filename_component(BINARY_NAME "${TARGET_FILE}" NAME_WE)
+endif()
+
+# ---------------------------------------------------------------------------
+# Read the padded build number and timestamp written by
+# IncrementBuildNumber.cmake
+# ---------------------------------------------------------------------------
+set(_num_file "${BUILD_DIR}/build_number.txt")
+set(_ts_file  "${BUILD_DIR}/build_timestamp.txt")
+
+if(NOT EXISTS "${_num_file}" OR NOT EXISTS "${_ts_file}")
+    message(
+        FATAL_ERROR
+        "CreateVersionedBinary.cmake: build_number.txt or "
+        "build_timestamp.txt not found in '${BUILD_DIR}'. "
         "Did IncrementBuildNumber.cmake run before this script?"
     )
 endif()
 
-file(READ "${_name_file}" VERSIONED_BASENAME)
-string(STRIP "${VERSIONED_BASENAME}" VERSIONED_BASENAME)
+file(READ "${_num_file}" _raw_num)
+string(STRIP "${_raw_num}" BUILD_NUMBER)
 
-if(VERSIONED_BASENAME STREQUAL "")
-    message(FATAL_ERROR
-        "CreateVersionedBinary.cmake: '${_name_file}' is empty."
-    )
+file(READ "${_ts_file}" _raw_ts)
+string(STRIP "${_raw_ts}" BUILD_TIMESTAMP)
+
+# Zero-pad build number to 6 digits
+string(LENGTH "${BUILD_NUMBER}" _bn_len)
+math(EXPR _pad_count "6 - ${_bn_len}")
+if(_pad_count GREATER 0)
+    string(REPEAT "0" ${_pad_count} _padding)
+else()
+    set(_padding "")
 endif()
+set(BUILD_NUMBER_PADDED "${_padding}${BUILD_NUMBER}")
 
 # ---------------------------------------------------------------------------
-# Derive full paths
+# Derive full output paths
 # ---------------------------------------------------------------------------
 get_filename_component(_bin_dir "${TARGET_FILE}" DIRECTORY)
 
-set(VERSIONED_FILE  "${_bin_dir}/${VERSIONED_BASENAME}")
-set(LATEST_FILE     "${_bin_dir}/rtsrv-latest")
+set(VERSIONED_FILE "${_bin_dir}/${BINARY_NAME}-${BUILD_NUMBER_PADDED}-${BUILD_TIMESTAMP}")
+set(LATEST_FILE    "${_bin_dir}/${BINARY_NAME}-latest")
 
 # ---------------------------------------------------------------------------
-# Copy the binary to its versioned filename
-# Prefer COPY_FILE (CMake ≥ 3.21) for an atomic replace on POSIX.
+# Create the copies
 # ---------------------------------------------------------------------------
 file(COPY_FILE "${TARGET_FILE}" "${VERSIONED_FILE}" ONLY_IF_DIFFERENT)
-
-# ---------------------------------------------------------------------------
-# Update the -latest alias (unconditional copy so mtime is always current)
-# ---------------------------------------------------------------------------
 file(COPY_FILE "${TARGET_FILE}" "${LATEST_FILE}")
 
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 message(STATUS
-    "[rtsrv] Versioned binary → ${VERSIONED_FILE}"
+    "[${BINARY_NAME}] versioned → ${VERSIONED_FILE}"
 )
 message(STATUS
-    "[rtsrv] Latest alias    → ${LATEST_FILE}"
+    "[${BINARY_NAME}] latest    → ${LATEST_FILE}"
 )

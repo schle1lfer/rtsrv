@@ -1,0 +1,15 @@
+{
+    "daemon": {
+        "pid_file"   : "/run/srmd/srmd.pid",
+        "log_file"   : "/var/log/srmd/srmd.log",
+        "log_level"  : "info",
+        "working_dir": "/"
+    },
+    "server": {
+        "listen_host": "0.0.0.0",
+        "listen_port": 50051,
+        "tls_enabled": false,
+        "tls_cert"   : "",
+        "tls_key"    : ""
+    }
+}
