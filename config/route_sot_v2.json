@@ -1,0 +1,144 @@
+{
+  "nodes_by_loopback": {
+    "10.124.224.60": {
+      "hostname": "ST82-LEAF-60",
+      "loopbacks": {
+        "ipv4": "1.1.1.1",
+        "ipv6": "fd00:100::1"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {
+              "Ethernet0": {
+                "type": "nni",
+                "local_address": "192.168.1.2/30",
+                "nexthop": "192.168.1.1",
+                "weight": 100,
+                "description": "Server#1",
+                "prefixes": [
+                  {
+                    "prefix": "10.0.1.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#1"
+                  },
+                  {
+                    "prefix": "10.0.1.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#2"
+                  },
+                  {
+                    "prefix": "10.0.2.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#3"
+                  }
+                ]
+              }
+            },
+            "ipv6": {}
+          }
+        }
+      }
+    },
+    "10.124.224.61": {
+      "hostname": "ST83-LEAF-61",
+      "loopbacks": {
+        "ipv4": "2.2.2.2",
+        "ipv6": "fd00:100::2"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {
+              "Ethernet0": {
+                "type": "uni",
+                "local_address": "172.16.0.1/16",
+                "nexthop": "",
+                "weight": 100,
+                "description": "VM_pool#100",
+                "prefixes": []
+              }
+            },
+            "ipv6": {}
+          }
+        }
+      }
+    },
+    "10.124.224.62": {
+      "hostname": "ST84-LEAF-62",
+      "loopbacks": {
+        "ipv4": "3.3.3.3",
+        "ipv6": "fd00:100::3"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {
+              "Ethernet1": {
+                "type": "nni",
+                "local_address": "192.168.1.6/30",
+                "nexthop": "192.168.1.5",
+                "weight": 100,
+                "description": "Server#2",
+                "prefixes": [
+                  {
+                    "prefix": "10.1.0.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#4"
+                  },
+                  {
+                    "prefix": "10.2.0.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#5"
+                  },
+                  {
+                    "prefix": "10.3.0.0/24",
+                    "weight": 50,
+                    "role": "server_network",
+                    "description": "VM_pool#6"
+                  }
+                ]
+              }
+            },
+            "ipv6": {}
+          }
+        }
+      }
+    },
+    "10.124.224.63": {
+      "hostname": "ST85-SPINE-63",
+      "loopbacks": {
+        "ipv4": "4.4.4.4",
+        "ipv6": "fd00:100::4"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {},
+            "ipv6": {}
+          }
+        }
+      }
+    },
+    "10.124.224.64": {
+      "hostname": "ST86-SPINE-64",
+      "loopbacks": {
+        "ipv4": "5.5.5.5",
+        "ipv6": "fd00:100::5"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {},
+            "ipv6": {}
+          }
+        }
+      }
+    }
+  }
+}

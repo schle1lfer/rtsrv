@@ -13,6 +13,7 @@
  *   Global options:
  *     -s, --server   <addr>   Single srmd address  [default: localhost:50051]
  *     -w, --switches <path>   Path to switch_config.json (multi-server mode)
+ *         --sot      <path>   Path to route_sot_v2.json (Source-of-Truth)
  *     -t, --timeout  <sec>    RPC deadline         [default: 10]
  *         --tls               Use TLS channel
  *         --ca-cert  <path>   CA certificate for TLS verification
@@ -22,6 +23,10 @@
  *   Commands:
  *     test                    Run a full Echo + CRUD round-trip test sequence
  *                             (single server, or all servers when --switches)
+ *     sync                    Parse SOT (--sot required), then push all
+ *                             prefix routes to matching servers via gRPC.
+ *                             Use --switches for multi-server mode, or
+ *                             --server + --node-ip for single-node mode.
  *     echo  <message>         Send an Echo RPC and print the response
  *     add   <dest> [gw] [iface] [metric]   Add a route
  *     remove <id>             Remove a route by ID
@@ -34,6 +39,7 @@
 
 #include "build_info.hpp"
 #include "client/route_client.hpp"
+#include "client/sot_config.hpp"
 #include "client/switch_config.hpp"
 
 #include <boost/program_options.hpp>
@@ -268,6 +274,208 @@ static int cmdTest(sra::RouteClient& client)
     return allOk ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+// ---------------------------------------------------------------------------
+// SOT sync helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Prints a parsed @c SotConfig summary to stdout.
+ *
+ * Lists every node with its hostname, management IP, loopback addresses,
+ * and a count of VRFs, interfaces, and prefixes.  Called immediately after
+ * successful SOT parsing so the operator can verify the loaded data.
+ *
+ * @param cfg  Parsed SOT configuration.
+ */
+static void printSotSummary(const sra::SotConfig& cfg)
+{
+    std::println("SOT parsed: {} node(s), {} prefix(es) total",
+                 cfg.nodes.size(),
+                 cfg.totalPrefixCount());
+    std::println("{}", std::string(60, '-'));
+
+    for (const auto& node : cfg.nodes)
+    {
+        std::size_t ifaceCount = 0;
+        std::size_t prefixCount = 0;
+        for (const auto& vrf : node.vrfs)
+        {
+            ifaceCount += vrf.ipv4.interfaces.size();
+            for (const auto& iface : vrf.ipv4.interfaces)
+            {
+                prefixCount += iface.prefixes.size();
+            }
+        }
+
+        std::println("  {} ({})  lo4={}  vrfs={}  ifaces={}  prefixes={}",
+                     node.hostname,
+                     node.management_ip,
+                     node.loopbacks.ipv4,
+                     node.vrfs.size(),
+                     ifaceCount,
+                     prefixCount);
+    }
+    std::println("{}", std::string(60, '-'));
+}
+
+/**
+ * @brief Pushes all prefix routes from a single SOT node to an srmd server.
+ *
+ * Iterates every VRF → interface → prefix of @p node and calls
+ * @c RouteClient::addRoute() for each prefix.  The interface's nexthop and
+ * name are forwarded as gateway and interface_name respectively.
+ *
+ * @param client  Connected @c RouteClient targeting the matching srmd.
+ * @param node    SOT node whose routes are to be pushed.
+ * @return Number of routes successfully added.  Failures are printed to
+ *         stderr but do not abort the remaining prefixes.
+ */
+static std::size_t pushNodeRoutes(sra::RouteClient& client,
+                                  const sra::SotNode& node)
+{
+    std::size_t pushed = 0;
+
+    for (const auto& vrf : node.vrfs)
+    {
+        for (const auto& iface : vrf.ipv4.interfaces)
+        {
+            for (const auto& pfx : iface.prefixes)
+            {
+                auto result = client.addRoute(
+                    pfx.prefix, iface.nexthop, iface.name, pfx.weight);
+                if (!result)
+                {
+                    std::println(std::cerr,
+                                 "  [FAIL] AddRoute {}/{} via {} ({}): {}",
+                                 pfx.prefix,
+                                 iface.name,
+                                 iface.nexthop,
+                                 vrf.name,
+                                 result.error());
+                }
+                else
+                {
+                    std::println("  [OK]   {} via {} iface={} metric={}  "
+                                 "id={}",
+                                 pfx.prefix,
+                                 iface.nexthop,
+                                 iface.name,
+                                 pfx.weight,
+                                 result->id().substr(0, 8) + "…");
+                    ++pushed;
+                }
+            }
+        }
+    }
+
+    return pushed;
+}
+
+/**
+ * @brief Synchronises SOT routes to a single server.
+ *
+ * Looks up @p managementIp in the SOT, then calls @c pushNodeRoutes().
+ * If the management IP is not found in the SOT the server is skipped with
+ * a warning.
+ *
+ * @param client        Connected @c RouteClient.
+ * @param managementIp  Management IP used to correlate switch with SOT node.
+ * @param label         Display label for log output.
+ * @param sot           Parsed SOT configuration.
+ * @return EXIT_SUCCESS if the node was found and all routes pushed;
+ *         EXIT_FAILURE if the node was missing or any push failed.
+ */
+static int syncOneServer(sra::RouteClient& client,
+                         const std::string& managementIp,
+                         const std::string& label,
+                         const sra::SotConfig& sot)
+{
+    const sra::SotNode* node = sot.findByManagementIp(managementIp);
+    if (!node)
+    {
+        std::println(std::cerr,
+                     "  [WARN] {} ({}): no SOT entry found – skipping",
+                     label,
+                     managementIp);
+        return EXIT_FAILURE;
+    }
+
+    std::println("  SOT node  : {} ({})", node->hostname, node->management_ip);
+    std::println("  Loopback  : ipv4={} ipv6={}",
+                 node->loopbacks.ipv4,
+                 node->loopbacks.ipv6);
+
+    const std::size_t pushed = pushNodeRoutes(client, *node);
+    std::println("  => {} route(s) pushed", pushed);
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Synchronises SOT routes to all servers listed in @p switches.
+ *
+ * The SOT file is parsed @em before any gRPC connections are opened (the
+ * function receives an already-loaded @c SotConfig).  For each switch entry
+ * the management IP (@c SwitchEntry::ipv4) is looked up in the SOT; matching
+ * entries have their prefix routes pushed via @c RouteClient::addRoute().
+ *
+ * @param sot       Pre-parsed SOT configuration.
+ * @param switches  List of switch entries from @c switch_config.json.
+ * @param useTls    Whether to use TLS gRPC channels.
+ * @param caCert    Path to PEM CA certificate (empty = system roots).
+ * @param timeout   Per-RPC deadline in seconds.
+ * @return EXIT_SUCCESS if every matched server succeeded; EXIT_FAILURE if any
+ *         server was missing from the SOT or experienced push failures.
+ */
+static int cmdSyncMulti(const sra::SotConfig& sot,
+                        const std::vector<sra::SwitchEntry>& switches,
+                        bool useTls,
+                        const std::string& caCert,
+                        int timeout)
+{
+    struct Result
+    {
+        std::string label;
+        int exitCode;
+    };
+    std::vector<Result> results;
+    results.reserve(switches.size());
+
+    for (const auto& sw : switches)
+    {
+        std::println("\n{}", std::string(60, '='));
+        std::println("Switch : {}  ({})", sw.label(), sw.target());
+        std::println("{}", std::string(60, '='));
+
+        sra::RouteClient client(
+            sw.target(), useTls, caCert, timeout, sw.login, sw.password);
+
+        const int rc = syncOneServer(client, sw.ipv4, sw.label(), sot);
+        results.push_back({sw.label(), rc});
+    }
+
+    // Aggregate summary
+    std::println("\n{}", std::string(60, '='));
+    std::println("SOT sync summary  ({} server(s))", switches.size());
+    std::println("{}", std::string(60, '-'));
+    bool anyFailed = false;
+    for (const auto& r : results)
+    {
+        const bool ok = (r.exitCode == EXIT_SUCCESS);
+        if (!ok)
+        {
+            anyFailed = true;
+        }
+        std::println("  {}  {}", ok ? "[OK  ]" : "[FAIL]", r.label);
+    }
+    std::println("{}", std::string(60, '='));
+    return anyFailed ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
 /**
  * @brief Runs @c cmdTest() against every server listed in @p switches.
  *
@@ -356,6 +564,14 @@ int main(int argc, char* argv[])
         ("switches,w",
             po::value<std::string>()->default_value(std::string{}),
             "Path to switch_config.json  (multi-server mode)")
+        ("sot",
+            po::value<std::string>()->default_value(std::string{}),
+            "Path to route_sot_v2.json  (Source-of-Truth; parsed before any"
+            " gRPC connection is opened)")
+        ("node-ip",
+            po::value<std::string>()->default_value(std::string{}),
+            "Management IPv4 of the node to look up in the SOT"
+            "  (single-server sync mode)")
         ("timeout,t",
             po::value<int>()->default_value(10),
             "Per-RPC timeout in seconds")
@@ -364,7 +580,7 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(std::string{}),
             "Path to PEM CA certificate for TLS")
         ("command",  po::value<std::string>(),
-            "Command: test | echo | add | remove | get | list")
+            "Command: test | sync | echo | add | remove | get | list")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -398,6 +614,7 @@ int main(int argc, char* argv[])
         std::println("Commands:");
         std::println(
             "  test                    Full Echo+CRUD round-trip test");
+        std::println("  sync                    Push SOT routes to server(s)");
         std::println("  echo   <message>        Send Echo RPC");
         std::println("  add    <dest> [gw] [iface] [metric]  Add route");
         std::println("  remove <id>             Remove route by ID");
@@ -421,6 +638,8 @@ int main(int argc, char* argv[])
 
     const std::string server = vm["server"].as<std::string>();
     const std::string switchesPath = vm["switches"].as<std::string>();
+    const std::string sotPath = vm["sot"].as<std::string>();
+    const std::string nodeIp = vm["node-ip"].as<std::string>();
     const int timeout = vm["timeout"].as<int>();
     const bool useTls = vm.count("tls") > 0;
     const std::string caCert = vm["ca-cert"].as<std::string>();
@@ -429,6 +648,66 @@ int main(int argc, char* argv[])
     const std::vector<std::string> args =
         vm.count("args") ? vm["args"].as<std::vector<std::string>>()
                          : std::vector<std::string>{};
+
+    // -----------------------------------------------------------------------
+    // "sync" command – parse SOT *before* opening any gRPC connections
+    // -----------------------------------------------------------------------
+    if (command == "sync")
+    {
+        if (sotPath.empty())
+        {
+            std::println(std::cerr, "Error: 'sync' requires --sot <path>");
+            return EXIT_FAILURE;
+        }
+
+        // Parse the SOT file first – no network connections yet
+        std::println("sra  build #{}  Parsing SOT: {}",
+                     rtsrv::build::kBuildNumber,
+                     sotPath);
+
+        auto sotResult = sra::loadSotConfig(sotPath);
+        if (!sotResult)
+        {
+            std::println(
+                std::cerr, "Error loading SOT config: {}", sotResult.error());
+            return EXIT_FAILURE;
+        }
+
+        // Print what was loaded so the operator can verify before pushing
+        printSotSummary(*sotResult);
+
+        // Multi-server sync via switch_config.json
+        if (!switchesPath.empty())
+        {
+            auto cfgResult = sra::loadSwitchConfig(switchesPath);
+            if (!cfgResult)
+            {
+                std::println(std::cerr,
+                             "Error loading switch config: {}",
+                             cfgResult.error());
+                return EXIT_FAILURE;
+            }
+            return cmdSyncMulti(
+                *sotResult, *cfgResult, useTls, caCert, timeout);
+        }
+
+        // Single-server sync: --server + --node-ip required
+        if (nodeIp.empty())
+        {
+            std::println(
+                std::cerr,
+                "Error: single-server sync requires --node-ip <management-ip>"
+                " (the key used in nodes_by_loopback)");
+            return EXIT_FAILURE;
+        }
+
+        std::println("\n{}", std::string(60, '='));
+        std::println("Switch : {}  node-ip={}", server, nodeIp);
+        std::println("{}", std::string(60, '='));
+
+        sra::RouteClient client(server, useTls, caCert, timeout);
+        return syncOneServer(client, nodeIp, server, *sotResult);
+    }
 
     // -----------------------------------------------------------------------
     // Multi-server test via switch_config.json

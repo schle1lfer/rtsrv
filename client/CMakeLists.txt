@@ -8,6 +8,7 @@ add_executable(
     src/main.cpp
     src/route_client.cpp
     src/switch_config.cpp
+    src/sot_config.cpp
     ${PROTO_SRCS}
     ${GRPC_SRCS}
 )
