@@ -53,7 +53,7 @@ add_custom_command(
     COMMAND
         "${CMAKE_COMMAND}"
         "-DTARGET_FILE=$<TARGET_FILE:srmd>"
-        "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         "-DBINARY_NAME=srmd"
         -P "${CMAKE_SOURCE_DIR}/cmake/CreateVersionedBinary.cmake"
     COMMENT "Creating versioned srmd binary snapshot"

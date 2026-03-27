@@ -50,8 +50,8 @@ endif()
 # Read the padded build number and timestamp written by
 # IncrementBuildNumber.cmake
 # ---------------------------------------------------------------------------
-set(_num_file "${BUILD_DIR}/build_number.txt")
-set(_ts_file  "${BUILD_DIR}/build_timestamp.txt")
+set(_num_file "${BUILD_DIR}/../build_number.txt")
+set(_ts_file  "${BUILD_DIR}/../build_timestamp.txt")
 
 if(NOT EXISTS "${_num_file}" OR NOT EXISTS "${_ts_file}")
     message(
