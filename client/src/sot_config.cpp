@@ -333,7 +333,8 @@ parseVrfIpv4(const boost::json::object& obj, std::string_view ctx)
         if (!ifObj)
         {
             return std::unexpected(std::format(
-                "{}.interfaces[{}]: must be a JSON object", ipv4Ctx, ifName));
+                "{}.interfaces[{}]: must be a JSON object", ipv4Ctx,
+                std::string_view{ifName.data(), ifName.size()}));
         }
         auto iface = parseInterface(ifName, *ifObj, ipv4Ctx);
         if (!iface)
@@ -434,7 +435,8 @@ std::expected<SotNode, std::string> parseNode(std::string_view managementIp,
             if (!vrfObj)
             {
                 return std::unexpected(std::format(
-                    "{}.vrfs[{}]: must be a JSON object", ctx, vrfName));
+                    "{}.vrfs[{}]: must be a JSON object", ctx,
+                    std::string_view{vrfName.data(), vrfName.size()}));
             }
             auto vrf = parseVrf(vrfName, *vrfObj, ctx);
             if (!vrf)
@@ -512,7 +514,8 @@ std::expected<SotConfig, std::string> loadSotConfig(const std::string& path)
         if (!nodeObj)
         {
             return std::unexpected(std::format(
-                "nodes_by_loopback[{}]: must be a JSON object", managementIp));
+                "nodes_by_loopback[{}]: must be a JSON object",
+                std::string_view{managementIp.data(), managementIp.size()}));
         }
         auto node = parseNode(managementIp, *nodeObj);
         if (!node)

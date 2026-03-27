@@ -41,6 +41,7 @@
 #include <memory>
 #include <print>
 #include <string>
+#include <fstream>
 #include <thread>
 
 namespace po = boost::program_options;
@@ -331,7 +332,7 @@ int main(int argc, char* argv[])
 
     while (!srmd::Daemon::shouldStop())
     {
-        daemon.shouldReload();
+        (void)daemon.shouldReload();
         std::this_thread::sleep_for(500ms);
     }
 

@@ -42,9 +42,9 @@ project(
 )
 
 # ---------------------------------------------------------------------------
-# C++26 – required for std::expected, std::print, and all C++26 features
+# C++23 – required for std::expected, std::print, and all C++23 features
 # ---------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

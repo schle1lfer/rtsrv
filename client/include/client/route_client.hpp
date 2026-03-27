@@ -139,7 +139,7 @@ private:
     /**
      * @brief Builds and returns a ClientContext with the configured deadline.
      */
-    [[nodiscard]] grpc::ClientContext makeContext() const;
+    [[nodiscard]] std::unique_ptr<grpc::ClientContext> makeContext() const;
 
     /**
      * @brief Maps a gRPC Status to an error string for std::unexpected.

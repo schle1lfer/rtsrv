@@ -56,18 +56,18 @@ RouteClient::RouteClient(std::string serverAddress,
 // Private helpers
 // ---------------------------------------------------------------------------
 
-grpc::ClientContext RouteClient::makeContext() const
+std::unique_ptr<grpc::ClientContext> RouteClient::makeContext() const
 {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() +
-                     std::chrono::seconds(timeoutSeconds_));
+    auto ctx = std::make_unique<grpc::ClientContext>();
+    ctx->set_deadline(std::chrono::system_clock::now() +
+                      std::chrono::seconds(timeoutSeconds_));
     if (!login_.empty())
     {
-        ctx.AddMetadata("x-login", login_);
+        ctx->AddMetadata("x-login", login_);
     }
     if (!password_.empty())
     {
-        ctx.AddMetadata("x-password", password_);
+        ctx->AddMetadata("x-password", password_);
     }
     return ctx;
 }
@@ -95,7 +95,7 @@ RouteClient::echo(const std::string& message)
 
     srmd::v1::EchoResponse resp;
     auto ctx = makeContext();
-    const grpc::Status status = stub_->Echo(&ctx, req, &resp);
+    const grpc::Status status = stub_->Echo(ctx.get(), req, &resp);
     if (!status.ok())
     {
         return std::unexpected(statusToError(status));
@@ -119,7 +119,7 @@ RouteClient::heartbeat(uint64_t sequence)
 
     srmd::v1::HeartbeatResponse resp;
     auto ctx = makeContext();
-    const grpc::Status status = stub_->Heartbeat(&ctx, req, &resp);
+    const grpc::Status status = stub_->Heartbeat(ctx.get(), req, &resp);
     if (!status.ok())
     {
         return std::unexpected(statusToError(status));
@@ -149,7 +149,7 @@ RouteClient::addRoute(const std::string& destination,
 
     srmd::v1::RouteResponse resp;
     auto ctx = makeContext();
-    const grpc::Status status = stub_->AddRoute(&ctx, req, &resp);
+    const grpc::Status status = stub_->AddRoute(ctx.get(), req, &resp);
     if (!status.ok())
     {
         return std::unexpected(statusToError(status));
@@ -157,7 +157,7 @@ RouteClient::addRoute(const std::string& destination,
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
         return std::unexpected(std::format(
-            "AddRoute failed ({}): {}", resp.code(), resp.message()));
+            "AddRoute failed ({}): {}", static_cast<int>(resp.code()), resp.message()));
     }
     return resp.route();
 }
@@ -173,7 +173,7 @@ std::expected<void, std::string> RouteClient::removeRoute(const std::string& id)
 
     srmd::v1::StatusResponse resp;
     auto ctx = makeContext();
-    const grpc::Status status = stub_->RemoveRoute(&ctx, req, &resp);
+    const grpc::Status status = stub_->RemoveRoute(ctx.get(), req, &resp);
     if (!status.ok())
     {
         return std::unexpected(statusToError(status));
@@ -181,7 +181,7 @@ std::expected<void, std::string> RouteClient::removeRoute(const std::string& id)
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
         return std::unexpected(std::format(
-            "RemoveRoute failed ({}): {}", resp.code(), resp.message()));
+            "RemoveRoute failed ({}): {}", static_cast<int>(resp.code()), resp.message()));
     }
     return {};
 }
@@ -198,7 +198,7 @@ RouteClient::getRoute(const std::string& id)
 
     srmd::v1::RouteResponse resp;
     auto ctx = makeContext();
-    const grpc::Status status = stub_->GetRoute(&ctx, req, &resp);
+    const grpc::Status status = stub_->GetRoute(ctx.get(), req, &resp);
     if (!status.ok())
     {
         return std::unexpected(statusToError(status));
@@ -206,7 +206,7 @@ RouteClient::getRoute(const std::string& id)
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
         return std::unexpected(std::format(
-            "GetRoute failed ({}): {}", resp.code(), resp.message()));
+            "GetRoute failed ({}): {}", static_cast<int>(resp.code()), resp.message()));
     }
     return resp.route();
 }
@@ -223,7 +223,7 @@ RouteClient::listRoutes(bool activeOnly)
 
     srmd::v1::ListRoutesResponse resp;
     auto ctx = makeContext();
-    const grpc::Status status = stub_->ListRoutes(&ctx, req, &resp);
+    const grpc::Status status = stub_->ListRoutes(ctx.get(), req, &resp);
     if (!status.ok())
     {
         return std::unexpected(statusToError(status));
@@ -231,7 +231,7 @@ RouteClient::listRoutes(bool activeOnly)
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
         return std::unexpected(
-            std::format("ListRoutes failed ({})", resp.code()));
+            std::format("ListRoutes failed ({})", static_cast<int>(resp.code())));
     }
     return std::vector<srmd::v1::Route>(resp.routes().begin(),
                                         resp.routes().end());
