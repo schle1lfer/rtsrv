@@ -9,6 +9,7 @@ add_executable(
     src/route_client.cpp
     src/switch_config.cpp
     src/sot_config.cpp
+    "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
     ${PROTO_SRCS}
     ${GRPC_SRCS}
 )
@@ -19,6 +20,7 @@ target_include_directories(
     sra
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/server/include"
         "${PROTO_GEN_DIR}"
         "${BUILD_INFO_GEN_DIR}"
 )

@@ -32,6 +32,10 @@
  *     remove <id>             Remove a route by ID
  *     get    <id>             Retrieve a route by ID
  *     list  [--active]        List all routes (--active filters to active only)
+ *     watch                   Subscribe to kernel netlink events for IPv4 /32
+ *                             routes and forward each ADDED/CHANGED/REMOVED
+ *                             event to srmd via AddRoute / RemoveRoute.
+ *                             Runs until Ctrl-C.
  * @endcode
  *
  * @version 1.0
@@ -41,14 +45,19 @@
 #include "client/route_client.hpp"
 #include "client/sot_config.hpp"
 #include "client/switch_config.hpp"
+#include "server/netlink.h"
 
+#include <arpa/inet.h>
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <cstdlib>
 #include <format>
 #include <iostream>
+#include <linux/rtnetlink.h>
 #include <print>
+#include <signal.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace po = boost::program_options;
@@ -538,6 +547,235 @@ static int cmdMultiTest(const std::vector<sra::SwitchEntry>& switches,
 }
 
 // ---------------------------------------------------------------------------
+// Netlink watch command
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Maps a Linux rtnetlink protocol byte to the closest srmd RouteProtocol.
+ *
+ * FRR zebra redistributes routes with protocol codes that predate the srmd
+ * enumeration (RTPROT_ZEBRA, RTPROT_OSPF, etc.).  This helper maps them to
+ * the srmd values so they are stored with a meaningful protocol tag.
+ *
+ * @param rtProto  The rtm_protocol byte from the kernel route message.
+ * @return         Corresponding srmd::v1::RouteProtocol value.
+ */
+static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
+{
+    switch (rtProto)
+    {
+    case RTPROT_OSPF:   return srmd::v1::ROUTE_PROTOCOL_OSPF;
+    case RTPROT_BGP:    return srmd::v1::ROUTE_PROTOCOL_BGP;
+    case RTPROT_RIP:    return srmd::v1::ROUTE_PROTOCOL_RIP;
+    case RTPROT_KERNEL: return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
+    case RTPROT_BOOT:   return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
+    default:            return srmd::v1::ROUTE_PROTOCOL_STATIC;
+    }
+}
+
+/**
+ * @brief Context forwarded via the @c user_data pointer to the netlink callback.
+ *
+ * Carries the live gRPC client and the local map that tracks which srmd route
+ * ID corresponds to each /32 destination we have pushed.
+ */
+struct WatchCtx
+{
+    sra::RouteClient*                            client;
+    std::unordered_map<std::string, std::string> routeIds; ///< dest/32 → srmd ID
+};
+
+/**
+ * @brief Netlink callback: translates each /32 route event into a gRPC call.
+ *
+ * Called by @c netlink_run() for every IPv4 /32 unicast route event that
+ * passes the kernel filter.  Behaviour per event type:
+ *
+ * - NETLINK_ROUTE_ADDED   → AddRoute RPC; stores the returned server ID.
+ * - NETLINK_ROUTE_CHANGED → RemoveRoute (if we hold an ID for that dest) then
+ *                           AddRoute with the new attributes; updates stored ID.
+ * - NETLINK_ROUTE_REMOVED → RemoveRoute for the stored ID (if any); erases
+ *                           the entry from the local map.
+ *
+ * All outcomes (success and failure) are printed to stdout as a timestamped
+ * log line so the operator can trace every kernel→srmd interaction.
+ *
+ * @param event      Route event type from the netlink module.
+ * @param route      Parsed /32 route descriptor; valid for this call only.
+ * @param user_data  Pointer to a @c WatchCtx.
+ */
+static void nlWatchCb(netlink_event_t          event,
+                      const netlink_route32_t* route,
+                      void*                    user_data)
+{
+    auto* ctx = static_cast<WatchCtx*>(user_data);
+
+    /* UTC timestamp */
+    const auto now = std::chrono::system_clock::now();
+    const auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
+                         now.time_since_epoch())
+                         .count();
+    const std::time_t sec = static_cast<std::time_t>(us / 1'000'000);
+    const int         ms  = static_cast<int>((us % 1'000'000) / 1000);
+    std::tm           tm_utc{};
+    gmtime_r(&sec, &tm_utc);
+    const std::string ts = std::format("{:02d}:{:02d}:{:02d}.{:03d}",
+                                       tm_utc.tm_hour,
+                                       tm_utc.tm_min,
+                                       tm_utc.tm_sec,
+                                       ms);
+
+    /* Destination string "x.x.x.x/32" */
+    char dst_buf[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &route->dst, dst_buf, sizeof(dst_buf));
+    const std::string dest = std::string(dst_buf) + "/32";
+
+    /* Gateway string (empty when nexthop is 0.0.0.0) */
+    char gw_buf[INET_ADDRSTRLEN] = {};
+    if (route->gateway.s_addr != 0)
+    {
+        inet_ntop(AF_INET, &route->gateway, gw_buf, sizeof(gw_buf));
+    }
+    const std::string gw    = gw_buf;
+    const std::string iface = route->ifname;
+
+    const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
+
+    /* ---- ADDED ---------------------------------------------------------- */
+    if (event == NETLINK_ROUTE_ADDED)
+    {
+        auto result = ctx->client->addRoute(
+            dest, gw, iface, route->metric,
+            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+
+        if (result)
+        {
+            ctx->routeIds[dest] = result->id();
+            std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
+                         ts, dest, gw, iface, route->metric,
+                         result->id().substr(0, 8) + "…");
+        }
+        else
+        {
+            std::println("{} [ADDED]   {} → gRPC FAILED: {}",
+                         ts, dest, result.error());
+        }
+    }
+    /* ---- CHANGED -------------------------------------------------------- */
+    else if (event == NETLINK_ROUTE_CHANGED)
+    {
+        /* Remove the stale entry if we hold an ID for this destination. */
+        auto it = ctx->routeIds.find(dest);
+        if (it != ctx->routeIds.end())
+        {
+            ctx->client->removeRoute(it->second);
+            ctx->routeIds.erase(it);
+        }
+
+        auto result = ctx->client->addRoute(
+            dest, gw, iface, route->metric,
+            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+
+        if (result)
+        {
+            ctx->routeIds[dest] = result->id();
+            std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
+                         ts, dest, gw, iface, route->metric,
+                         result->id().substr(0, 8) + "…");
+        }
+        else
+        {
+            std::println("{} [CHANGED] {} → gRPC FAILED: {}",
+                         ts, dest, result.error());
+        }
+    }
+    /* ---- REMOVED -------------------------------------------------------- */
+    else
+    {
+        auto it = ctx->routeIds.find(dest);
+        if (it == ctx->routeIds.end())
+        {
+            std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
+                         ts, dest);
+            return;
+        }
+
+        const std::string id = it->second;
+        ctx->routeIds.erase(it);
+
+        auto result = ctx->client->removeRoute(id);
+        if (result)
+        {
+            std::println("{} [REMOVED] {} id={}", ts, dest,
+                         id.substr(0, 8) + "…");
+        }
+        else
+        {
+            std::println("{} [REMOVED] {} → gRPC FAILED: {}",
+                         ts, dest, result.error());
+        }
+    }
+
+    std::cout.flush();
+}
+
+/* File-scope fd used by the signal handler to unblock netlink_run(). */
+static volatile int g_watch_fd = -1;
+
+/** @brief SIGINT/SIGTERM handler for the watch command. */
+static void watchSigHandler(int /*signo*/)
+{
+    if (g_watch_fd >= 0)
+    {
+        netlink_close(g_watch_fd);
+        g_watch_fd = -1;
+    }
+}
+
+/**
+ * @brief Runs the netlink /32 route watcher, forwarding events to srmd.
+ *
+ * Opens a @c NETLINK_ROUTE socket and blocks in @c netlink_run() until
+ * SIGINT / SIGTERM is received.  Every qualifying kernel route event is
+ * forwarded to the connected srmd instance via AddRoute / RemoveRoute.
+ *
+ * @param client  Constructed and connected @c RouteClient.
+ * @return @c EXIT_SUCCESS on clean stop; @c EXIT_FAILURE if the socket
+ *         could not be opened.
+ */
+static int cmdNetlinkWatch(sra::RouteClient& client)
+{
+    /* Install signal handlers. */
+    struct sigaction sa{};
+    sa.sa_handler = watchSigHandler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+
+    int fd = netlink_init();
+    if (fd < 0)
+    {
+        std::println(std::cerr, "Error: netlink_init failed: {}",
+                     std::strerror(errno));
+        return EXIT_FAILURE;
+    }
+    g_watch_fd = fd;
+
+    std::println("Watching for IPv4 /32 route events → forwarding to {} …",
+                 "srmd");
+    std::println("  (Ctrl-C to stop)\n");
+    std::cout.flush();
+
+    WatchCtx ctx{&client, {}};
+    netlink_run(fd, nlWatchCb, &ctx);
+
+    netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
+
+    std::println("\nStopped. {} route(s) tracked at exit.", ctx.routeIds.size());
+    return EXIT_SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -580,7 +818,7 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(std::string{}),
             "Path to PEM CA certificate for TLS")
         ("command",  po::value<std::string>(),
-            "Command: test | sync | echo | add | remove | get | list")
+            "Command: test | sync | echo | add | remove | get | list | watch")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -620,6 +858,8 @@ int main(int argc, char* argv[])
         std::println("  remove <id>             Remove route by ID");
         std::println("  get    <id>             Get route by ID");
         std::println("  list   [--active]       List routes");
+        std::println("  watch                   Listen for kernel /32 route "
+                     "events and forward to srmd");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -842,6 +1082,11 @@ int main(int argc, char* argv[])
             std::println("  (route table is empty)");
         }
         return EXIT_SUCCESS;
+    }
+
+    if (command == "watch")
+    {
+        return cmdNetlinkWatch(client);
     }
 
     std::println(std::cerr, "Unknown command: '{}'", command);
