@@ -48,14 +48,15 @@
 #include "server/netlink.h"
 
 #include <arpa/inet.h>
+#include <linux/rtnetlink.h>
+#include <signal.h>
+
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <cstdlib>
 #include <format>
 #include <iostream>
-#include <linux/rtnetlink.h>
 #include <print>
-#include <signal.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -551,7 +552,8 @@ static int cmdMultiTest(const std::vector<sra::SwitchEntry>& switches,
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Maps a Linux rtnetlink protocol byte to the closest srmd RouteProtocol.
+ * @brief Maps a Linux rtnetlink protocol byte to the closest srmd
+ * RouteProtocol.
  *
  * FRR zebra redistributes routes with protocol codes that predate the srmd
  * enumeration (RTPROT_ZEBRA, RTPROT_OSPF, etc.).  This helper maps them to
@@ -564,25 +566,33 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
 {
     switch (rtProto)
     {
-    case RTPROT_OSPF:   return srmd::v1::ROUTE_PROTOCOL_OSPF;
-    case RTPROT_BGP:    return srmd::v1::ROUTE_PROTOCOL_BGP;
-    case RTPROT_RIP:    return srmd::v1::ROUTE_PROTOCOL_RIP;
-    case RTPROT_KERNEL: return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
-    case RTPROT_BOOT:   return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
-    default:            return srmd::v1::ROUTE_PROTOCOL_STATIC;
+    case RTPROT_OSPF:
+        return srmd::v1::ROUTE_PROTOCOL_OSPF;
+    case RTPROT_BGP:
+        return srmd::v1::ROUTE_PROTOCOL_BGP;
+    case RTPROT_RIP:
+        return srmd::v1::ROUTE_PROTOCOL_RIP;
+    case RTPROT_KERNEL:
+        return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
+    case RTPROT_BOOT:
+        return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
+    default:
+        return srmd::v1::ROUTE_PROTOCOL_STATIC;
     }
 }
 
 /**
- * @brief Context forwarded via the @c user_data pointer to the netlink callback.
+ * @brief Context forwarded via the @c user_data pointer to the netlink
+ * callback.
  *
  * Carries the live gRPC client and the local map that tracks which srmd route
  * ID corresponds to each /32 destination we have pushed.
  */
 struct WatchCtx
 {
-    sra::RouteClient*                            client;
-    std::unordered_map<std::string, std::string> routeIds; ///< dest/32 → srmd ID
+    sra::RouteClient* client;
+    std::unordered_map<std::string, std::string>
+        routeIds; ///< dest/32 → srmd ID
 };
 
 /**
@@ -593,7 +603,8 @@ struct WatchCtx
  *
  * - NETLINK_ROUTE_ADDED   → AddRoute RPC; stores the returned server ID.
  * - NETLINK_ROUTE_CHANGED → RemoveRoute (if we hold an ID for that dest) then
- *                           AddRoute with the new attributes; updates stored ID.
+ *                           AddRoute with the new attributes; updates stored
+ * ID.
  * - NETLINK_ROUTE_REMOVED → RemoveRoute for the stored ID (if any); erases
  *                           the entry from the local map.
  *
@@ -604,20 +615,20 @@ struct WatchCtx
  * @param route      Parsed /32 route descriptor; valid for this call only.
  * @param user_data  Pointer to a @c WatchCtx.
  */
-static void nlWatchCb(netlink_event_t          event,
+static void nlWatchCb(netlink_event_t event,
                       const netlink_route32_t* route,
-                      void*                    user_data)
+                      void* user_data)
 {
     auto* ctx = static_cast<WatchCtx*>(user_data);
 
     /* UTC timestamp */
     const auto now = std::chrono::system_clock::now();
-    const auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
-                         now.time_since_epoch())
-                         .count();
+    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch())
+                        .count();
     const std::time_t sec = static_cast<std::time_t>(us / 1'000'000);
-    const int         ms  = static_cast<int>((us % 1'000'000) / 1000);
-    std::tm           tm_utc{};
+    const int ms = static_cast<int>((us % 1'000'000) / 1000);
+    std::tm tm_utc{};
     gmtime_r(&sec, &tm_utc);
     const std::string ts = std::format("{:02d}:{:02d}:{:02d}.{:03d}",
                                        tm_utc.tm_hour,
@@ -636,7 +647,7 @@ static void nlWatchCb(netlink_event_t          event,
     {
         inet_ntop(AF_INET, &route->gateway, gw_buf, sizeof(gw_buf));
     }
-    const std::string gw    = gw_buf;
+    const std::string gw = gw_buf;
     const std::string iface = route->ifname;
 
     const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
@@ -644,21 +655,28 @@ static void nlWatchCb(netlink_event_t          event,
     /* ---- ADDED ---------------------------------------------------------- */
     if (event == NETLINK_ROUTE_ADDED)
     {
-        auto result = ctx->client->addRoute(
-            dest, gw, iface, route->metric,
-            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+        auto result = ctx->client->addRoute(dest,
+                                            gw,
+                                            iface,
+                                            route->metric,
+                                            srmd::v1::ADDRESS_FAMILY_IPV4,
+                                            proto);
 
         if (result)
         {
             ctx->routeIds[dest] = result->id();
             std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
-                         ts, dest, gw, iface, route->metric,
+                         ts,
+                         dest,
+                         gw,
+                         iface,
+                         route->metric,
                          result->id().substr(0, 8) + "…");
         }
         else
         {
-            std::println("{} [ADDED]   {} → gRPC FAILED: {}",
-                         ts, dest, result.error());
+            std::println(
+                "{} [ADDED]   {} → gRPC FAILED: {}", ts, dest, result.error());
         }
     }
     /* ---- CHANGED -------------------------------------------------------- */
@@ -672,26 +690,35 @@ static void nlWatchCb(netlink_event_t          event,
             if (!rmResult)
             {
                 std::println("{} [CHANGED] {} stale-remove failed: {}",
-                             ts, dest, rmResult.error());
+                             ts,
+                             dest,
+                             rmResult.error());
             }
             ctx->routeIds.erase(it);
         }
 
-        auto result = ctx->client->addRoute(
-            dest, gw, iface, route->metric,
-            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+        auto result = ctx->client->addRoute(dest,
+                                            gw,
+                                            iface,
+                                            route->metric,
+                                            srmd::v1::ADDRESS_FAMILY_IPV4,
+                                            proto);
 
         if (result)
         {
             ctx->routeIds[dest] = result->id();
             std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
-                         ts, dest, gw, iface, route->metric,
+                         ts,
+                         dest,
+                         gw,
+                         iface,
+                         route->metric,
                          result->id().substr(0, 8) + "…");
         }
         else
         {
-            std::println("{} [CHANGED] {} → gRPC FAILED: {}",
-                         ts, dest, result.error());
+            std::println(
+                "{} [CHANGED] {} → gRPC FAILED: {}", ts, dest, result.error());
         }
     }
     /* ---- REMOVED -------------------------------------------------------- */
@@ -700,8 +727,8 @@ static void nlWatchCb(netlink_event_t          event,
         auto it = ctx->routeIds.find(dest);
         if (it == ctx->routeIds.end())
         {
-            std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
-                         ts, dest);
+            std::println(
+                "{} [REMOVED] {} (not tracked – no gRPC call)", ts, dest);
             return;
         }
 
@@ -711,13 +738,13 @@ static void nlWatchCb(netlink_event_t          event,
         auto result = ctx->client->removeRoute(id);
         if (result)
         {
-            std::println("{} [REMOVED] {} id={}", ts, dest,
-                         id.substr(0, 8) + "…");
+            std::println(
+                "{} [REMOVED] {} id={}", ts, dest, id.substr(0, 8) + "…");
         }
         else
         {
-            std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                         ts, dest, result.error());
+            std::println(
+                "{} [REMOVED] {} → gRPC FAILED: {}", ts, dest, result.error());
         }
     }
 
@@ -751,17 +778,18 @@ static void watchSigHandler(int /*signo*/)
 static int cmdNetlinkWatch(sra::RouteClient& client)
 {
     /* Install signal handlers. */
-    struct sigaction sa{};
+    struct sigaction sa
+    {};
     sa.sa_handler = watchSigHandler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
     int fd = netlink_init();
     if (fd < 0)
     {
-        std::println(std::cerr, "Error: netlink_init failed: {}",
-                     std::strerror(errno));
+        std::println(
+            std::cerr, "Error: netlink_init failed: {}", std::strerror(errno));
         return EXIT_FAILURE;
     }
     g_watch_fd = fd;
@@ -776,7 +804,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client)
 
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
 
-    std::println("\nStopped. {} route(s) tracked at exit.", ctx.routeIds.size());
+    std::println("\nStopped. {} route(s) tracked at exit.",
+                 ctx.routeIds.size());
     return EXIT_SUCCESS;
 }
 
@@ -866,8 +895,10 @@ int main(int argc, char* argv[])
         std::println("  list   [--active]       List routes");
         std::println("  watch                   Listen for kernel /32 route "
                      "events and forward to srmd");
-        std::println("  set-loopback <address>  Store a loopback address on the server");
-        std::println("  get-loopback            Retrieve the stored loopback address");
+        std::println(
+            "  set-loopback <address>  Store a loopback address on the server");
+        std::println(
+            "  get-loopback            Retrieve the stored loopback address");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;

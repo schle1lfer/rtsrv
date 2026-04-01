@@ -143,8 +143,8 @@ private:
     std::string serverId_;       ///< Server identity for Echo responses.
     std::string serverVersion_;  ///< Binary version for Echo responses.
 
-    mutable std::mutex loopbackMutex_;  ///< Guards loopbackAddress_.
-    std::string loopbackAddress_;       ///< Loopback address set by clients.
+    mutable std::mutex loopbackMutex_; ///< Guards loopbackAddress_.
+    std::string loopbackAddress_;      ///< Loopback address set by clients.
 };
 
 } // namespace srmd

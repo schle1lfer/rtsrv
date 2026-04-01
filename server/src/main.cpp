@@ -128,6 +128,7 @@ static void initFileLogs(const std::string& logPath,
 // Hostname helper
 // ---------------------------------------------------------------------------
 
+/** @brief Returns the local machine hostname, or "unknown" on failure. */
 static std::string getHostname()
 {
     char buf[256]{};
@@ -334,7 +335,8 @@ int main(int argc, char* argv[])
     {
         if (daemon.shouldReload())
         {
-            BOOST_LOG_TRIVIAL(info) << "SIGHUP received – reload not implemented";
+            BOOST_LOG_TRIVIAL(info)
+                << "SIGHUP received – reload not implemented";
         }
         std::this_thread::sleep_for(500ms);
     }
