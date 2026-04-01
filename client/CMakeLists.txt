@@ -8,7 +8,6 @@ add_executable(
     src/main.cpp
     src/route_client.cpp
     src/switch_config.cpp
-    src/sot_config.cpp
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
     ${PROTO_SRCS}
     ${GRPC_SRCS}

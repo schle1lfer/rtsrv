@@ -17,6 +17,7 @@
 
 #include "build_info.hpp"
 #include "common/config.hpp"
+#include "common/sot_config.hpp"
 #include "server/daemon.hpp"
 #include "server/route_manager.hpp"
 #include "server/service_impl.hpp"
@@ -53,7 +54,8 @@ namespace expr = boost::log::expressions;
 // Constants
 // ---------------------------------------------------------------------------
 
-static constexpr std::string_view kDefaultConfig = "/etc/srmd/srmd.json";
+static constexpr std::string_view kDefaultConfig    = "/etc/srmd/srmd.json";
+static constexpr std::string_view kDefaultSotConfig = "/etc/srmd/route_sot_v2.json";
 
 // ---------------------------------------------------------------------------
 // Logging helpers
@@ -163,6 +165,10 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(
                 std::string(kDefaultConfig)),
             "Path to the JSON configuration file")
+        ("sot-config,s",
+            po::value<std::string>()->default_value(
+                std::string(kDefaultSotConfig)),
+            "Path to the SOT route configuration file (route_sot_v2.json)")
         ("foreground,f", "Run in the foreground (skip daemonisation)");
     // clang-format on
 
@@ -194,7 +200,8 @@ int main(int argc, char* argv[])
         return EXIT_SUCCESS;
     }
 
-    const std::string configPath = vm["config"].as<std::string>();
+    const std::string configPath    = vm["config"].as<std::string>();
+    const std::string sotConfigPath = vm["sot-config"].as<std::string>();
     const bool foreground = vm.count("foreground") > 0;
 
     // -----------------------------------------------------------------------
@@ -249,6 +256,24 @@ int main(int argc, char* argv[])
 
     BOOST_LOG_TRIVIAL(info) << std::format(
         "Listening on {}  foreground={}", cfg.server.target(), foreground);
+
+    // -----------------------------------------------------------------------
+    // Load SOT configuration
+    // -----------------------------------------------------------------------
+    auto sotResult = common::loadSotConfig(sotConfigPath);
+    if (!sotResult)
+    {
+        BOOST_LOG_TRIVIAL(fatal)
+            << std::format("SOT config error: {}", sotResult.error());
+        return EXIT_FAILURE;
+    }
+    common::SotConfig sotConfig = std::move(*sotResult);
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "SOT config loaded  path={}  nodes={}  prefixes={}",
+        sotConfigPath,
+        sotConfig.nodes.size(),
+        sotConfig.totalPrefixCount());
 
     // -----------------------------------------------------------------------
     // Build server identity string
@@ -312,15 +337,33 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     daemon.setSighupHandler([&] {
         BOOST_LOG_TRIVIAL(info) << "SIGHUP – reloading configuration";
+
         auto newCfg = common::loadServerConfig(configPath);
         if (!newCfg)
         {
             BOOST_LOG_TRIVIAL(error)
-                << std::format("Reload failed: {}", newCfg.error());
+                << std::format("Server config reload failed: {}",
+                               newCfg.error());
         }
         else
         {
-            BOOST_LOG_TRIVIAL(info) << "Configuration reloaded";
+            BOOST_LOG_TRIVIAL(info) << "Server configuration reloaded";
+        }
+
+        auto newSot = common::loadSotConfig(sotConfigPath);
+        if (!newSot)
+        {
+            BOOST_LOG_TRIVIAL(error)
+                << std::format("SOT config reload failed: {}",
+                               newSot.error());
+        }
+        else
+        {
+            sotConfig = std::move(*newSot);
+            BOOST_LOG_TRIVIAL(info) << std::format(
+                "SOT config reloaded  nodes={}  prefixes={}",
+                sotConfig.nodes.size(),
+                sotConfig.totalPrefixCount());
         }
     });
 

@@ -6,6 +6,7 @@
 add_library(
     common_lib STATIC
     src/config.cpp
+    src/sot_config.cpp
 )
 
 target_include_directories(

@@ -1,15 +1,15 @@
 /**
- * @file client/src/sot_config.cpp
+ * @file common/src/sot_config.cpp
  * @brief Implementation of the Source-of-Truth configuration loader.
  *
  * Parses @c route_sot_v2.json using Boost.JSON.  All public symbols belong to
- * namespace @c sra; internal parsing helpers are kept in an anonymous
+ * namespace @c common; internal parsing helpers are kept in an anonymous
  * namespace.
  *
  * @version 1.0
  */
 
-#include "client/sot_config.hpp"
+#include "common/sot_config.hpp"
 
 #include <algorithm>
 #include <boost/json.hpp>
@@ -39,7 +39,7 @@ struct std::formatter<boost::core::basic_string_view<char>>
     }
 };
 
-namespace sra
+namespace common
 {
 
 // ---------------------------------------------------------------------------
@@ -546,4 +546,4 @@ std::expected<SotConfig, std::string> loadSotConfig(const std::string& path)
     return cfg;
 }
 
-} // namespace sra
+} // namespace common
