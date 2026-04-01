@@ -823,7 +823,8 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(std::string{}),
             "Path to PEM CA certificate for TLS")
         ("command",  po::value<std::string>(),
-            "Command: test | sync | echo | add | remove | get | list | watch")
+            "Command: test | sync | echo | add | remove | get | list | watch"
+            " | set-loopback | get-loopback")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -865,6 +866,8 @@ int main(int argc, char* argv[])
         std::println("  list   [--active]       List routes");
         std::println("  watch                   Listen for kernel /32 route "
                      "events and forward to srmd");
+        std::println("  set-loopback <address>  Store a loopback address on the server");
+        std::println("  get-loopback            Retrieve the stored loopback address");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -1092,6 +1095,36 @@ int main(int argc, char* argv[])
     if (command == "watch")
     {
         return cmdNetlinkWatch(client);
+    }
+
+    if (command == "set-loopback")
+    {
+        if (args.empty())
+        {
+            std::println(std::cerr, "Usage: sra set-loopback <address>");
+            return EXIT_FAILURE;
+        }
+        auto result = client.setLoopback(args[0]);
+        if (!result)
+        {
+            std::println(std::cerr, "Error: {}", result.error());
+            return EXIT_FAILURE;
+        }
+        std::println("Loopback address set: {}", *result);
+        return EXIT_SUCCESS;
+    }
+
+    if (command == "get-loopback")
+    {
+        auto result = client.getLoopback();
+        if (!result)
+        {
+            std::println(std::cerr, "Error: {}", result.error());
+            return EXIT_FAILURE;
+        }
+        std::println("Loopback address: {}",
+                     result->empty() ? "(not set)" : *result);
+        return EXIT_SUCCESS;
     }
 
     std::println(std::cerr, "Unknown command: '{}'", command);

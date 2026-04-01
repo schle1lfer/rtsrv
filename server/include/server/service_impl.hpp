@@ -19,6 +19,7 @@
 #include <grpcpp/server_context.h>
 #include <grpcpp/support/status.h>
 
+#include <mutex>
 #include <string>
 
 namespace srmd
@@ -114,6 +115,24 @@ public:
                 const srmd::v1::WatchRoutesRequest* req,
                 grpc::ServerWriter<srmd::v1::RouteEvent>* writer) override;
 
+    // -----------------------------------------------------------------------
+    // Loopback RPCs
+    // -----------------------------------------------------------------------
+
+    /**
+     * @brief Stores a loopback address string on the server.
+     */
+    grpc::Status SetLoopback(grpc::ServerContext* ctx,
+                             const srmd::v1::SetLoopbackRequest* req,
+                             srmd::v1::SetLoopbackResponse* resp) override;
+
+    /**
+     * @brief Returns the loopback address currently stored on the server.
+     */
+    grpc::Status GetLoopback(grpc::ServerContext* ctx,
+                             const srmd::v1::GetLoopbackRequest* req,
+                             srmd::v1::GetLoopbackResponse* resp) override;
+
 private:
     /**
      * @brief Returns the current Unix epoch time in microseconds.
@@ -123,6 +142,9 @@ private:
     RouteManager& routeManager_; ///< Shared route table (injected).
     std::string serverId_;       ///< Server identity for Echo responses.
     std::string serverVersion_;  ///< Binary version for Echo responses.
+
+    mutable std::mutex loopbackMutex_;  ///< Guards loopbackAddress_.
+    std::string loopbackAddress_;       ///< Loopback address set by clients.
 };
 
 } // namespace srmd

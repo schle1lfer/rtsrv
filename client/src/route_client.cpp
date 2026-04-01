@@ -242,4 +242,54 @@ RouteClient::listRoutes(bool activeOnly)
                                         resp.routes().end());
 }
 
+// ---------------------------------------------------------------------------
+// SetLoopback
+// ---------------------------------------------------------------------------
+
+std::expected<std::string, std::string>
+RouteClient::setLoopback(const std::string& address)
+{
+    srmd::v1::SetLoopbackRequest req;
+    req.set_address(address);
+
+    srmd::v1::SetLoopbackResponse resp;
+    auto ctx = makeContext();
+    const grpc::Status status = stub_->SetLoopback(ctx.get(), req, &resp);
+    if (!status.ok())
+    {
+        return std::unexpected(statusToError(status));
+    }
+    if (resp.code() != srmd::v1::STATUS_CODE_OK)
+    {
+        return std::unexpected(std::format(
+            "SetLoopback failed ({}): {}",
+            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+    }
+    return resp.address();
+}
+
+// ---------------------------------------------------------------------------
+// GetLoopback
+// ---------------------------------------------------------------------------
+
+std::expected<std::string, std::string> RouteClient::getLoopback()
+{
+    srmd::v1::GetLoopbackRequest req;
+
+    srmd::v1::GetLoopbackResponse resp;
+    auto ctx = makeContext();
+    const grpc::Status status = stub_->GetLoopback(ctx.get(), req, &resp);
+    if (!status.ok())
+    {
+        return std::unexpected(statusToError(status));
+    }
+    if (resp.code() != srmd::v1::STATUS_CODE_OK)
+    {
+        return std::unexpected(std::format(
+            "GetLoopback failed ({}): {}",
+            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+    }
+    return resp.address();
+}
+
 } // namespace sra

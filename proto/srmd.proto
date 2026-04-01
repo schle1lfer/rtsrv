@@ -228,6 +228,43 @@ message ListRoutesResponse
 }
 
 // ---------------------------------------------------------------------------
+// SetLoopback / GetLoopback
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to set the loopback address stored on the server.
+ */
+message SetLoopbackRequest
+{
+    string address = 1; ///< Loopback address to store (e.g. "10.0.0.1").
+}
+
+/**
+ * @brief Response from SetLoopback.
+ */
+message SetLoopbackResponse
+{
+    StatusCode code = 1;    ///< Operation outcome.
+    string message = 2;     ///< Human-readable detail.
+    string address = 3;     ///< The address that was stored.
+}
+
+/**
+ * @brief Request to retrieve the loopback address stored on the server.
+ */
+message GetLoopbackRequest {}
+
+/**
+ * @brief Response from GetLoopback.
+ */
+message GetLoopbackResponse
+{
+    StatusCode code = 1;    ///< Operation outcome.
+    string message = 2;     ///< Human-readable detail.
+    string address = 3;     ///< The currently stored loopback address.
+}
+
+// ---------------------------------------------------------------------------
 // WatchRoutes – server-side streaming
 // ---------------------------------------------------------------------------
 
@@ -314,4 +351,14 @@ service SwitchRouteManager
      */
     rpc WatchRoutes(WatchRoutesRequest)
         returns (stream RouteEvent);
+
+    /**
+     * @brief Store a loopback address on the server.
+     */
+    rpc SetLoopback(SetLoopbackRequest) returns (SetLoopbackResponse);
+
+    /**
+     * @brief Retrieve the loopback address stored on the server.
+     */
+    rpc GetLoopback(GetLoopbackRequest) returns (GetLoopbackResponse);
 }

@@ -135,6 +135,26 @@ public:
     [[nodiscard]] std::expected<std::vector<srmd::v1::Route>, std::string>
     listRoutes(bool activeOnly = false);
 
+    // -----------------------------------------------------------------------
+    // Loopback
+    // -----------------------------------------------------------------------
+
+    /**
+     * @brief Calls SetLoopback to store an address on the server.
+     *
+     * @param address  The loopback address string to store.
+     * @return The stored address on success, or an error string.
+     */
+    [[nodiscard]] std::expected<std::string, std::string>
+    setLoopback(const std::string& address);
+
+    /**
+     * @brief Calls GetLoopback to retrieve the address stored on the server.
+     *
+     * @return The stored loopback address, or an error string.
+     */
+    [[nodiscard]] std::expected<std::string, std::string> getLoopback();
+
 private:
     /**
      * @brief Builds and returns a ClientContext with the configured deadline.

@@ -260,4 +260,58 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
     return grpc::Status::OK;
 }
 
+// ---------------------------------------------------------------------------
+// SetLoopback
+// ---------------------------------------------------------------------------
+
+grpc::Status
+SwitchRouteManagerImpl::SetLoopback(grpc::ServerContext* /*ctx*/,
+                                    const srmd::v1::SetLoopbackRequest* req,
+                                    srmd::v1::SetLoopbackResponse* resp)
+{
+    if (req->address().empty())
+    {
+        resp->set_code(srmd::v1::STATUS_CODE_INVALID_ARGUMENT);
+        resp->set_message("address must not be empty");
+        return grpc::Status::OK;
+    }
+
+    {
+        std::lock_guard lock(loopbackMutex_);
+        loopbackAddress_ = req->address();
+    }
+
+    BOOST_LOG_TRIVIAL(info)
+        << std::format("[SetLoopback] address='{}'", req->address());
+
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message("Loopback address set");
+    resp->set_address(req->address());
+    return grpc::Status::OK;
+}
+
+// ---------------------------------------------------------------------------
+// GetLoopback
+// ---------------------------------------------------------------------------
+
+grpc::Status
+SwitchRouteManagerImpl::GetLoopback(grpc::ServerContext* /*ctx*/,
+                                    const srmd::v1::GetLoopbackRequest* /*req*/,
+                                    srmd::v1::GetLoopbackResponse* resp)
+{
+    std::string addr;
+    {
+        std::lock_guard lock(loopbackMutex_);
+        addr = loopbackAddress_;
+    }
+
+    BOOST_LOG_TRIVIAL(debug)
+        << std::format("[GetLoopback] returning address='{}'", addr);
+
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message("OK");
+    resp->set_address(addr);
+    return grpc::Status::OK;
+}
+
 } // namespace srmd
