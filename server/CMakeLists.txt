@@ -47,6 +47,25 @@ target_compile_definitions(
         BOOST_ALL_DYN_LINK
 )
 
+# ---------------------------------------------------------------------------
+# netlink_test – standalone smoke-test for the /32 route listener
+# ---------------------------------------------------------------------------
+
+add_executable(
+    netlink_test
+    src/netlink_test.c
+    src/netlink.c
+)
+
+target_include_directories(
+    netlink_test
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+# No install rule – this is a development/debug tool only.
+
+# ---------------------------------------------------------------------------
 # Post-build: create versioned snapshot
 add_custom_command(
     TARGET srmd
