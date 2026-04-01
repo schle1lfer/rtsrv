@@ -47,8 +47,8 @@ project(
 # Override at install time:    cmake --install build --prefix /usr/local
 # ---------------------------------------------------------------------------
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install"
-        CACHE PATH "Install path prefix (default: <build-dir>/install)" FORCE)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/install"
+        CACHE PATH "Install path prefix (default: <source-dir>/install)" FORCE)
 endif()
 
 # ---------------------------------------------------------------------------
