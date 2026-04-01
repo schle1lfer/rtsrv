@@ -37,6 +37,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <print>
@@ -331,7 +332,10 @@ int main(int argc, char* argv[])
 
     while (!srmd::Daemon::shouldStop())
     {
-        daemon.shouldReload();
+        if (daemon.shouldReload())
+        {
+            BOOST_LOG_TRIVIAL(info) << "SIGHUP received – reload not implemented";
+        }
         std::this_thread::sleep_for(500ms);
     }
 

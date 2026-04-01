@@ -130,11 +130,11 @@ static const char *timestamp(char *buf, size_t buflen)
     struct tm tm_utc;
     gmtime_r(&ts.tv_sec, &tm_utc);
 
-    snprintf(buf, buflen, "%02d:%02d:%02d.%03ld",
+    snprintf(buf, buflen, "%02d:%02d:%02d.%03d",
              tm_utc.tm_hour,
              tm_utc.tm_min,
              tm_utc.tm_sec,
-             ts.tv_nsec / 1000000L);
+             (int)(ts.tv_nsec / 1000000L));
     return buf;
 }
 

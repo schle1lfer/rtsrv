@@ -113,7 +113,7 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
     route.protocol = rtm->rtm_protocol;
     route.table    = rtm->rtm_table; /* May be overridden by RTA_TABLE below */
 
-    int attrlen = RTM_PAYLOAD(nlh);
+    unsigned int attrlen = (unsigned int)RTM_PAYLOAD(nlh);
     for (const struct rtattr *rta = RTM_RTA(rtm);
          RTA_OK(rta, attrlen);
          rta = RTA_NEXT(rta, attrlen))

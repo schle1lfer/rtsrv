@@ -17,6 +17,27 @@
 #include <fstream>
 #include <numeric>
 #include <sstream>
+#include <string_view>
+
+// ---------------------------------------------------------------------------
+// std::formatter specialisation for boost::json::string_view
+//
+// boost::json iterates object keys as boost::core::basic_string_view<char>.
+// GCC 13's <format> has no built-in specialisation for that type.  The
+// specialisation below delegates to the existing std::string_view formatter
+// so all std::format("{}", key) calls in this file compile cleanly.
+// ---------------------------------------------------------------------------
+template <>
+struct std::formatter<boost::core::basic_string_view<char>>
+    : std::formatter<std::string_view>
+{
+    auto format(boost::core::basic_string_view<char> sv,
+                std::format_context& ctx) const
+    {
+        return std::formatter<std::string_view>::format(
+            std::string_view(sv.data(), sv.size()), ctx);
+    }
+};
 
 namespace sra
 {

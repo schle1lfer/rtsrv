@@ -668,7 +668,12 @@ static void nlWatchCb(netlink_event_t          event,
         auto it = ctx->routeIds.find(dest);
         if (it != ctx->routeIds.end())
         {
-            ctx->client->removeRoute(it->second);
+            auto rmResult = ctx->client->removeRoute(it->second);
+            if (!rmResult)
+            {
+                std::println("{} [CHANGED] {} stale-remove failed: {}",
+                             ts, dest, rmResult.error());
+            }
             ctx->routeIds.erase(it);
         }
 

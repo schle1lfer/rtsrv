@@ -38,13 +38,19 @@ project(
     srmd_sra
     VERSION 1.0.0
     DESCRIPTION "Switch Route Manager Daemon + Switch Route Application"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # ---------------------------------------------------------------------------
-# C++26 – required for std::expected, std::print, and all C++26 features
+# C++ standard
+# C++23 is required for std::expected, std::format, and std::ranges.
+# std::print / std::println (<print>) landed in the standard with C++23 but
+# libstdc++ only ships the header from GCC 14 onwards.  A compatibility shim
+# lives in common/include/print and is found via the propagated include path
+# of common_lib; it also adds the C++26 std::ostream overloads used by the
+# std::println(std::cerr, ...) calls throughout the codebase.
 # ---------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -64,10 +70,11 @@ add_compile_options(
     -Wpedantic
     -Wconversion
     -Wshadow
-    -Wnon-virtual-dtor
-    -Wold-style-cast
     -Wcast-align
-    -Woverloaded-virtual
+    # C++-only warnings – guard against accidental application to C sources
+    $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wold-style-cast>
+    $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
     $<$<CONFIG:Debug>:-g3>
     $<$<CONFIG:Debug>:-O0>
     $<$<CONFIG:Release>:-O3>

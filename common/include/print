@@ -1,0 +1,112 @@
+/**
+ * @file common/include/print
+ * @brief Compatibility shim for <print> (C++23 / C++26).
+ *
+ * The <print> header (std::print, std::println) was standardised in C++23
+ * but libstdc++ only ships it from GCC 14 onwards.  When compiled with
+ * GCC 13 the system has no <print>, so this file — found first via the
+ * PUBLIC include path of common_lib — fills the gap.
+ *
+ * Overloads provided:
+ *   std::print  (format_string, args...)            → stdout
+ *   std::print  (FILE*,  format_string, args...)    → C stream
+ *   std::print  (ostream&, format_string, args...)  → C++ stream  [C++26]
+ *   std::println(format_string, args...)            → stdout + '\n'
+ *   std::println(FILE*,  format_string, args...)    → C stream + '\n'
+ *   std::println(ostream&, format_string, args...)  → C++ stream + '\n' [C++26]
+ *   std::println()                                  → '\n' on stdout
+ *
+ * The ostream& overloads are from P3107 (accepted for C++26) and are
+ * needed by the std::println(std::cerr, ...) calls in the codebase.
+ *
+ * @note If the toolchain eventually ships a real <print>, this file will
+ *       shadow it.  At that point this shim can simply be deleted: the
+ *       system header provides a superset of this interface.
+ */
+
+#pragma once
+
+#include <cstdio>
+#include <format>
+#include <ostream>
+#include <string>
+
+namespace std
+{
+
+// ---------------------------------------------------------------------------
+// print – stdout
+// ---------------------------------------------------------------------------
+
+template<typename... Args>
+void print(std::format_string<Args...> fmt, Args&&... args)
+{
+    const std::string s = std::format(fmt, std::forward<Args>(args)...);
+    std::fwrite(s.data(), 1, s.size(), stdout);
+}
+
+// ---------------------------------------------------------------------------
+// print – C FILE* stream
+// ---------------------------------------------------------------------------
+
+template<typename... Args>
+void print(std::FILE* stream, std::format_string<Args...> fmt, Args&&... args)
+{
+    const std::string s = std::format(fmt, std::forward<Args>(args)...);
+    std::fwrite(s.data(), 1, s.size(), stream);
+}
+
+// ---------------------------------------------------------------------------
+// print – C++ ostream  (P3107 / C++26)
+// ---------------------------------------------------------------------------
+
+template<typename... Args>
+void print(std::ostream& os, std::format_string<Args...> fmt, Args&&... args)
+{
+    os << std::format(fmt, std::forward<Args>(args)...);
+}
+
+// ---------------------------------------------------------------------------
+// println – stdout
+// ---------------------------------------------------------------------------
+
+template<typename... Args>
+void println(std::format_string<Args...> fmt, Args&&... args)
+{
+    const std::string s = std::format(fmt, std::forward<Args>(args)...);
+    std::fwrite(s.data(), 1, s.size(), stdout);
+    std::fputc('\n', stdout);
+}
+
+// ---------------------------------------------------------------------------
+// println – C FILE* stream
+// ---------------------------------------------------------------------------
+
+template<typename... Args>
+void println(std::FILE* stream, std::format_string<Args...> fmt, Args&&... args)
+{
+    const std::string s = std::format(fmt, std::forward<Args>(args)...);
+    std::fwrite(s.data(), 1, s.size(), stream);
+    std::fputc('\n', stream);
+}
+
+// ---------------------------------------------------------------------------
+// println – C++ ostream  (P3107 / C++26)
+// ---------------------------------------------------------------------------
+
+template<typename... Args>
+void println(std::ostream& os, std::format_string<Args...> fmt, Args&&... args)
+{
+    os << std::format(fmt, std::forward<Args>(args)...) << '\n';
+}
+
+// ---------------------------------------------------------------------------
+// println() – bare newline on stdout
+// ---------------------------------------------------------------------------
+
+inline void println()
+{
+    std::fputc('\n', stdout);
+}
+
+} // namespace std
