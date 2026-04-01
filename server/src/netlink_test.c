@@ -6,6 +6,10 @@
  * for every IPv4 /32 route event the kernel delivers.  Run it in one
  * terminal, then exercise it from another:
  *
+ * Only IPv4 host routes with a prefix length of exactly 32 are reported;
+ * all other prefix lengths (/0, /8, /16, /24, etc.) are silently discarded
+ * by the netlink module.
+ *
  * @code
  *   # 1. Add a host route → ADDED
  *   sudo ip route add 3.3.3.3/32 via 192.168.0.1
@@ -16,11 +20,11 @@
  *   # 3. Change only the metric → CHANGED
  *   sudo ip route change 3.3.3.3/32 via 192.168.0.2 metric 100
  *
- *   # 4. Change to "default" gateway (0.0.0.0 nexthop, onlink) → CHANGED
- *   sudo ip route change 3.3.3.3/32 dev eth0 scope link
- *
- *   # 5. Remove the route → REMOVED
+ *   # 4. Remove the route → REMOVED
  *   sudo ip route del 3.3.3.3/32
+ *
+ *   # The following produces NO output (not a /32):
+ *   sudo ip route add 10.0.0.0/24 via 192.168.0.1
  * @endcode
  *
  * Press Ctrl-C to stop (SIGINT closes the netlink socket, causing
@@ -146,12 +150,11 @@ static const char *timestamp(char *buf, size_t buflen)
  *   HH:MM:SS.mmm  ADDED    3.3.3.3/32  via 192.168.0.1  dev eth0  metric 0      table 254    proto static
  *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 0      table 254    proto static
  *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 100    table 254    proto static
- *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  dev eth0         metric 0      table 254    proto static
  *   HH:MM:SS.mmm  REMOVED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 100    table 254    proto static
  * @endcode
  *
- * The "via <gw>" segment is omitted when no gateway is present in the
- * route (e.g. a directly-connected / onlink host route).
+ * Only /32 host routes are reported; all other prefix lengths are
+ * filtered out by the netlink module before this callback is invoked.
  *
  * @param event      NETLINK_ROUTE_ADDED, NETLINK_ROUTE_CHANGED, or
  *                   NETLINK_ROUTE_REMOVED.
@@ -254,18 +257,19 @@ int main(void)
     }
     g_nl_fd = fd;
 
-    printf("Listening for IPv4 /32 route events (Ctrl-C to stop)...\n\n");
+    printf("Listening for IPv4 /32 route events only (Ctrl-C to stop)...\n");
+    printf("  (all other prefix lengths are silently ignored)\n\n");
     printf("  Exercise with:\n");
-    printf("    sudo ip route add    3.3.3.3/32 via 192.168.0.1"
-           "          # → ADDED\n");
+    printf("    sudo ip route add     3.3.3.3/32 via 192.168.0.1"
+           "              # → ADDED\n");
     printf("    sudo ip route replace 3.3.3.3/32 via 192.168.0.2"
-           "         # → CHANGED  (new gateway)\n");
+           "              # → CHANGED  (new gateway)\n");
     printf("    sudo ip route change  3.3.3.3/32 via 192.168.0.2 metric 100"
-           " # → CHANGED  (new metric)\n");
-    printf("    sudo ip route change  3.3.3.3/32 dev eth0 scope link"
-           "      # → CHANGED  (gateway cleared / onlink)\n");
-    printf("    sudo ip route del    3.3.3.3/32"
-           "                      # → REMOVED\n\n");
+           "  # → CHANGED  (new metric)\n");
+    printf("    sudo ip route del     3.3.3.3/32"
+           "                          # → REMOVED\n");
+    printf("    sudo ip route add     10.0.0.0/24 via 192.168.0.1"
+           "            # → (ignored, not /32)\n\n");
     fflush(stdout);
 
     /* Block until socket closed or error. */
