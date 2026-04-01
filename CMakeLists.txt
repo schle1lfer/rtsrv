@@ -42,6 +42,16 @@ project(
 )
 
 # ---------------------------------------------------------------------------
+# Default install prefix: <build-dir>/install
+# Override at configure time:  cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+# Override at install time:    cmake --install build --prefix /usr/local
+# ---------------------------------------------------------------------------
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install"
+        CACHE PATH "Install path prefix (default: <build-dir>/install)" FORCE)
+endif()
+
+# ---------------------------------------------------------------------------
 # C++ standard
 # C++23 is required for std::expected, std::format, and std::ranges.
 # std::print / std::println (<print>) landed in the standard with C++23 but
@@ -206,7 +216,7 @@ install(
 
 install(
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/systemd/srmd.service"
-    DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/systemd/system"
+    DESTINATION "lib/systemd/system"
 )
 
 # ---------------------------------------------------------------------------
