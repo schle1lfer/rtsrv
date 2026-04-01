@@ -11,11 +11,12 @@
  *   sra [options] <command> [command-args]
  *
  *   Global options:
- *     -s, --server   <addr>   Single srmd address  [default: localhost:50051]
+ *     -c, --config   <path>   Path to client config.json [default: config/config.json]
+ *     -s, --server   <addr>   Single srmd address  (overrides config file)
  *     -w, --switches <path>   Path to switch_config.json (multi-server mode)
  *         --sot      <path>   Path to route_sot_v2.json (Source-of-Truth)
- *     -t, --timeout  <sec>    RPC deadline         [default: 10]
- *         --tls               Use TLS channel
+ *     -t, --timeout  <sec>    RPC deadline (overrides config file)
+ *         --tls               Use TLS channel (overrides config file)
  *         --ca-cert  <path>   CA certificate for TLS verification
  *     -v, --version           Print version and exit
  *     -h, --help              Print this help and exit
@@ -45,6 +46,7 @@
 #include "client/route_client.hpp"
 #include "client/sot_config.hpp"
 #include "client/switch_config.hpp"
+#include "common/config.hpp"
 #include "server/netlink.h"
 
 #include <arpa/inet.h>
@@ -801,9 +803,12 @@ int main(int argc, char* argv[])
     global.add_options()
         ("help,h",   "Print help and exit")
         ("version,v","Print version and exit")
+        ("config,c",
+            po::value<std::string>()->default_value("config/config.json"),
+            "Path to client JSON config file")
         ("server,s",
-            po::value<std::string>()->default_value("localhost:50051"),
-            "srmd server address  [host:port]  (single-server mode)")
+            po::value<std::string>()->default_value(std::string{}),
+            "srmd server address  [host:port]  (overrides config file)")
         ("switches,w",
             po::value<std::string>()->default_value(std::string{}),
             "Path to switch_config.json  (multi-server mode)")
@@ -816,9 +821,9 @@ int main(int argc, char* argv[])
             "Management IPv4 of the node to look up in the SOT"
             "  (single-server sync mode)")
         ("timeout,t",
-            po::value<int>()->default_value(10),
-            "Per-RPC timeout in seconds")
-        ("tls",      "Use TLS for the gRPC channel")
+            po::value<int>()->default_value(0),
+            "Per-RPC timeout in seconds  (overrides config file; 0 = use config)")
+        ("tls",      "Use TLS for the gRPC channel  (overrides config file)")
         ("ca-cert",
             po::value<std::string>()->default_value(std::string{}),
             "Path to PEM CA certificate for TLS")
@@ -855,6 +860,9 @@ int main(int argc, char* argv[])
         std::println("sra – Switch Route Application");
         std::println("Usage: sra [options] <command> [args...]");
         std::println("");
+        std::println("Config file (config/config.json) sets server host/port,");
+        std::println("TLS, and timeout defaults.  CLI flags override them.");
+        std::println("");
         std::println("Commands:");
         std::println(
             "  test                    Full Echo+CRUD round-trip test");
@@ -884,13 +892,48 @@ int main(int argc, char* argv[])
         return EXIT_SUCCESS;
     }
 
-    const std::string server = vm["server"].as<std::string>();
+    // -----------------------------------------------------------------------
+    // Load client config file; CLI flags override individual fields
+    // -----------------------------------------------------------------------
+    const std::string configPath = vm["config"].as<std::string>();
+    common::ClientConfig clientCfg;
+    {
+        auto cfgResult = common::loadClientConfig(configPath);
+        if (cfgResult)
+        {
+            clientCfg = std::move(*cfgResult);
+        }
+        else
+        {
+            // Non-fatal: warn and continue with defaults
+            std::println(std::cerr,
+                         "Warning: could not load config '{}': {} "
+                         "(using defaults)",
+                         configPath,
+                         cfgResult.error());
+        }
+    }
+
+    // CLI --server overrides config host+port when provided
+    const std::string serverCli = vm["server"].as<std::string>();
+    const std::string server =
+        serverCli.empty() ? clientCfg.target() : serverCli;
+
     const std::string switchesPath = vm["switches"].as<std::string>();
     const std::string sotPath = vm["sot"].as<std::string>();
     const std::string nodeIp = vm["node-ip"].as<std::string>();
-    const int timeout = vm["timeout"].as<int>();
-    const bool useTls = vm.count("tls") > 0;
-    const std::string caCert = vm["ca-cert"].as<std::string>();
+
+    // CLI --timeout overrides config when non-zero
+    const int timeoutCli = vm["timeout"].as<int>();
+    const int timeout = (timeoutCli > 0) ? timeoutCli : clientCfg.timeout_seconds;
+
+    // CLI --tls overrides config
+    const bool useTls = (vm.count("tls") > 0) || clientCfg.tls_enabled;
+
+    // CLI --ca-cert overrides config
+    const std::string caCertCli = vm["ca-cert"].as<std::string>();
+    const std::string caCert = caCertCli.empty() ? clientCfg.ca_cert : caCertCli;
+
     const std::string command = vm["command"].as<std::string>();
 
     const std::vector<std::string> args =

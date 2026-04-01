@@ -3,8 +3,7 @@
  * @brief Shared configuration structures and JSON loader for srmd and sra.
  *
  * The server (srmd) reads a full DaemonConfig plus a ListenConfig from its
- * JSON file.  The client (sra) obtains the server address from the
- * command-line; it does not need a config file.
+ * JSON file.  The client (sra) reads a ClientConfig from config/config.json.
  *
  * JSON schema for srmd (config/srmd.json):
  * @code{.json}
@@ -24,6 +23,23 @@
  *   }
  * }
  * @endcode
+ *
+ * JSON schema for sra (config/config.json):
+ * @code{.json}
+ * {
+ *   "server": {
+ *     "host"       : "127.0.0.1",
+ *     "port"       : 50051,
+ *     "tls_enabled": false,
+ *     "ca_cert"    : "",
+ *     "timeout"    : 10
+ *   }
+ * }
+ * @endcode
+ *
+ * Supports both IPv4 (e.g. "192.168.1.10") and IPv6 (e.g. "::1") in the
+ * host field.  IPv6 addresses are automatically bracketed when building
+ * a gRPC target string.
  *
  * @version 1.0
  */
@@ -80,8 +96,30 @@ struct ServerConfig
     ListenConfig server; ///< gRPC listener settings.
 };
 
+/**
+ * @brief Client connection parameters loaded from config/config.json.
+ */
+struct ClientConfig
+{
+    std::string server_host{"127.0.0.1"}; ///< IPv4 or IPv6 address / hostname.
+    uint16_t server_port{50051};          ///< TCP port of the srmd server.
+    bool tls_enabled{false};              ///< Enable TLS on the channel.
+    std::string ca_cert;                  ///< Path to PEM CA cert (TLS only).
+    int timeout_seconds{10};              ///< Default per-RPC deadline (s).
+
+    /**
+     * @brief Returns the gRPC-compatible channel target string.
+     *
+     * IPv6 addresses are wrapped in brackets, e.g. "[::1]:50051".
+     * IPv4 / hostname targets are returned as "host:port".
+     *
+     * @return gRPC target string.
+     */
+    [[nodiscard]] std::string target() const;
+};
+
 // ---------------------------------------------------------------------------
-// Loader
+// Loaders
 // ---------------------------------------------------------------------------
 
 /**
@@ -92,5 +130,14 @@ struct ServerConfig
  */
 [[nodiscard]] std::expected<ServerConfig, std::string>
 loadServerConfig(const std::string& path);
+
+/**
+ * @brief Parses a JSON client configuration file (config/config.json).
+ *
+ * @param path  Filesystem path to the JSON file.
+ * @return Populated ClientConfig on success, or an error string on failure.
+ */
+[[nodiscard]] std::expected<ClientConfig, std::string>
+loadClientConfig(const std::string& path);
 
 } // namespace common

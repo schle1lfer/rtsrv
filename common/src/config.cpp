@@ -27,6 +27,17 @@ std::string ListenConfig::target() const
     return std::format("{}:{}", listen_host, listen_port);
 }
 
+std::string ClientConfig::target() const
+{
+    // Wrap bare IPv6 addresses in brackets for the gRPC target format.
+    if (server_host.find(':') != std::string::npos &&
+        server_host.front() != '[')
+    {
+        return std::format("[{}]:{}", server_host, server_port);
+    }
+    return std::format("{}:{}", server_host, server_port);
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -258,6 +269,107 @@ loadServerConfig(const std::string& path)
             return std::unexpected(listen.error());
         }
         config.server = std::move(*listen);
+    }
+
+    return config;
+}
+
+// ---------------------------------------------------------------------------
+// parseClient – "server" section of config.json
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+std::expected<ClientConfig, std::string>
+parseClient(const boost::json::object& obj)
+{
+    ClientConfig cfg;
+
+    auto host = getString(obj, "host", "127.0.0.1");
+    if (!host)
+    {
+        return std::unexpected(host.error());
+    }
+    cfg.server_host = std::move(*host);
+
+    auto port = getInt(obj, "port", 50051);
+    if (!port)
+    {
+        return std::unexpected(port.error());
+    }
+    if (*port < 1 || *port > 65535)
+    {
+        return std::unexpected(
+            std::format("port {} out of range [1, 65535]", *port));
+    }
+    cfg.server_port = static_cast<uint16_t>(*port);
+
+    auto tlsEnabled = getBool(obj, "tls_enabled", false);
+    if (!tlsEnabled)
+    {
+        return std::unexpected(tlsEnabled.error());
+    }
+    cfg.tls_enabled = *tlsEnabled;
+
+    auto caCert = getString(obj, "ca_cert");
+    if (!caCert)
+    {
+        return std::unexpected(caCert.error());
+    }
+    cfg.ca_cert = std::move(*caCert);
+
+    auto timeout = getInt(obj, "timeout", 10);
+    if (!timeout)
+    {
+        return std::unexpected(timeout.error());
+    }
+    cfg.timeout_seconds = *timeout;
+
+    return cfg;
+}
+
+} // namespace
+
+std::expected<ClientConfig, std::string>
+loadClientConfig(const std::string& path)
+{
+    auto raw = readFile(path);
+    if (!raw)
+    {
+        return std::unexpected(raw.error());
+    }
+
+    boost::json::error_code ec;
+    const boost::json::value root = boost::json::parse(*raw, ec);
+    if (ec)
+    {
+        return std::unexpected(
+            std::format("JSON parse error in '{}': {}", path, ec.message()));
+    }
+    if (!root.is_object())
+    {
+        return std::unexpected(
+            std::format("'{}': root must be a JSON object", path));
+    }
+
+    const auto& rootObj = root.get_object();
+    ClientConfig config;
+
+    if (rootObj.contains("server"))
+    {
+        const auto& v = rootObj.at("server");
+        if (!v.is_object())
+        {
+            return std::unexpected(
+                std::format("'{}': 'server' must be an object", path));
+        }
+        auto client = parseClient(v.get_object());
+        if (!client)
+        {
+            return std::unexpected(client.error());
+        }
+        config = std::move(*client);
     }
 
     return config;

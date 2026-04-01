@@ -1,0 +1,9 @@
+{
+    "server": {
+        "host"       : "127.0.0.1",
+        "port"       : 50051,
+        "tls_enabled": false,
+        "ca_cert"    : "",
+        "timeout"    : 10
+    }
+}
