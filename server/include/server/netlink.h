@@ -18,9 +18,10 @@
  *   if (fd < 0) { perror("netlink_init"); return; }
  *
  *   netlink_run(fd, [](netlink_event_t ev, const netlink_route32_t *r, void *) {
+ *       const char *label = (ev == NETLINK_ROUTE_ADDED)   ? "ADD"
+ *                         : (ev == NETLINK_ROUTE_CHANGED) ? "CHG" : "DEL";
  *       printf("%s %s via %s dev %s metric %u\n",
- *              ev == NETLINK_ROUTE_ADDED ? "ADD" : "DEL",
- *              inet_ntoa(r->dst), inet_ntoa(r->gateway),
+ *              label, inet_ntoa(r->dst), inet_ntoa(r->gateway),
  *              r->ifname, r->metric);
  *   }, nullptr);
  *
@@ -46,15 +47,31 @@ extern "C"
  * ------------------------------------------------------------------------- */
 
 /**
- * @brief Indicates whether a /32 route was installed or withdrawn.
+ * @brief Indicates whether a /32 route was installed, modified, or withdrawn.
  *
- * - NETLINK_ROUTE_ADDED   corresponds to RTM_NEWROUTE (zebra add / replace).
- * - NETLINK_ROUTE_REMOVED corresponds to RTM_DELROUTE (zebra withdraw).
+ * Derived from the netlink message type and flags:
+ *
+ * - NETLINK_ROUTE_ADDED   — RTM_NEWROUTE without NLM_F_REPLACE.
+ *                           Kernel received a brand-new route that did not
+ *                           exist before (e.g. "ip route add ...").
+ *
+ * - NETLINK_ROUTE_CHANGED — RTM_NEWROUTE with NLM_F_REPLACE set.
+ *                           An existing route was replaced in-place; the new
+ *                           route descriptor carries the updated attributes
+ *                           (new gateway, new metric, etc.).
+ *                           Triggered by "ip route replace/change ...".
+ *                           FRR zebra also uses this form when it installs
+ *                           a replacement nexthop for a previously announced
+ *                           prefix.
+ *
+ * - NETLINK_ROUTE_REMOVED — RTM_DELROUTE.
+ *                           Route was withdrawn (e.g. "ip route del ...").
  */
 typedef enum
 {
-    NETLINK_ROUTE_ADDED   = 0, /**< Route was added or replaced. */
+    NETLINK_ROUTE_ADDED   = 0, /**< Route was newly installed. */
     NETLINK_ROUTE_REMOVED = 1, /**< Route was removed. */
+    NETLINK_ROUTE_CHANGED = 2, /**< Route attributes were updated in-place. */
 } netlink_event_t;
 
 /* ---------------------------------------------------------------------------

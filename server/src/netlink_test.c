@@ -7,13 +7,19 @@
  * terminal, then exercise it from another:
  *
  * @code
- *   # add a host route – you should see "ADDED 3.3.3.3/32 ..."
+ *   # 1. Add a host route → ADDED
  *   sudo ip route add 3.3.3.3/32 via 192.168.0.1
  *
- *   # change the nexthop – you should see "ADDED 3.3.3.3/32 ..." again
+ *   # 2. Replace the gateway → CHANGED
  *   sudo ip route replace 3.3.3.3/32 via 192.168.0.2
  *
- *   # remove the route – you should see "REMOVED 3.3.3.3/32 ..."
+ *   # 3. Change only the metric → CHANGED
+ *   sudo ip route change 3.3.3.3/32 via 192.168.0.2 metric 100
+ *
+ *   # 4. Change to "default" gateway (0.0.0.0 nexthop, onlink) → CHANGED
+ *   sudo ip route change 3.3.3.3/32 dev eth0 scope link
+ *
+ *   # 5. Remove the route → REMOVED
  *   sudo ip route del 3.3.3.3/32
  * @endcode
  *
@@ -25,12 +31,12 @@
  *   cmake --build build --target netlink_test
  * @endcode
  *
- * @version 1.0
+ * @version 1.1
  */
 
 #include "server/netlink.h"
 
-#include <arpa/inet.h>   /* inet_ntop */
+#include <arpa/inet.h>       /* inet_ntop */
 #include <linux/rtnetlink.h> /* RTPROT_* constants */
 #include <signal.h>
 #include <stdio.h>
@@ -43,6 +49,23 @@ static volatile int g_nl_fd = -1;
 /* ---------------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Maps a netlink_event_t to a fixed-width display label.
+ *
+ * @param event  The event to label.
+ * @return       A 7-character, NUL-terminated label string.
+ */
+static const char *event_label(netlink_event_t event)
+{
+    switch (event)
+    {
+    case NETLINK_ROUTE_ADDED:   return "ADDED  ";
+    case NETLINK_ROUTE_REMOVED: return "REMOVED";
+    case NETLINK_ROUTE_CHANGED: return "CHANGED";
+    default:                    return "UNKNOWN";
+    }
+}
 
 /**
  * @brief Returns a short, human-readable name for an rtnetlink protocol value.
@@ -91,7 +114,7 @@ static const char *protocol_name(uint8_t protocol, char *buf, size_t buflen)
 /**
  * @brief Returns a UTC timestamp string of the form "HH:MM:SS.mmm".
  *
- * @param buf     Caller-supplied buffer.
+ * @param buf     Caller-supplied buffer (at least 13 bytes).
  * @param buflen  Length of @p buf.
  * @return        @p buf, always NUL-terminated.
  */
@@ -118,14 +141,22 @@ static const char *timestamp(char *buf, size_t buflen)
 /**
  * @brief Prints one line per /32 route event to stdout.
  *
- * Output format (all on one line):
+ * Output format (single line):
  * @code
- *   HH:MM:SS.mmm  [ADDED  |REMOVED]  3.3.3.3/32  via 192.168.0.1  dev eth0
- *                 metric 20  table 254  proto zebra
+ *   HH:MM:SS.mmm  ADDED    3.3.3.3/32  via 192.168.0.1  dev eth0  metric 0      table 254    proto static
+ *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 0      table 254    proto static
+ *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 100    table 254    proto static
+ *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  dev eth0         metric 0      table 254    proto static
+ *   HH:MM:SS.mmm  REMOVED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 100    table 254    proto static
  * @endcode
  *
- * @param event      NETLINK_ROUTE_ADDED or NETLINK_ROUTE_REMOVED.
- * @param route      Pointer to the parsed route descriptor.
+ * The "via <gw>" segment is omitted when no gateway is present in the
+ * route (e.g. a directly-connected / onlink host route).
+ *
+ * @param event      NETLINK_ROUTE_ADDED, NETLINK_ROUTE_CHANGED, or
+ *                   NETLINK_ROUTE_REMOVED.
+ * @param route      Pointer to the parsed route descriptor; valid only for
+ *                   the duration of this call.
  * @param user_data  Unused; pass NULL.
  */
 static void on_route_event(netlink_event_t          event,
@@ -142,20 +173,19 @@ static void on_route_event(netlink_event_t          event,
     char dst_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &route->dst, dst_str, sizeof(dst_str));
 
-    /* Gateway (optional – omit line segment when absent) */
-    char gw_str[INET_ADDRSTRLEN];
-    const char *gw_part = "";
-    char gw_segment[INET_ADDRSTRLEN + 6]; /* "via <addr>" */
+    /* Gateway – omit the "via" segment when the nexthop is 0.0.0.0
+     * (onlink / directly-connected routes, or "default" gateway cleared). */
+    char gw_segment[INET_ADDRSTRLEN + 6]; /* "via x.x.x.x  " */
     gw_segment[0] = '\0';
     if (route->gateway.s_addr != 0)
     {
+        char gw_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &route->gateway, gw_str, sizeof(gw_str));
         snprintf(gw_segment, sizeof(gw_segment), "via %s  ", gw_str);
-        gw_part = gw_segment;
     }
 
-    /* Interface (optional) */
-    char dev_segment[IF_NAMESIZE + 6]; /* "dev <name>" */
+    /* Interface */
+    char dev_segment[IF_NAMESIZE + 6]; /* "dev ethX  " */
     dev_segment[0] = '\0';
     if (route->ifname[0] != '\0')
     {
@@ -168,11 +198,11 @@ static void on_route_event(netlink_event_t          event,
                                        proto_num_buf,
                                        sizeof(proto_num_buf));
 
-    printf("%s  %-7s  %s/32  %s%smetric %-5u  table %-5u  proto %s\n",
+    printf("%s  %s  %s/32  %s%smetric %-5u  table %-5u  proto %s\n",
            ts_buf,
-           event == NETLINK_ROUTE_ADDED ? "ADDED" : "REMOVED",
+           event_label(event),
            dst_str,
-           gw_part,
+           gw_segment,
            dev_segment,
            route->metric,
            route->table,
@@ -189,7 +219,7 @@ static void on_route_event(netlink_event_t          event,
  * @brief SIGINT / SIGTERM handler: closes the netlink socket.
  *
  * Closing the fd causes netlink_run()'s recv() to return an error, which
- * makes the loop exit cleanly.
+ * makes the event loop exit cleanly.
  */
 static void sig_handler(int signo)
 {
@@ -224,22 +254,31 @@ int main(void)
     }
     g_nl_fd = fd;
 
-    printf("Listening for IPv4 /32 route events (Ctrl-C to stop)...\n");
-    printf("  Try: sudo ip route add 3.3.3.3/32 via 192.168.0.1\n");
-    printf("       sudo ip route del 3.3.3.3/32\n\n");
+    printf("Listening for IPv4 /32 route events (Ctrl-C to stop)...\n\n");
+    printf("  Exercise with:\n");
+    printf("    sudo ip route add    3.3.3.3/32 via 192.168.0.1"
+           "          # → ADDED\n");
+    printf("    sudo ip route replace 3.3.3.3/32 via 192.168.0.2"
+           "         # → CHANGED  (new gateway)\n");
+    printf("    sudo ip route change  3.3.3.3/32 via 192.168.0.2 metric 100"
+           " # → CHANGED  (new metric)\n");
+    printf("    sudo ip route change  3.3.3.3/32 dev eth0 scope link"
+           "      # → CHANGED  (gateway cleared / onlink)\n");
+    printf("    sudo ip route del    3.3.3.3/32"
+           "                      # → REMOVED\n\n");
     fflush(stdout);
 
     /* Block until socket closed or error. */
     int rc = netlink_run(fd, on_route_event, NULL);
 
-    /* If we closed fd in the signal handler g_nl_fd is already -1. */
+    /* g_nl_fd is -1 if we already closed it in the signal handler. */
     netlink_close(g_nl_fd);
 
     if (rc < 0)
     {
-        /* EBADF is the expected errno when we closed the fd ourselves. */
         if (g_nl_fd == -1)
         {
+            /* Closed by signal handler – normal exit. */
             printf("\nStopped.\n");
             return 0;
         }

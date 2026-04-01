@@ -51,6 +51,12 @@
  * callback.  Returns immediately (without calling @p cb) if any filter
  * condition is not met.
  *
+ * For RTM_NEWROUTE the nlmsg_flags field is inspected to distinguish a
+ * fresh install from an in-place update:
+ *   - NLM_F_REPLACE not set → NETLINK_ROUTE_ADDED   ("ip route add")
+ *   - NLM_F_REPLACE set     → NETLINK_ROUTE_CHANGED ("ip route replace/change",
+ *                                                     FRR zebra nexthop update)
+ *
  * @param nlh       Pointer to the netlink message header.
  * @param cb        Caller-supplied event callback.
  * @param user_data Forwarded to @p cb.
@@ -76,12 +82,20 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
         return; /* Blackhole, unreachable, multicast, etc. */
     }
 
-    /* --- Map nlmsg_type to event ------------------------------------------ */
+    /* --- Map nlmsg_type + nlmsg_flags to event ---------------------------- */
 
     netlink_event_t event;
     if (nlh->nlmsg_type == RTM_NEWROUTE)
     {
-        event = NETLINK_ROUTE_ADDED;
+        /*
+         * NLM_F_REPLACE indicates that the kernel is replacing an existing
+         * route entry rather than inserting a new one.  Both "ip route replace"
+         * and "ip route change" set this flag, as does FRR zebra when it
+         * updates a nexthop or metric for a previously announced prefix.
+         */
+        event = (nlh->nlmsg_flags & NLM_F_REPLACE)
+                    ? NETLINK_ROUTE_CHANGED
+                    : NETLINK_ROUTE_ADDED;
     }
     else if (nlh->nlmsg_type == RTM_DELROUTE)
     {
