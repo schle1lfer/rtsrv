@@ -58,13 +58,17 @@ void print(std::FILE* stream, std::format_string<Args...> fmt, Args&&... args)
 
 // ---------------------------------------------------------------------------
 // print – C++ ostream  (P3107 / C++26)
+// GCC 14 already declares this overload in <ostream> when __cpp_lib_print is
+// defined (C++23 mode), so only provide it when the system doesn't.
 // ---------------------------------------------------------------------------
 
+#ifndef __cpp_lib_print
 template<typename... Args>
 void print(std::ostream& os, std::format_string<Args...> fmt, Args&&... args)
 {
     os << std::format(fmt, std::forward<Args>(args)...);
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // println – stdout
@@ -92,13 +96,17 @@ void println(std::FILE* stream, std::format_string<Args...> fmt, Args&&... args)
 
 // ---------------------------------------------------------------------------
 // println – C++ ostream  (P3107 / C++26)
+// GCC 14 already declares this overload in <ostream> when __cpp_lib_print is
+// defined (C++23 mode), so only provide it when the system doesn't.
 // ---------------------------------------------------------------------------
 
+#ifndef __cpp_lib_print
 template<typename... Args>
 void println(std::ostream& os, std::format_string<Args...> fmt, Args&&... args)
 {
     os << std::format(fmt, std::forward<Args>(args)...) << '\n';
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // println() – bare newline on stdout
