@@ -7,6 +7,7 @@ add_executable(
     sra
     src/main.cpp
     src/route_client.cpp
+    src/grpc_proc.cpp
     src/routing.cpp
     src/switch_config.cpp
     src/sot_config.cpp
@@ -40,6 +41,45 @@ target_link_libraries(
 
 target_compile_definitions(
     sra
+    PRIVATE
+        BOOST_ALL_DYN_LINK
+)
+
+# ---------------------------------------------------------------------------
+# grpc_proc_example – demonstrates the GrpcProc asynchronous request queue
+# ---------------------------------------------------------------------------
+
+add_executable(
+    grpc_proc_example
+    src/grpc_proc_example.cpp
+    src/grpc_proc.cpp
+    src/route_client.cpp
+    ${PROTO_SRCS}
+    ${GRPC_SRCS}
+)
+
+add_dependencies(grpc_proc_example generate_proto)
+
+target_include_directories(
+    grpc_proc_example
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${PROTO_GEN_DIR}"
+        "${BUILD_INFO_GEN_DIR}"
+)
+
+target_link_libraries(
+    grpc_proc_example
+    PRIVATE
+        common_lib
+        Threads::Threads
+        protobuf::libprotobuf
+        gRPC::grpc++
+        Boost::system
+)
+
+target_compile_definitions(
+    grpc_proc_example
     PRIVATE
         BOOST_ALL_DYN_LINK
 )
