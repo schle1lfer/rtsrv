@@ -44,6 +44,32 @@ target_compile_definitions(
         BOOST_ALL_DYN_LINK
 )
 
+# ---------------------------------------------------------------------------
+# routing_test – smoke-test for RoutingManager (requires CAP_NET_ADMIN / root)
+# ---------------------------------------------------------------------------
+
+add_executable(
+    routing_test
+    src/routing_test.cpp
+    src/routing.cpp
+)
+
+target_include_directories(
+    routing_test
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(
+    routing_test
+    PRIVATE
+        common_lib
+        Threads::Threads
+)
+
+# No install rule – development / debug tool only.
+
+# ---------------------------------------------------------------------------
 # Post-build: create versioned snapshot
 add_custom_command(
     TARGET sra
