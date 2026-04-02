@@ -19,12 +19,23 @@
  * The ostream& overloads are from P3107 (accepted for C++26) and are
  * needed by the std::println(std::cerr, ...) calls in the codebase.
  *
- * @note If the toolchain eventually ships a real <print>, this file will
- *       shadow it.  At that point this shim can simply be deleted: the
- *       system header provides a superset of this interface.
+ * GCC 14 / libstdc++ ships a real <print> that includes all these overloads.
+ * When available, this shim simply delegates to the system header.
  */
 
 #pragma once
+// Treat this shim as a system header so GCC doesn't warn about the
+// #include_next extension directive used below.
+#pragma GCC system_header
+
+// This file sits in common/include/ which precedes the system headers.
+// __has_include(<print>) would find THIS file, not the system one, so we
+// cannot use it here.  Instead we rely on the compiler version: GCC 14+
+// ships a real <print>; use #include_next to reach it past this shim.
+#if __GNUC__ >= 14
+#  include_next <print>
+#else
+// GCC 13: provide shim implementations.
 
 #include <cstdio>
 #include <format>
@@ -110,3 +121,5 @@ inline void println()
 }
 
 } // namespace std
+
+#endif // __has_include(<print>)
