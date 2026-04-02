@@ -24,13 +24,13 @@
                     "description": "VM_pool#1"
                   },
                   {
-                    "prefix": "10.0.1.0/24",
+                    "prefix": "10.0.2.0/24",
                     "weight": 100,
                     "role": "server_network",
                     "description": "VM_pool#2"
                   },
                   {
-                    "prefix": "10.0.2.0/24",
+                    "prefix": "10.0.3.0/24",
                     "weight": 100,
                     "role": "server_network",
                     "description": "VM_pool#3"

@@ -9,6 +9,7 @@ add_executable(
     src/daemon.cpp
     src/route_manager.cpp
     src/service_impl.cpp
+    src/sot_config.cpp
     src/netlink.c
     ${PROTO_SRCS}
     ${GRPC_SRCS}

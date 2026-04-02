@@ -199,9 +199,27 @@ include(GNUInstallDirs)
 install(TARGETS srmd RUNTIME DESTINATION "${CMAKE_INSTALL_SBINDIR}")
 install(TARGETS sra  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
+# srmd::srmd.json
 install(
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/srmd.json"
     DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/srmd"
+)
+
+# srmd::route_sot_v2.json
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/route_sot_v2.json"
+    DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/srmd"
+)
+# srmd::switch_config.json
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/switch_config.json"
+    DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/srmd"
+)
+
+# sra::config.json
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/config.json"
+    DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/sra"
 )
 
 install(

@@ -42,3 +42,6 @@
 
 # CMake build directory
 build/
+install/
+local/
+

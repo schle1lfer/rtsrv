@@ -247,6 +247,7 @@ message SetLoopbackResponse
     StatusCode code = 1;    ///< Operation outcome.
     string message = 2;     ///< Human-readable detail.
     string address = 3;     ///< The address that was stored.
+    string metric = 4;      ///< The metric.
 }
 
 /**

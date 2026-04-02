@@ -643,84 +643,89 @@ static void nlWatchCb(netlink_event_t          event,
 
     const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
 
-    /* ---- ADDED ---------------------------------------------------------- */
-    if (event == NETLINK_ROUTE_ADDED)
+    // only for OSPF now
+    if (proto == srmd::v1::ROUTE_PROTOCOL_OSPF)
     {
-        auto result = ctx->client->addRoute(
-            dest, gw, iface, route->metric,
-            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+        /* ---- ADDED ---------------------------------------------------------- */
+        if (event == NETLINK_ROUTE_ADDED)
+        {
+            auto result = ctx->client->addRoute(
+                dest, gw, iface, route->metric,
+                srmd::v1::ADDRESS_FAMILY_IPV4, proto);
 
-        if (result)
-        {
-            ctx->routeIds[dest] = result->id();
-            std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
-                         ts, dest, gw, iface, route->metric,
-                         result->id().substr(0, 8) + "…");
-        }
-        else
-        {
-            std::println("{} [ADDED]   {} → gRPC FAILED: {}",
-                         ts, dest, result.error());
-        }
-    }
-    /* ---- CHANGED -------------------------------------------------------- */
-    else if (event == NETLINK_ROUTE_CHANGED)
-    {
-        /* Remove the stale entry if we hold an ID for this destination. */
-        auto it = ctx->routeIds.find(dest);
-        if (it != ctx->routeIds.end())
-        {
-            auto rmResult = ctx->client->removeRoute(it->second);
-            if (!rmResult)
+            if (result)
             {
-                std::println("{} [CHANGED] {} stale-remove failed: {}",
-                             ts, dest, rmResult.error());
+                ctx->routeIds[dest] = result->id();
+                std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
+                            ts, dest, gw, iface, route->metric,
+                            result->id().substr(0, 8) + "…");
             }
+            else
+            {
+                std::println("{} [ADDED]   {} → gRPC FAILED: {}",
+                            ts, dest, result.error());
+            }
+        }
+        /* ---- CHANGED -------------------------------------------------------- */
+        else if (event == NETLINK_ROUTE_CHANGED)
+        {
+            /* Remove the stale entry if we hold an ID for this destination. */
+            auto it = ctx->routeIds.find(dest);
+            if (it != ctx->routeIds.end())
+            {
+                auto rmResult = ctx->client->removeRoute(it->second);
+                if (!rmResult)
+                {
+                    std::println("{} [CHANGED] {} stale-remove failed: {}",
+                                ts, dest, rmResult.error());
+                }
+                ctx->routeIds.erase(it);
+            }
+
+            auto result = ctx->client->addRoute(
+                dest, gw, iface, route->metric,
+                srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+
+            if (result)
+            {
+                ctx->routeIds[dest] = result->id();
+                std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
+                            ts, dest, gw, iface, route->metric,
+                            result->id().substr(0, 8) + "…");
+            }
+            else
+            {
+                std::println("{} [CHANGED] {} → gRPC FAILED: {}",
+                            ts, dest, result.error());
+            }
+        }
+        /* ---- REMOVED -------------------------------------------------------- */
+        else
+        {
+            auto it = ctx->routeIds.find(dest);
+            if (it == ctx->routeIds.end())
+            {
+                std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
+                            ts, dest);
+                return;
+            }
+
+            const std::string id = it->second;
             ctx->routeIds.erase(it);
+
+            auto result = ctx->client->removeRoute(id);
+            if (result)
+            {
+                std::println("{} [REMOVED] {} id={}", ts, dest,
+                            id.substr(0, 8) + "…");
+            }
+            else
+            {
+                std::println("{} [REMOVED] {} → gRPC FAILED: {}",
+                            ts, dest, result.error());
+            }
         }
 
-        auto result = ctx->client->addRoute(
-            dest, gw, iface, route->metric,
-            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
-
-        if (result)
-        {
-            ctx->routeIds[dest] = result->id();
-            std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
-                         ts, dest, gw, iface, route->metric,
-                         result->id().substr(0, 8) + "…");
-        }
-        else
-        {
-            std::println("{} [CHANGED] {} → gRPC FAILED: {}",
-                         ts, dest, result.error());
-        }
-    }
-    /* ---- REMOVED -------------------------------------------------------- */
-    else
-    {
-        auto it = ctx->routeIds.find(dest);
-        if (it == ctx->routeIds.end())
-        {
-            std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
-                         ts, dest);
-            return;
-        }
-
-        const std::string id = it->second;
-        ctx->routeIds.erase(it);
-
-        auto result = ctx->client->removeRoute(id);
-        if (result)
-        {
-            std::println("{} [REMOVED] {} id={}", ts, dest,
-                         id.substr(0, 8) + "…");
-        }
-        else
-        {
-            std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                         ts, dest, result.error());
-        }
     }
 
     std::cout.flush();

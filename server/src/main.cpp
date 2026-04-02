@@ -20,6 +20,7 @@
 #include "server/daemon.hpp"
 #include "server/route_manager.hpp"
 #include "server/service_impl.hpp"
+#include "server/sot_config.hpp"
 
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>
@@ -139,6 +140,50 @@ static std::string getHostname()
 }
 
 // ---------------------------------------------------------------------------
+// SOT sync helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Prints a parsed @c SotConfig summary to stdout.
+ *
+ * Lists every node with its hostname, management IP, loopback addresses,
+ * and a count of VRFs, interfaces, and prefixes.  Called immediately after
+ * successful SOT parsing so the operator can verify the loaded data.
+ *
+ * @param cfg  Parsed SOT configuration.
+ */
+static void printSotSummary(const srmd::SotConfig& cfg)
+{
+    std::println("SOT parsed: {} node(s), {} prefix(es) total",
+                 cfg.nodes.size(),
+                 cfg.totalPrefixCount());
+    std::println("{}", std::string(60, '-'));
+
+    for (const auto& node : cfg.nodes)
+    {
+        std::size_t ifaceCount = 0;
+        std::size_t prefixCount = 0;
+        for (const auto& vrf : node.vrfs)
+        {
+            ifaceCount += vrf.ipv4.interfaces.size();
+            for (const auto& iface : vrf.ipv4.interfaces)
+            {
+                prefixCount += iface.prefixes.size();
+            }
+        }
+
+        std::println("  {} ({})  lo4={}  vrfs={}  ifaces={}  prefixes={}",
+                     node.hostname,
+                     node.management_ip,
+                     node.loopbacks.ipv4,
+                     node.vrfs.size(),
+                     ifaceCount,
+                     prefixCount);
+    }
+    std::println("{}", std::string(60, '-'));
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -163,6 +208,10 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(
                 std::string(kDefaultConfig)),
             "Path to the JSON configuration file")
+        ("sot,s",
+            po::value<std::string>()->default_value(
+                std::string(kDefaultConfig)),
+            "Path to the JSON route_sot_v2 file (Source-of-Truth)")
         ("foreground,f", "Run in the foreground (skip daemonisation)");
     // clang-format on
 
@@ -195,7 +244,66 @@ int main(int argc, char* argv[])
     }
 
     const std::string configPath = vm["config"].as<std::string>();
+    const std::string sotPath = vm["sot"].as<std::string>();
     const bool foreground = vm.count("foreground") > 0;
+
+    // -----------------------------------------------------------------------
+    // "sync" command – parse SOT *before* opening any gRPC connections
+    // -----------------------------------------------------------------------
+    if (sotPath.empty())
+    {
+        std::println(std::cerr, "Error: server requires --sot <path>");
+        return EXIT_FAILURE;
+    }
+
+    // Parse the SOT file first – no network connections yet
+    std::println("srmd  build #{}  Parsing SOT: {}",
+                    rtsrv::build::kBuildNumber,
+                    sotPath);
+
+    auto sotResult = srmd::loadSotConfig(sotPath);
+    if (!sotResult)
+    {
+        std::println(
+            std::cerr, "Error loading SOT config: {}", sotResult.error());
+        return EXIT_FAILURE;
+    }
+
+    // Print what was loaded so the operator can verify before pushing
+    printSotSummary(*sotResult);
+#if 0
+    // Multi-server sync via switch_config.json
+    if (!switchesPath.empty())
+    {
+        auto cfgResult = sra::loadSwitchConfig(switchesPath);
+        if (!cfgResult)
+        {
+            std::println(std::cerr,
+                            "Error loading switch config: {}",
+                            cfgResult.error());
+            return EXIT_FAILURE;
+        }
+        return cmdSyncMulti(
+            *sotResult, *cfgResult, useTls, caCert, timeout);
+    }
+
+    // Single-server sync: --server + --node-ip required
+    if (nodeIp.empty())
+    {
+        std::println(
+            std::cerr,
+            "Error: single-server sync requires --node-ip <management-ip>"
+            " (the key used in nodes_by_loopback)");
+        return EXIT_FAILURE;
+    }
+
+    std::println("\n{}", std::string(60, '='));
+    std::println("Switch : {}  node-ip={}", server, nodeIp);
+    std::println("{}", std::string(60, '='));
+
+    sra::RouteClient client(server, useTls, caCert, timeout);
+    return syncOneServer(client, nodeIp, server, *sotResult);
+#endif
 
     // -----------------------------------------------------------------------
     // Load configuration
