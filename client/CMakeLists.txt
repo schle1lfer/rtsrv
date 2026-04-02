@@ -7,6 +7,7 @@ add_executable(
     sra
     src/main.cpp
     src/route_client.cpp
+    src/routing.cpp
     src/switch_config.cpp
     src/sot_config.cpp
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
