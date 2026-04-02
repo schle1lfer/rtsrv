@@ -1,0 +1,365 @@
+/**
+ * @file srmd.proto
+ * @brief gRPC protocol definition for the Switch Route Manager Daemon (srmd).
+ *
+ * Defines the SwitchRouteManager service used for bidirectional communication
+ * between the srmd daemon and the Switch Route Application (sra) clients.
+ *
+ * The protocol covers:
+ *  - Connectivity: Echo (test round-trip), Heartbeat
+ *  - Route CRUD:   AddRoute, RemoveRoute, GetRoute, ListRoutes
+ *  - Streaming:    WatchRoutes – server-push stream of route change events
+ *
+ * Versioning: all messages and the service live in package srmd.v1.
+ *
+ * @version 1.0
+ */
+
+syntax = "proto3";
+
+package srmd.v1;
+
+option cc_enable_arenas = true;
+
+// ---------------------------------------------------------------------------
+// Enumerations
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief How a route was learned / installed.
+ */
+enum RouteProtocol
+{
+    ROUTE_PROTOCOL_UNSPECIFIED = 0; ///< Default/unset.
+    ROUTE_PROTOCOL_STATIC = 1;      ///< Manually configured static route.
+    ROUTE_PROTOCOL_CONNECTED = 2;   ///< Directly connected network.
+    ROUTE_PROTOCOL_OSPF = 3;        ///< Learned via OSPF.
+    ROUTE_PROTOCOL_BGP = 4;         ///< Learned via BGP.
+    ROUTE_PROTOCOL_RIP = 5;         ///< Learned via RIP.
+}
+
+/**
+ * @brief Address family for a route entry.
+ */
+enum AddressFamily
+{
+    ADDRESS_FAMILY_UNSPECIFIED = 0; ///< Default/unset.
+    ADDRESS_FAMILY_IPV4 = 1;        ///< IPv4 route.
+    ADDRESS_FAMILY_IPV6 = 2;        ///< IPv6 route.
+}
+
+/**
+ * @brief Outcome of a mutating operation.
+ */
+enum StatusCode
+{
+    STATUS_CODE_OK = 0;              ///< Operation succeeded.
+    STATUS_CODE_NOT_FOUND = 1;       ///< Requested route not found.
+    STATUS_CODE_ALREADY_EXISTS = 2;  ///< Route already present.
+    STATUS_CODE_INVALID_ARGUMENT = 3; ///< Malformed request field.
+    STATUS_CODE_INTERNAL_ERROR = 4;  ///< Unexpected server-side error.
+}
+
+/**
+ * @brief The type of change that produced a RouteEvent.
+ */
+enum RouteEventType
+{
+    ROUTE_EVENT_UNSPECIFIED = 0; ///< Default/unset.
+    ROUTE_EVENT_ADDED = 1;       ///< Route was added.
+    ROUTE_EVENT_REMOVED = 2;     ///< Route was removed.
+    ROUTE_EVENT_UPDATED = 3;     ///< Route attributes were modified.
+}
+
+// ---------------------------------------------------------------------------
+// Core data messages
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief A single routing table entry managed by srmd.
+ */
+message Route
+{
+    string id = 1; ///< Server-assigned unique identifier (UUID v4).
+    AddressFamily address_family = 2; ///< IPv4 or IPv6.
+    string destination = 3; ///< Destination prefix in CIDR notation
+                            ///< (e.g. "10.0.0.0/8" or "default").
+    string gateway = 4;     ///< Next-hop gateway address (may be empty
+                            ///< for directly-connected routes).
+    string interface_name = 5; ///< Outgoing network interface (e.g. "eth0").
+    uint32 metric = 6;         ///< Route priority – lower wins.
+    RouteProtocol protocol = 7; ///< How the route was learned.
+    bool active = 8;            ///< True when the route is currently installed.
+    int64 created_at_us = 9;    ///< Creation time (Unix epoch, microseconds).
+    int64 updated_at_us = 10;   ///< Last-update time (Unix epoch, microseconds).
+    map<string, string> tags = 11; ///< Arbitrary user-defined key-value tags.
+}
+
+/**
+ * @brief Generic status result returned by mutating RPCs.
+ */
+message StatusResponse
+{
+    StatusCode code = 1;    ///< Operation outcome.
+    string message = 2;     ///< Human-readable detail.
+}
+
+// ---------------------------------------------------------------------------
+// Echo – connectivity test
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Echo request: the server must return the same message field.
+ */
+message EchoRequest
+{
+    string message = 1;       ///< Arbitrary payload to echo back.
+    int64 client_ts_us = 2;   ///< Client send time (Unix epoch, microseconds).
+}
+
+/**
+ * @brief Echo response: mirrors the request message with server metadata.
+ */
+message EchoResponse
+{
+    string message = 1;       ///< Echoed copy of EchoRequest.message.
+    int64 client_ts_us = 2;   ///< Forwarded from EchoRequest.client_ts_us.
+    int64 server_ts_us = 3;   ///< Server receive time (Unix epoch, microseconds).
+    string server_id = 4;     ///< Identifier of the responding srmd instance.
+    string server_version = 5; ///< Full version string of the srmd binary.
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat – session keepalive
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Periodic keepalive ping.
+ */
+message HeartbeatRequest
+{
+    uint64 sequence = 1;    ///< Monotonically increasing sequence counter.
+    int64 client_ts_us = 2; ///< Client send time (Unix epoch, microseconds).
+}
+
+/**
+ * @brief Heartbeat acknowledgement.
+ */
+message HeartbeatResponse
+{
+    uint64 sequence = 1;    ///< Echo of HeartbeatRequest.sequence.
+    int64 server_ts_us = 2; ///< Server reply time (Unix epoch, microseconds).
+}
+
+// ---------------------------------------------------------------------------
+// AddRoute
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to install a new route in the srmd route table.
+ */
+message AddRouteRequest
+{
+    AddressFamily address_family = 1; ///< IPv4 or IPv6.
+    string destination = 2;           ///< Destination prefix (CIDR or "default").
+    string gateway = 3;               ///< Next-hop gateway (optional).
+    string interface_name = 4;        ///< Outgoing interface (optional).
+    uint32 metric = 5;                ///< Route metric (default 0).
+    RouteProtocol protocol = 6;       ///< Origin protocol.
+    map<string, string> tags = 7;     ///< Optional user-defined tags.
+}
+
+/**
+ * @brief Response from AddRoute / GetRoute – carries the stored Route.
+ */
+message RouteResponse
+{
+    StatusCode code = 1;  ///< Operation outcome.
+    string message = 2;   ///< Human-readable detail.
+    Route route = 3;      ///< The newly created or retrieved route.
+}
+
+// ---------------------------------------------------------------------------
+// RemoveRoute
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to remove a route by its server-assigned ID.
+ */
+message RemoveRouteRequest
+{
+    string id = 1; ///< Route ID returned by AddRoute.
+}
+
+// ---------------------------------------------------------------------------
+// GetRoute
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to retrieve a single route by ID.
+ */
+message GetRouteRequest
+{
+    string id = 1; ///< Route ID to look up.
+}
+
+// ---------------------------------------------------------------------------
+// ListRoutes
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to enumerate all routes, with optional filters.
+ */
+message ListRoutesRequest
+{
+    AddressFamily address_family = 1; ///< Filter by family (UNSPECIFIED = all).
+    RouteProtocol protocol = 2;       ///< Filter by protocol (UNSPECIFIED = all).
+    bool active_only = 3;             ///< When true, only active routes returned.
+}
+
+/**
+ * @brief Response carrying a snapshot of the route table.
+ */
+message ListRoutesResponse
+{
+    StatusCode code = 1;       ///< Operation outcome.
+    repeated Route routes = 2; ///< Matched routes.
+    int64 snapshot_ts_us = 3;  ///< Snapshot timestamp (Unix epoch, microseconds).
+}
+
+// ---------------------------------------------------------------------------
+// SetLoopback / GetLoopback
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to set the loopback address stored on the server.
+ */
+message SetLoopbackRequest
+{
+    string address = 1; ///< Loopback address to store (e.g. "10.0.0.1").
+}
+
+/**
+ * @brief Response from SetLoopback.
+ */
+message SetLoopbackResponse
+{
+    StatusCode code = 1;    ///< Operation outcome.
+    string message = 2;     ///< Human-readable detail.
+    string address = 3;     ///< The address that was stored.
+    string metric = 4;      ///< The metric.
+}
+
+/**
+ * @brief Request to retrieve the loopback address stored on the server.
+ */
+message GetLoopbackRequest {}
+
+/**
+ * @brief Response from GetLoopback.
+ */
+message GetLoopbackResponse
+{
+    StatusCode code = 1;    ///< Operation outcome.
+    string message = 2;     ///< Human-readable detail.
+    string address = 3;     ///< The currently stored loopback address.
+}
+
+// ---------------------------------------------------------------------------
+// WatchRoutes – server-side streaming
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to subscribe to route change events.
+ */
+message WatchRoutesRequest
+{
+    AddressFamily address_family = 1; ///< Filter by family (UNSPECIFIED = all).
+    bool send_initial_state = 2; ///< When true, emit a ROUTE_EVENT_ADDED for
+                                 ///< every currently installed route before
+                                 ///< streaming live events.
+}
+
+/**
+ * @brief A single route-change event delivered over WatchRoutes stream.
+ */
+message RouteEvent
+{
+    RouteEventType type = 1; ///< What changed.
+    Route route = 2;         ///< The affected route (populated for all types).
+    int64 event_ts_us = 3;   ///< When the change occurred (Unix epoch, us).
+}
+
+// ---------------------------------------------------------------------------
+// Service definition
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief The Switch Route Manager gRPC service implemented by srmd.
+ *
+ * The sra client connects to this service to manage the route table and
+ * subscribe to live route events.  The Echo and Heartbeat RPCs are used
+ * for connectivity testing and session keepalive respectively.
+ */
+service SwitchRouteManager
+{
+    /**
+     * @brief Test round-trip connectivity.
+     *
+     * The server echoes the request message back with its own timestamp and
+     * identity.  Used by `sra --test` to verify the gRPC channel.
+     */
+    rpc Echo(EchoRequest) returns (EchoResponse);
+
+    /**
+     * @brief Session keepalive ping.
+     */
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+    /**
+     * @brief Install a new route in the srmd route table.
+     *
+     * Returns STATUS_CODE_ALREADY_EXISTS if a route with the same
+     * destination, gateway, and interface already exists.
+     */
+    rpc AddRoute(AddRouteRequest) returns (RouteResponse);
+
+    /**
+     * @brief Remove a route by its server-assigned ID.
+     *
+     * Returns STATUS_CODE_NOT_FOUND when the ID is unknown.
+     */
+    rpc RemoveRoute(RemoveRouteRequest) returns (StatusResponse);
+
+    /**
+     * @brief Retrieve a single route by ID.
+     *
+     * Returns STATUS_CODE_NOT_FOUND when the ID is unknown.
+     */
+    rpc GetRoute(GetRouteRequest) returns (RouteResponse);
+
+    /**
+     * @brief Enumerate the current route table with optional filters.
+     */
+    rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
+
+    /**
+     * @brief Subscribe to live route change events (server-side stream).
+     *
+     * The stream remains open until the client closes it or the server
+     * shuts down.  If WatchRoutesRequest.send_initial_state is true, the
+     * server first emits ROUTE_EVENT_ADDED for every existing route.
+     */
+    rpc WatchRoutes(WatchRoutesRequest)
+        returns (stream RouteEvent);
+
+    /**
+     * @brief Store a loopback address on the server.
+     */
+    rpc SetLoopback(SetLoopbackRequest) returns (SetLoopbackResponse);
+
+    /**
+     * @brief Retrieve the loopback address stored on the server.
+     */
+    rpc GetLoopback(GetLoopbackRequest) returns (GetLoopbackResponse);
+}
