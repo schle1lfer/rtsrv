@@ -58,6 +58,7 @@ enum StatusCode
     STATUS_CODE_ALREADY_EXISTS = 2;  ///< Route already present.
     STATUS_CODE_INVALID_ARGUMENT = 3; ///< Malformed request field.
     STATUS_CODE_INTERNAL_ERROR = 4;  ///< Unexpected server-side error.
+    STATUS_CODE_PERMISSION_DENIED = 5; ///< Caller not authorised.
 }
 
 /**
@@ -266,6 +267,58 @@ message GetLoopbackResponse
 }
 
 // ---------------------------------------------------------------------------
+// GetLoopbacks – SOT-backed interface list lookup
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief A single IP prefix attached to a loopback interface.
+ */
+message LoopbackPrefix
+{
+    string prefix = 1;      ///< Destination prefix in CIDR notation.
+    uint32 weight = 2;      ///< Routing weight / preference.
+    string role = 3;        ///< Semantic role (e.g. "server_network").
+    string description = 4; ///< Human-readable description.
+}
+
+/**
+ * @brief An interface entry returned in GetLoopbacksResponse.
+ */
+message LoopbackInterface
+{
+    string name = 1;          ///< Interface name (e.g. "Ethernet0").
+    string type = 2;          ///< Interface type ("nni" or "uni").
+    string local_address = 3; ///< Local IP address with prefix (CIDR).
+    string nexthop = 4;       ///< Next-hop gateway; may be empty.
+    uint32 weight = 5;        ///< Interface weight / preference.
+    string description = 6;   ///< Human-readable description.
+    repeated LoopbackPrefix prefixes = 7; ///< Prefixes reachable via this interface.
+}
+
+/**
+ * @brief Request to retrieve the interface list for a given loopback address.
+ *
+ * The server looks up the requesting client's IP in the SOT
+ * nodes_by_loopback map.  If found, it matches @c loopback against the
+ * node's loopbacks.ipv4 or loopbacks.ipv6 field and returns the
+ * corresponding VRF interface list.
+ */
+message GetLoopbacksRequest
+{
+    string loopback = 1; ///< Loopback address to query (IPv4 or IPv6 string).
+}
+
+/**
+ * @brief Response from GetLoopbacks.
+ */
+message GetLoopbacksResponse
+{
+    StatusCode code = 1;                    ///< Operation outcome.
+    string message = 2;                     ///< Human-readable detail.
+    repeated LoopbackInterface interfaces = 3; ///< Matched interface list.
+}
+
+// ---------------------------------------------------------------------------
 // WatchRoutes – server-side streaming
 // ---------------------------------------------------------------------------
 
@@ -362,4 +415,15 @@ service SwitchRouteManager
      * @brief Retrieve the loopback address stored on the server.
      */
     rpc GetLoopback(GetLoopbackRequest) returns (GetLoopbackResponse);
+
+    /**
+     * @brief Look up the interface list for a given loopback address.
+     *
+     * The server validates that the gRPC peer IP is registered in the SOT,
+     * matches the requested loopback to the node's IPv4 or IPv6 loopback,
+     * and returns the corresponding VRF interface list from the SOT.
+     * Returns STATUS_CODE_PERMISSION_DENIED when the client IP is not found
+     * in the SOT nodes_by_loopback map.
+     */
+    rpc GetLoopbacks(GetLoopbacksRequest) returns (GetLoopbacksResponse);
 }

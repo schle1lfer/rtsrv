@@ -292,4 +292,30 @@ std::expected<std::string, std::string> RouteClient::getLoopback()
     return resp.address();
 }
 
+// ---------------------------------------------------------------------------
+// GetLoopbacks
+// ---------------------------------------------------------------------------
+
+std::expected<srmd::v1::GetLoopbacksResponse, std::string>
+RouteClient::getLoopbacks(const std::string& loopback)
+{
+    srmd::v1::GetLoopbacksRequest req;
+    req.set_loopback(loopback);
+
+    srmd::v1::GetLoopbacksResponse resp;
+    auto ctx = makeContext();
+    const grpc::Status status = stub_->GetLoopbacks(ctx.get(), req, &resp);
+    if (!status.ok())
+    {
+        return std::unexpected(statusToError(status));
+    }
+    if (resp.code() != srmd::v1::STATUS_CODE_OK)
+    {
+        return std::unexpected(std::format(
+            "GetLoopbacks failed ({}): {}",
+            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+    }
+    return resp;
+}
+
 } // namespace sra

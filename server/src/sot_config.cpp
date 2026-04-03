@@ -368,6 +368,54 @@ parseVrfIpv4(const boost::json::object& obj, std::string_view ctx)
 }
 
 /**
+ * @brief Parses the @c ipv6 sub-object of a VRF.
+ *
+ * Uses the same interface parsing logic as @c parseVrfIpv4.
+ *
+ * @param obj   JSON object for @c vrfs.<vrf>.ipv6.
+ * @param ctx   Context string.
+ * @return Populated @c SotVrfIpv6, or an error string.
+ */
+std::expected<SotVrfIpv6, std::string>
+parseVrfIpv6(const boost::json::object& obj, std::string_view ctx)
+{
+    const std::string ipv6Ctx = std::format("{}.ipv6", ctx);
+
+    SotVrfIpv6 v6;
+
+    const auto* ifacesVal = obj.if_contains("interfaces");
+    if (!ifacesVal)
+    {
+        return v6;
+    }
+    const auto* ifacesObj = ifacesVal->if_object();
+    if (!ifacesObj)
+    {
+        return std::unexpected(
+            std::format("{}.interfaces: must be a JSON object", ipv6Ctx));
+    }
+
+    v6.interfaces.reserve(ifacesObj->size());
+    for (const auto& [ifName, ifVal] : *ifacesObj)
+    {
+        const auto* ifObj = ifVal.if_object();
+        if (!ifObj)
+        {
+            return std::unexpected(std::format(
+                "{}.interfaces[{}]: must be a JSON object", ipv6Ctx, ifName));
+        }
+        auto iface = parseInterface(ifName, *ifObj, ipv6Ctx);
+        if (!iface)
+        {
+            return std::unexpected(iface.error());
+        }
+        v6.interfaces.push_back(std::move(*iface));
+    }
+
+    return v6;
+}
+
+/**
  * @brief Parses one VRF entry.
  *
  * @param vrfName  VRF name (JSON object key, e.g. "default").
@@ -399,6 +447,23 @@ std::expected<SotVrf, std::string> parseVrf(std::string_view vrfName,
             return std::unexpected(v4.error());
         }
         vrf.ipv4 = std::move(*v4);
+    }
+
+    const auto* ipv6Val = obj.if_contains("ipv6");
+    if (ipv6Val)
+    {
+        const auto* ipv6Obj = ipv6Val->if_object();
+        if (!ipv6Obj)
+        {
+            return std::unexpected(
+                std::format("{}.ipv6: must be a JSON object", vrfCtx));
+        }
+        auto v6 = parseVrfIpv6(*ipv6Obj, vrfCtx);
+        if (!v6)
+        {
+            return std::unexpected(v6.error());
+        }
+        vrf.ipv6 = std::move(*v6);
     }
 
     return vrf;

@@ -22,14 +22,40 @@ namespace srmd
 
 SwitchRouteManagerImpl::SwitchRouteManagerImpl(RouteManager& routeManager,
                                                std::string serverId,
-                                               std::string serverVersion)
+                                               std::string serverVersion,
+                                               SotConfig sotConfig)
     : routeManager_(routeManager), serverId_(std::move(serverId)),
-      serverVersion_(std::move(serverVersion))
+      serverVersion_(std::move(serverVersion)), sotConfig_(std::move(sotConfig))
 {}
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+std::string SwitchRouteManagerImpl::extractClientIp(const std::string& peer)
+{
+    // "ipv4:A.B.C.D:PORT"  →  "A.B.C.D"
+    if (peer.size() > 5 && peer.substr(0, 5) == "ipv4:")
+    {
+        const std::string rest = peer.substr(5);
+        const auto colon = rest.rfind(':');
+        return colon != std::string::npos ? rest.substr(0, colon) : rest;
+    }
+    // "ipv6:[ADDR]:PORT"  →  "ADDR"
+    if (peer.size() > 5 && peer.substr(0, 5) == "ipv6:")
+    {
+        const std::string rest = peer.substr(5);
+        if (!rest.empty() && rest[0] == '[')
+        {
+            const auto end = rest.find(']');
+            if (end != std::string::npos)
+            {
+                return rest.substr(1, end - 1);
+            }
+        }
+    }
+    return peer;
+}
 
 int64_t SwitchRouteManagerImpl::nowUs() noexcept
 {
@@ -311,6 +337,110 @@ SwitchRouteManagerImpl::GetLoopback(grpc::ServerContext* /*ctx*/,
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("OK");
     resp->set_address(addr);
+    return grpc::Status::OK;
+}
+
+// ---------------------------------------------------------------------------
+// GetLoopbacks
+// ---------------------------------------------------------------------------
+
+grpc::Status
+SwitchRouteManagerImpl::GetLoopbacks(grpc::ServerContext* ctx,
+                                     const srmd::v1::GetLoopbacksRequest* req,
+                                     srmd::v1::GetLoopbacksResponse* resp)
+{
+    // 1. Extract client IP from peer string ("ipv4:A.B.C.D:PORT" etc.)
+    const std::string clientIp = extractClientIp(ctx->peer());
+
+    BOOST_LOG_TRIVIAL(debug) << std::format(
+        "[GetLoopbacks] peer='{}' clientIp='{}' loopback='{}'",
+        ctx->peer(), clientIp, req->loopback());
+
+    // 2. Authorise: client IP must be present in nodes_by_loopback
+    const SotNode* node = sotConfig_.findByManagementIp(clientIp);
+    if (!node)
+    {
+        BOOST_LOG_TRIVIAL(warning) << std::format(
+            "[GetLoopbacks] access denied for clientIp='{}'", clientIp);
+        resp->set_code(srmd::v1::STATUS_CODE_PERMISSION_DENIED);
+        resp->set_message(
+            std::format("Access denied: IP '{}' is not registered in the SOT",
+                        clientIp));
+        return grpc::Status::OK;
+    }
+
+    // 3. Match requested loopback to this node's loopbacks
+    const std::string& requestedLb = req->loopback();
+    bool isIpv4Match = (node->loopbacks.ipv4 == requestedLb);
+    bool isIpv6Match = (node->loopbacks.ipv6 == requestedLb);
+
+    if (!isIpv4Match && !isIpv6Match)
+    {
+        BOOST_LOG_TRIVIAL(warning) << std::format(
+            "[GetLoopbacks] loopback '{}' not found for node '{}' ({})",
+            requestedLb, node->hostname, clientIp);
+        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
+        resp->set_message(std::format(
+            "Loopback '{}' does not match node '{}' (ipv4='{}' ipv6='{}')",
+            requestedLb, node->hostname,
+            node->loopbacks.ipv4, node->loopbacks.ipv6));
+        return grpc::Status::OK;
+    }
+
+    // 4. Retrieve the interface list from vrfs["default"]
+    const SotVrf* defaultVrf = node->findVrf("default");
+    if (!defaultVrf)
+    {
+        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
+        resp->set_message(std::format(
+            "VRF 'default' not found for node '{}'", node->hostname));
+        return grpc::Status::OK;
+    }
+
+    const std::vector<SotInterface>* interfaces = nullptr;
+    if (isIpv4Match)
+    {
+        interfaces = &defaultVrf->ipv4.interfaces;
+    }
+    else
+    {
+        interfaces = &defaultVrf->ipv6.interfaces;
+    }
+
+    // 5. Build response
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message(std::format(
+        "OK: node '{}' loopback '{}' ({}) – {} interface(s)",
+        node->hostname, requestedLb,
+        isIpv4Match ? "ipv4" : "ipv6",
+        interfaces->size()));
+
+    for (const auto& iface : *interfaces)
+    {
+        auto* pbIface = resp->add_interfaces();
+        pbIface->set_name(iface.name);
+        pbIface->set_type(iface.type);
+        pbIface->set_local_address(iface.local_address);
+        pbIface->set_nexthop(iface.nexthop);
+        pbIface->set_weight(iface.weight);
+        pbIface->set_description(iface.description);
+
+        for (const auto& pfx : iface.prefixes)
+        {
+            auto* pbPfx = pbIface->add_prefixes();
+            pbPfx->set_prefix(pfx.prefix);
+            pbPfx->set_weight(pfx.weight);
+            pbPfx->set_role(pfx.role);
+            pbPfx->set_description(pfx.description);
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "[GetLoopbacks] node='{}' loopback='{}' ({}) → {} interface(s)",
+        node->hostname, requestedLb,
+        isIpv4Match ? "ipv4" : "ipv6",
+        interfaces->size());
+
     return grpc::Status::OK;
 }
 

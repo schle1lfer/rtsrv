@@ -155,6 +155,19 @@ public:
      */
     [[nodiscard]] std::expected<std::string, std::string> getLoopback();
 
+    /**
+     * @brief Calls GetLoopbacks to retrieve the interface list for a loopback.
+     *
+     * The server validates the caller's IP against the SOT, matches the
+     * requested loopback to an IPv4 or IPv6 loopback for that node, and
+     * returns the corresponding VRF interface list.
+     *
+     * @param loopback  Loopback address to query (IPv4 or IPv6 string).
+     * @return Populated GetLoopbacksResponse, or an error string.
+     */
+    [[nodiscard]] std::expected<srmd::v1::GetLoopbacksResponse, std::string>
+    getLoopbacks(const std::string& loopback);
+
 private:
     /**
      * @brief Builds and returns a ClientContext with the configured deadline.

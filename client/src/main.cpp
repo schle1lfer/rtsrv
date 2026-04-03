@@ -996,7 +996,7 @@ int main(int argc, char* argv[])
             "Path to PEM CA certificate for TLS")
         ("command",  po::value<std::string>(),
             "Command: test | sync | echo | add | remove | get | list | watch"
-            " | set-loopback | get-loopback | grpc-proc-demo")
+            " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -1043,6 +1043,7 @@ int main(int argc, char* argv[])
                      "events and forward to srmd");
         std::println("  set-loopback <address>  Store a loopback address on the server");
         std::println("  get-loopback            Retrieve the stored loopback address");
+        std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
         std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
         std::println("");
         std::cout << global << '\n';
@@ -1335,6 +1336,49 @@ int main(int argc, char* argv[])
         }
         std::println("Loopback address: {}",
                      result->empty() ? "(not set)" : *result);
+        return EXIT_SUCCESS;
+    }
+
+    if (command == "get-loopbacks")
+    {
+        if (args.empty())
+        {
+            std::println(std::cerr, "Usage: sra get-loopbacks <loopback-address>");
+            return EXIT_FAILURE;
+        }
+        auto result = client.getLoopbacks(args[0]);
+        if (!result)
+        {
+            std::println(std::cerr, "Error: {}", result.error());
+            return EXIT_FAILURE;
+        }
+        std::println("GetLoopbacks: {}", result->message());
+        std::println("{} interface(s):", result->interfaces_size());
+        for (const auto& iface : result->interfaces())
+        {
+            std::println("────────────────────");
+            std::println("  Name         : {}", iface.name());
+            std::println("  Type         : {}", iface.type());
+            std::println("  Local address: {}", iface.local_address());
+            std::println("  Nexthop      : {}",
+                         iface.nexthop().empty() ? "(none)" : iface.nexthop());
+            std::println("  Weight       : {}", iface.weight());
+            std::println("  Description  : {}", iface.description());
+            if (iface.prefixes_size() > 0)
+            {
+                std::println("  Prefixes ({}):", iface.prefixes_size());
+                for (const auto& pfx : iface.prefixes())
+                {
+                    std::println("    {} weight={} role='{}' desc='{}'",
+                                 pfx.prefix(), pfx.weight(),
+                                 pfx.role(), pfx.description());
+                }
+            }
+        }
+        if (result->interfaces_size() == 0)
+        {
+            std::println("  (no interfaces)");
+        }
         return EXIT_SUCCESS;
     }
 
