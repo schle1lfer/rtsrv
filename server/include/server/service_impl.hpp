@@ -13,6 +13,7 @@
 #pragma once
 
 #include "route_manager.hpp"
+#include "server/sot_config.hpp"
 #include "srmd.grpc.pb.h"
 #include "srmd.pb.h"
 
@@ -41,10 +42,13 @@ public:
      * @param routeManager  Reference to the shared route table.
      * @param serverId      Human-readable server identity (hostname + build).
      * @param serverVersion Full version string of the srmd binary.
+     * @param sotConfig     Parsed Source-of-Truth configuration used for
+     *                      client authorisation and interface lookup.
      */
     explicit SwitchRouteManagerImpl(RouteManager& routeManager,
                                     std::string serverId,
-                                    std::string serverVersion);
+                                    std::string serverVersion,
+                                    SotConfig sotConfig);
 
     // -----------------------------------------------------------------------
     // Test / keepalive RPCs
@@ -133,15 +137,39 @@ public:
                              const srmd::v1::GetLoopbackRequest* req,
                              srmd::v1::GetLoopbackResponse* resp) override;
 
+    /**
+     * @brief Returns the interface list for a given loopback address.
+     *
+     * Validates the client IP against the SOT nodes_by_loopback map,
+     * matches the requested loopback to the node's IPv4 or IPv6 loopback,
+     * and returns the corresponding VRF interface list.
+     */
+    grpc::Status GetLoopbacks(grpc::ServerContext* ctx,
+                              const srmd::v1::GetLoopbacksRequest* req,
+                              srmd::v1::GetLoopbacksResponse* resp) override;
+
 private:
     /**
      * @brief Returns the current Unix epoch time in microseconds.
      */
     static int64_t nowUs() noexcept;
 
+    /**
+     * @brief Extracts the bare IP address from a gRPC peer string.
+     *
+     * gRPC peer strings are formatted as @c "ipv4:A.B.C.D:PORT" or
+     * @c "ipv6:[ADDR]:PORT".  This helper strips the scheme and port,
+     * returning just the IP address string.
+     *
+     * @param peer  Value returned by @c grpc::ServerContext::peer().
+     * @return Bare IP address string, or the original @p peer on parse failure.
+     */
+    static std::string extractClientIp(const std::string& peer);
+
     RouteManager& routeManager_; ///< Shared route table (injected).
     std::string serverId_;       ///< Server identity for Echo responses.
     std::string serverVersion_;  ///< Binary version for Echo responses.
+    SotConfig sotConfig_;        ///< SOT configuration for authorisation.
 
     mutable std::mutex loopbackMutex_;  ///< Guards loopbackAddress_.
     std::string loopbackAddress_;       ///< Loopback address set by clients.

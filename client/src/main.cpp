@@ -43,6 +43,7 @@
  */
 
 #include "build_info.hpp"
+#include "client/grpc_proc.hpp"
 #include "client/route_client.hpp"
 #include "client/sot_config.hpp"
 #include "client/switch_config.hpp"
@@ -52,14 +53,19 @@
 #include <arpa/inet.h>
 #include <boost/program_options.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <format>
 #include <iostream>
 #include <linux/rtnetlink.h>
+#include <mutex>
 #include <print>
+#include <queue>
 #include <signal.h>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace po = boost::program_options;
@@ -744,6 +750,15 @@ static void watchSigHandler(int /*signo*/)
     }
 }
 
+/** @brief Stop flag for the grpc-proc-demo command (set by signal handler). */
+static volatile sig_atomic_t g_demo_stop = 0;
+
+/** @brief SIGINT/SIGTERM handler for the grpc-proc-demo command. */
+static void demoSigHandler(int /*signo*/)
+{
+    g_demo_stop = 1;
+}
+
 /**
  * @brief Runs the netlink /32 route watcher, forwarding events to srmd.
  *
@@ -784,6 +799,153 @@ static int cmdNetlinkWatch(sra::RouteClient& client)
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
 
     std::println("\nStopped. {} route(s) tracked at exit.", ctx.routeIds.size());
+    return EXIT_SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// grpc-proc-demo command
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Thread-safe queue used to pass request payloads from the producer
+ *        thread to the main dispatch loop.
+ */
+struct DemoRequestQueue
+{
+    std::queue<sra::RequestPayload> items;   ///< Pending payloads.
+    std::mutex                      mutex;   ///< Guards @c items.
+    std::condition_variable         cv;      ///< Notified when an item is pushed.
+};
+
+/**
+ * @brief Demonstrates GrpcProc with a background producer and a non-blocking
+ *        poll loop in main.
+ *
+ * Architecture:
+ *  - **Producer thread** – enqueues a @ref sra::GetLoopbackParams every 5 s.
+ *  - **Main loop** – dequeues payloads, submits them to @ref sra::GrpcProc,
+ *    and polls for completed responses using @c tryGetResponse (non-blocking,
+ *    as in @c exampleNonBlockingPoll).
+ *
+ * Runs until SIGINT / SIGTERM is received.
+ *
+ * @param client  Connected @c RouteClient.
+ * @return @c EXIT_SUCCESS on clean stop.
+ */
+static int cmdGrpcProcDemo(sra::RouteClient& client)
+{
+    using namespace std::chrono_literals;
+
+    /* Install signal handlers. */
+    struct sigaction sa{};
+    sa.sa_handler = demoSigHandler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+
+    std::println("grpc-proc-demo: running (Ctrl-C to stop)");
+
+    // ── Shared intermediate request queue ────────────────────────────────
+    DemoRequestQueue demoQueue;
+
+    // ── Producer thread ───────────────────────────────────────────────────
+    // Creates a new GetLoopback request every 5 seconds and places it in
+    // the queue.  The main loop drains the queue and forwards to GrpcProc.
+    std::thread producer([&demoQueue]
+    {
+        uint64_t seq = 0;
+        while (!g_demo_stop)
+        {
+            {
+                std::lock_guard<std::mutex> lock(demoQueue.mutex);
+                demoQueue.items.push(sra::GetLoopbackParams{});
+                ++seq;
+                std::println("  [producer] Enqueued GetLoopback request #{}", seq);
+            }
+            demoQueue.cv.notify_one();
+
+            // Sleep 5 s in 100 ms steps so that the stop flag is checked
+            // promptly on shutdown.
+            for (int i = 0; i < 50 && !g_demo_stop; ++i)
+            {
+                std::this_thread::sleep_for(100ms);
+            }
+        }
+    });
+
+    // ── Start the grpc_proc thread ────────────────────────────────────────
+    sra::GrpcProc proc(client, /*autoStart=*/true);
+    std::println("  grpc_proc thread started.");
+
+    // IDs of requests submitted to GrpcProc but not yet retrieved.
+    std::vector<uint64_t> inFlight;
+
+    // ── Main infinite loop ────────────────────────────────────────────────
+    while (!g_demo_stop)
+    {
+        // 1. Drain the intermediate queue: submit every pending payload to
+        //    GrpcProc and record the assigned ID for later polling.
+        {
+            std::unique_lock<std::mutex> lock(demoQueue.mutex);
+            while (!demoQueue.items.empty())
+            {
+                sra::RequestPayload payload = std::move(demoQueue.items.front());
+                demoQueue.items.pop();
+                lock.unlock(); // release while submitting to avoid holding during RPC queue op
+
+                const uint64_t id = proc.submit(std::move(payload));
+                inFlight.push_back(id);
+                std::println("  [main] Submitted request id={}", id);
+
+                lock.lock(); // re-acquire before checking queue again
+            }
+        }
+
+        // 2. Non-blocking poll for completed responses (mirrors
+        //    exampleNonBlockingPoll).  Each completed response is printed
+        //    and removed from the in-flight list.
+        for (auto it = inFlight.begin(); it != inFlight.end(); )
+        {
+            auto resp = proc.tryGetResponse(*it);
+            if (resp)
+            {
+                std::visit(
+                    [](const auto& result)
+                    {
+                        using T = std::decay_t<decltype(result)>;
+                        if constexpr (std::is_same_v<T, sra::GetLoopbackResult>)
+                        {
+                            if (result)
+                            {
+                                std::println("  [main] GetLoopback OK  → \"{}\"",
+                                             *result);
+                            }
+                            else
+                            {
+                                std::println("  [main] GetLoopback ERR → {}",
+                                             result.error());
+                            }
+                        }
+                    },
+                    resp->payload);
+
+                it = inFlight.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+
+        std::this_thread::sleep_for(5ms);
+    }
+
+    // ── Graceful shutdown ─────────────────────────────────────────────────
+    demoQueue.cv.notify_all(); // unblock producer if waiting
+    producer.join();
+    proc.stop();
+
+    std::println("\ngrpc-proc-demo: stopped.");
     return EXIT_SUCCESS;
 }
 
@@ -834,7 +996,7 @@ int main(int argc, char* argv[])
             "Path to PEM CA certificate for TLS")
         ("command",  po::value<std::string>(),
             "Command: test | sync | echo | add | remove | get | list | watch"
-            " | set-loopback | get-loopback")
+            " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -881,6 +1043,8 @@ int main(int argc, char* argv[])
                      "events and forward to srmd");
         std::println("  set-loopback <address>  Store a loopback address on the server");
         std::println("  get-loopback            Retrieve the stored loopback address");
+        std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
+        std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -1173,6 +1337,54 @@ int main(int argc, char* argv[])
         std::println("Loopback address: {}",
                      result->empty() ? "(not set)" : *result);
         return EXIT_SUCCESS;
+    }
+
+    if (command == "get-loopbacks")
+    {
+        if (args.empty())
+        {
+            std::println(std::cerr, "Usage: sra get-loopbacks <loopback-address>");
+            return EXIT_FAILURE;
+        }
+        auto result = client.getLoopbacks(args[0]);
+        if (!result)
+        {
+            std::println(std::cerr, "Error: {}", result.error());
+            return EXIT_FAILURE;
+        }
+        std::println("GetLoopbacks: {}", result->message());
+        std::println("{} interface(s):", result->interfaces_size());
+        for (const auto& iface : result->interfaces())
+        {
+            std::println("────────────────────");
+            std::println("  Name         : {}", iface.name());
+            std::println("  Type         : {}", iface.type());
+            std::println("  Local address: {}", iface.local_address());
+            std::println("  Nexthop      : {}",
+                         iface.nexthop().empty() ? "(none)" : iface.nexthop());
+            std::println("  Weight       : {}", iface.weight());
+            std::println("  Description  : {}", iface.description());
+            if (iface.prefixes_size() > 0)
+            {
+                std::println("  Prefixes ({}):", iface.prefixes_size());
+                for (const auto& pfx : iface.prefixes())
+                {
+                    std::println("    {} weight={} role='{}' desc='{}'",
+                                 pfx.prefix(), pfx.weight(),
+                                 pfx.role(), pfx.description());
+                }
+            }
+        }
+        if (result->interfaces_size() == 0)
+        {
+            std::println("  (no interfaces)");
+        }
+        return EXIT_SUCCESS;
+    }
+
+    if (command == "grpc-proc-demo")
+    {
+        return cmdGrpcProcDemo(client);
     }
 
     std::println(std::cerr, "Unknown command: '{}'", command);

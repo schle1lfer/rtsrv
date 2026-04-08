@@ -124,6 +124,17 @@ struct SotVrfIpv4
 };
 
 /**
+ * @brief IPv6 configuration block within a VRF.
+ *
+ * Wraps the interface list from @c vrfs.<vrf>.ipv6.
+ */
+struct SotVrfIpv6
+{
+    /** @brief List of configured interfaces (may be empty). */
+    std::vector<SotInterface> interfaces;
+};
+
+/**
  * @brief Virtual Routing and Forwarding (VRF) instance configuration.
  *
  * Corresponds to one entry in the @c vrfs object of a node.
@@ -135,6 +146,9 @@ struct SotVrf
 
     /** @brief IPv4 configuration for this VRF. */
     SotVrfIpv4 ipv4;
+
+    /** @brief IPv6 configuration for this VRF. */
+    SotVrfIpv6 ipv6;
 };
 
 /**

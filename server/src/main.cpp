@@ -370,7 +370,8 @@ int main(int argc, char* argv[])
     srmd::RouteManager routeManager;
 
     srmd::SwitchRouteManagerImpl service(
-        routeManager, serverId, std::string(rtsrv::build::kFullVersion));
+        routeManager, serverId, std::string(rtsrv::build::kFullVersion),
+        std::move(*sotResult));
 
     // -----------------------------------------------------------------------
     // Build and start the gRPC server
