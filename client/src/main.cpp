@@ -591,6 +591,7 @@ struct WatchCtx
 {
     sra::RouteClient*                            client;
     std::unordered_map<std::string, std::string> routeIds; ///< dest/32 → srmd ID
+    std::string                                  loopback; ///< Node's own loopback IP for GetLoopbacks
 };
 
 /**
@@ -665,6 +666,51 @@ static void nlWatchCb(netlink_event_t          event,
                 std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
                             ts, dest, gw, iface, route->metric,
                             result->id().substr(0, 8) + "…");
+
+                /* If we know our own loopback, ask the server for the full
+                 * interface+prefix list and print the entry matching this
+                 * nexthop (gateway). */
+                if (!ctx->loopback.empty() && !gw.empty())
+                {
+                    auto lbResult = ctx->client->getLoopbacks(ctx->loopback);
+                    if (lbResult)
+                    {
+                        bool found = false;
+                        for (const auto& intf : lbResult->interfaces())
+                        {
+                            if (intf.nexthop() != gw)
+                            {
+                                continue;
+                            }
+                            found = true;
+                            std::println("{}   SOT nexthop {} → iface \"{}\" "
+                                         "(type={} local={} weight={} desc={})",
+                                         ts, gw,
+                                         intf.name(), intf.type(),
+                                         intf.local_address(), intf.weight(),
+                                         intf.description());
+                            for (const auto& pfx : intf.prefixes())
+                            {
+                                std::println("{}     prefix {} weight={} "
+                                             "role={} desc={}",
+                                             ts,
+                                             pfx.prefix(), pfx.weight(),
+                                             pfx.role(), pfx.description());
+                            }
+                        }
+                        if (!found)
+                        {
+                            std::println("{} [ADDED]   SOT: no interface with "
+                                         "nexthop {} found for loopback {}",
+                                         ts, gw, ctx->loopback);
+                        }
+                    }
+                    else
+                    {
+                        std::println("{} [ADDED]   GetLoopbacks FAILED: {}",
+                                    ts, lbResult.error());
+                    }
+                }
             }
             else
             {
@@ -770,7 +816,8 @@ static void demoSigHandler(int /*signo*/)
  * @return @c EXIT_SUCCESS on clean stop; @c EXIT_FAILURE if the socket
  *         could not be opened.
  */
-static int cmdNetlinkWatch(sra::RouteClient& client)
+static int cmdNetlinkWatch(sra::RouteClient& client,
+                           const std::string& loopback)
 {
     /* Install signal handlers. */
     struct sigaction sa{};
@@ -788,12 +835,16 @@ static int cmdNetlinkWatch(sra::RouteClient& client)
     }
     g_watch_fd = fd;
 
-    std::println("Watching for IPv4 /32 route events → forwarding to {} …",
-                 "srmd");
+    std::println("Watching for IPv4 /32 route events → forwarding to srmd …");
+    if (!loopback.empty())
+    {
+        std::println("  Loopback {} → GetLoopbacks on each OSPF ADDED event",
+                     loopback);
+    }
     std::println("  (Ctrl-C to stop)\n");
     std::cout.flush();
 
-    WatchCtx ctx{&client, {}};
+    WatchCtx ctx{&client, {}, loopback};
     netlink_run(fd, nlWatchCb, &ctx);
 
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
@@ -962,6 +1013,10 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
  */
 int main(int argc, char* argv[])
 {
+    /* Tie printf (used by nl_log_ospf in netlink.c) and std::cout to the
+     * same buffer so their output does not interleave on the same line. */
+    std::ios::sync_with_stdio(true);
+
     // -----------------------------------------------------------------------
     // Global options
     // -----------------------------------------------------------------------
@@ -1306,7 +1361,7 @@ int main(int argc, char* argv[])
 
     if (command == "watch")
     {
-        return cmdNetlinkWatch(client);
+        return cmdNetlinkWatch(client, clientCfg.loopback);
     }
 
     if (command == "set-loopback")

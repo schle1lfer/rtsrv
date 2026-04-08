@@ -1,5 +1,48 @@
 {
   "nodes_by_loopback": {
+    "127.0.0.1": {
+      "hostname": "ST82-LEAF-60",
+      "loopbacks": {
+        "ipv4": "1.1.1.1",
+        "ipv6": "fd00:100::1"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {
+              "Ethernet0": {
+                "type": "nni",
+                "local_address": "192.0.2.2/24",
+                "nexthop": "192.0.2.1",
+                "weight": 100,
+                "description": "Server#1",
+                "prefixes": [
+                  {
+                    "prefix": "10.0.1.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#1"
+                  },
+                  {
+                    "prefix": "10.0.2.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#2"
+                  },
+                  {
+                    "prefix": "10.0.3.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#3"
+                  }
+                ]
+              }
+            },
+            "ipv6": {}
+          }
+        }
+      }
+    },
     "10.124.224.60": {
       "hostname": "ST82-LEAF-60",
       "loopbacks": {
