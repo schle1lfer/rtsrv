@@ -162,7 +162,7 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
         case RTA_OIF:
             if (RTA_PAYLOAD(rta) >= sizeof(u32))
             {
-                char ifname[IF_NAMESIZE] = {};
+                char ifname[IF_NAMESIZE] = {0};
                 memcpy(&u32, RTA_DATA(rta), sizeof(u32));
                 if_indextoname(u32, ifname);
                 printf("NETLINK > %s: \"RTA_OIF\"      : %s (%u)\n",
