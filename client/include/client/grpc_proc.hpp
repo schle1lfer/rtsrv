@@ -42,6 +42,7 @@
  * | @ref sra::ListRoutesParams | ListRoutes        | @ref sra::ListRoutesResult |
  * | @ref sra::SetLoopbackParams | SetLoopback      | @ref sra::SetLoopbackResult |
  * | @ref sra::GetLoopbackParams | GetLoopback      | @ref sra::GetLoopbackResult |
+ * | @ref sra::GetLoopbacksParams | GetLoopbacks    | @ref sra::GetLoopbacksResult |
  *
  * @version 1.0
  */
@@ -139,6 +140,14 @@ struct SetLoopbackParams
 struct GetLoopbackParams {};
 
 /**
+ * @brief Payload for a GetLoopbacks RPC request.
+ */
+struct GetLoopbacksParams
+{
+    std::string loopback; ///< Loopback address to query (IPv4 or IPv6 string).
+};
+
+/**
  * @brief Discriminated union of all possible request payloads.
  *
  * The active alternative determines which RPC the grpc_proc thread will call.
@@ -151,7 +160,8 @@ using RequestPayload = std::variant<
     GetRouteParams,
     ListRoutesParams,
     SetLoopbackParams,
-    GetLoopbackParams>;
+    GetLoopbackParams,
+    GetLoopbacksParams>;
 
 // ---------------------------------------------------------------------------
 // Response result types
@@ -181,21 +191,35 @@ using SetLoopbackResult = std::expected<std::string, std::string>;
 /** @brief Result type for a completed GetLoopback RPC. */
 using GetLoopbackResult = std::expected<std::string, std::string>;
 
+/** @brief Result type for a completed GetLoopbacks RPC. */
+using GetLoopbacksResult =
+    std::expected<srmd::v1::GetLoopbacksResponse, std::string>;
+
 /**
  * @brief Discriminated union of all possible response payloads.
  *
  * The active alternative matches the @ref RequestPayload alternative of the
  * corresponding request.
+ *
+ * @note Some result types are identical (e.g. AddRouteResult and GetRouteResult
+ *       are both expected<Route, string>; SetLoopbackResult and GetLoopbackResult
+ *       are both expected<string, string>).  The dispatch() function therefore
+ *       uses std::in_place_index to construct these alternatives unambiguously.
+ *       Index mapping (0-based):
+ *         0 EchoResult, 1 HeartbeatResult, 2 AddRouteResult,
+ *         3 RemoveRouteResult, 4 GetRouteResult, 5 ListRoutesResult,
+ *         6 SetLoopbackResult, 7 GetLoopbackResult, 8 GetLoopbacksResult
  */
 using ResponsePayload = std::variant<
-    EchoResult,
-    HeartbeatResult,
-    AddRouteResult,
-    RemoveRouteResult,
-    GetRouteResult,
-    ListRoutesResult,
-    SetLoopbackResult,
-    GetLoopbackResult>;
+    EchoResult,          // 0
+    HeartbeatResult,     // 1
+    AddRouteResult,      // 2  (= expected<Route, string>)
+    RemoveRouteResult,   // 3
+    GetRouteResult,      // 4  (= expected<Route, string>)
+    ListRoutesResult,    // 5
+    SetLoopbackResult,   // 6  (= expected<string, string>)
+    GetLoopbackResult,   // 7  (= expected<string, string>)
+    GetLoopbacksResult>; // 8
 
 // ---------------------------------------------------------------------------
 // Request structure

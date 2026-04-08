@@ -188,6 +188,7 @@ ResponsePayload GrpcProc::dispatch(const GrpcRequest& req)
         {
             using T = std::decay_t<decltype(params)>;
 
+            // Non-ambiguous types: implicit conversion to ResponsePayload is fine.
             if constexpr (std::is_same_v<T, EchoParams>)
             {
                 return client_.echo(params.message);
@@ -196,34 +197,45 @@ ResponsePayload GrpcProc::dispatch(const GrpcRequest& req)
             {
                 return client_.heartbeat(params.sequence);
             }
-            else if constexpr (std::is_same_v<T, AddRouteParams>)
-            {
-                return client_.addRoute(params.destination,
-                                        params.gateway,
-                                        params.interfaceName,
-                                        params.metric,
-                                        params.family,
-                                        params.protocol);
-            }
             else if constexpr (std::is_same_v<T, RemoveRouteParams>)
             {
                 return client_.removeRoute(params.id);
-            }
-            else if constexpr (std::is_same_v<T, GetRouteParams>)
-            {
-                return client_.getRoute(params.id);
             }
             else if constexpr (std::is_same_v<T, ListRoutesParams>)
             {
                 return client_.listRoutes(params.activeOnly);
             }
+            else if constexpr (std::is_same_v<T, GetLoopbacksParams>)
+            {
+                return client_.getLoopbacks(params.loopback);
+            }
+            // Ambiguous types: use in_place_index to select the correct
+            // variant alternative explicitly (see index map in grpc_proc.hpp).
+            else if constexpr (std::is_same_v<T, AddRouteParams>)
+            {
+                return ResponsePayload(
+                    std::in_place_index<2>,
+                    client_.addRoute(params.destination,
+                                     params.gateway,
+                                     params.interfaceName,
+                                     params.metric,
+                                     params.family,
+                                     params.protocol));
+            }
+            else if constexpr (std::is_same_v<T, GetRouteParams>)
+            {
+                return ResponsePayload(std::in_place_index<4>,
+                                       client_.getRoute(params.id));
+            }
             else if constexpr (std::is_same_v<T, SetLoopbackParams>)
             {
-                return client_.setLoopback(params.address);
+                return ResponsePayload(std::in_place_index<6>,
+                                       client_.setLoopback(params.address));
             }
             else if constexpr (std::is_same_v<T, GetLoopbackParams>)
             {
-                return client_.getLoopback();
+                return ResponsePayload(std::in_place_index<7>,
+                                       client_.getLoopback());
             }
         },
         req.payload);
