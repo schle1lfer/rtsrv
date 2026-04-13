@@ -939,8 +939,9 @@ static void nlWatchCb(netlink_event_t          event,
     std::cout.flush();
 }
 
-/* File-scope fd used by the signal handler to unblock netlink_run(). */
+/* File-scope fds used by the signal handler to unblock both blocking loops. */
 static volatile int g_watch_fd = -1;
+static volatile int g_ospf_fd  = -1;
 
 /** @brief SIGINT/SIGTERM handler for the watch command. */
 static void watchSigHandler(int /*signo*/)
@@ -949,6 +950,11 @@ static void watchSigHandler(int /*signo*/)
     {
         netlink_close(g_watch_fd);
         g_watch_fd = -1;
+    }
+    if (g_ospf_fd >= 0)
+    {
+        netlink_close(g_ospf_fd);
+        g_ospf_fd = -1;
     }
 }
 
@@ -993,7 +999,9 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     g_watch_fd = fd;
 
     /* Second socket: all-prefix OSPF event logger (RTPROT_OSPF + RTPROT_ZEBRA,
-     * every prefix length, all interfaces eth0 / Ethernet0…Ethernet128 / …). */
+     * every prefix length, all interfaces eth0 / Ethernet0…Ethernet128 / …).
+     * Stored in g_ospf_fd so the signal handler can close it and unblock the
+     * logger thread's recv() at the same time it unblocks netlink_run(). */
     int ospf_fd = netlink_init();
     if (ospf_fd < 0)
     {
@@ -1002,6 +1010,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                      "(OSPF-ALL logging disabled)",
                      std::strerror(errno));
     }
+    g_ospf_fd = ospf_fd;
+
     std::thread ospf_logger_thread;
     if (ospf_fd >= 0)
     {
@@ -1023,10 +1033,9 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
 
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
 
-    /* Stop the OSPF logger thread by closing its socket. */
-    if (ospf_fd >= 0)
+    /* The signal handler already closed ospf_fd; just wait for the thread. */
+    if (ospf_logger_thread.joinable())
     {
-        netlink_close(ospf_fd);
         ospf_logger_thread.join();
     }
 
