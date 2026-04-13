@@ -1,11 +1,11 @@
 #!/bin/bash
 
-BUILD_DIR="build"
-INSTALL_DIR="local"
+BUILD_DIR="server-build"
+INSTALL_DIR="server-local"
 N_PROC=1
 
 rm -rf ${INSTALL_DIR}/
-rm -rf build/
+rm -rf ${BUILD_DIR}/
 
 cmake -S . \
  -B ${BUILD_DIR} \

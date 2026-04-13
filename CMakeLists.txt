@@ -94,7 +94,12 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Threads REQUIRED)
 
 # --- Protobuf ---------------------------------------------------------------
-find_package(Protobuf CONFIG REQUIRED)
+if(DEFINED TARGET_MYCELIUM)
+    find_package(Protobuf CONFIG REQUIRED)
+else()
+    find_package(Protobuf REQUIRED)
+endif()
+
 message(STATUS "Found Protobuf: ${Protobuf_VERSION}")
 
 # --- gRPC -------------------------------------------------------------------

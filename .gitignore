@@ -42,6 +42,15 @@
 
 # CMake build directory
 build/
-install/
-local/
+server-build/
+target-build/
 
+# CMake instalations
+server-install/
+serverlocal/
+target-install/
+target-local/
+bin/
+sbin/
+etc/
+lib/
