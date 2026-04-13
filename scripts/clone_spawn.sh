@@ -4,7 +4,7 @@ IPS=("")
 if [[ "$1" == "spawn" ]]; then
     echo "spawn cloning mode"
     #        Leaf1          Leaf2           Leaf3          Spine1         Spine2
-    IPS=("10.27.192.87" "10.27.192.115" "10.27.192.87" "10.27.192.26" "10.27.192.84")
+    IPS=("10.27.192.87" "10.27.192.115" "10.27.192.77" "10.27.192.26" "10.27.192.84")
 else
     #        Leaf1
     IPS=("10.27.192.87")
@@ -14,7 +14,7 @@ fi
 REMOTE_USER="admin"
 REMOTE_PASS="admin"
 
-SRC_DIRS=("local" "scripts")
+SRC_DIRS=("local")
 DEST_PATH="/home/admin/srf"
 
 for ip in "${IPS[@]}"; do
@@ -25,6 +25,7 @@ for ip in "${IPS[@]}"; do
 
         sshpass -p "$REMOTE_PASS" rsync -avz \
         -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
+        --exclude "etc/srmd" \
         --exclude "sbin" \
         --exclude "lib" \
         "$dir/" "$REMOTE_USER@$ip:$DEST_PATH/"
@@ -37,6 +38,10 @@ for ip in "${IPS[@]}"; do
             echo " Fail\r"
         fi
     done
+
+    sshpass -p "$REMOTE_PASS" rsync -avz \
+    -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
+    "scripts/target-run-sra.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../run-sra.sh"
     
     echo -ne "\n>>> Coping to $ip..."
 
