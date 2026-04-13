@@ -5,11 +5,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-INSTALL_DIR="$REPO_ROOT/install"
+REPO_ROOT="$(dirname ".")" #$SCRIPT_DIR
+INSTALL_DIR="$REPO_ROOT/server-local"
 
 SRMD="$INSTALL_DIR/sbin/srmd"
 CONFIG="$INSTALL_DIR/etc/srmd/srmd.json"
+CONFIG_SOT="$INSTALL_DIR/etc/srmd/route_sot_v2.json"
 
 if [[ ! -x "$SRMD" ]]; then
     echo "error: srmd not found at $SRMD" >&2
@@ -22,4 +23,4 @@ if [[ ! -f "$CONFIG" ]]; then
     exit 1
 fi
 
-exec "$SRMD" --foreground --config "$CONFIG" "$@"
+exec "$SRMD" --foreground --config "$CONFIG" --sot "$CONFIG_SOT" "$@"
