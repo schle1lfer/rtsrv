@@ -55,10 +55,13 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <format>
 #include <iostream>
 #include <linux/rtnetlink.h>
 #include <mutex>
+#include <net/if.h>
 #include <print>
 #include <queue>
 #include <signal.h>
@@ -582,6 +585,132 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
 }
 
 /**
+ * @brief Logs every OSPF routing event from a dedicated raw netlink socket.
+ *
+ * Unlike the gRPC-forwarding path (which only sees /32 host routes), this
+ * function reads RTM_NEWROUTE / RTM_DELROUTE messages for ALL prefix lengths
+ * directly from its own RTMGRP_IPV4_ROUTE socket.  Every message whose
+ * rtm_protocol is RTPROT_OSPF (188, modern FRR per-protocol tagging) or
+ * RTPROT_ZEBRA (11, legacy FRR where Zebra installs all daemon routes) is
+ * logged to stdout with full detail.
+ *
+ * Covers all network interfaces (eth0, Ethernet0 … Ethernet128, …) without
+ * any interface-name filter.  Runs until @p fd is closed.
+ *
+ * @param fd  AF_NETLINK/RTMGRP_IPV4_ROUTE socket opened by the caller.
+ */
+static void ospfAllRoutesLogger(int fd)
+{
+    char buf[8192];
+
+    for (;;)
+    {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n < 0)
+        {
+            if (errno == EINTR) continue;
+            break; /* socket closed or fatal error */
+        }
+        if (n == 0) break;
+
+        ssize_t remaining = n;
+        for (const struct nlmsghdr* nlh =
+                 reinterpret_cast<const struct nlmsghdr*>(buf);
+             NLMSG_OK(nlh, static_cast<unsigned int>(remaining));
+             nlh = NLMSG_NEXT(nlh, remaining))
+        {
+            if (nlh->nlmsg_type == NLMSG_DONE) break;
+            if (nlh->nlmsg_type != RTM_NEWROUTE &&
+                nlh->nlmsg_type != RTM_DELROUTE) continue;
+
+            const struct rtmsg* rtm =
+                reinterpret_cast<const struct rtmsg*>(NLMSG_DATA(nlh));
+
+            if (rtm->rtm_family != AF_INET) continue;
+            if (rtm->rtm_protocol != RTPROT_OSPF &&
+                rtm->rtm_protocol != RTPROT_ZEBRA) continue;
+
+            /* Parse rtattr fields. */
+            struct in_addr dst{}, gw{};
+            uint32_t ifindex = 0, metric = 0, table = rtm->rtm_table;
+            char ifname[IF_NAMESIZE] = {};
+
+            unsigned int attrlen =
+                static_cast<unsigned int>(RTM_PAYLOAD(nlh));
+            for (const struct rtattr* rta = RTM_RTA(rtm);
+                 RTA_OK(rta, attrlen);
+                 rta = RTA_NEXT(rta, attrlen))
+            {
+                switch (rta->rta_type)
+                {
+                case RTA_DST:
+                    if (RTA_PAYLOAD(rta) >= sizeof(dst))
+                        std::memcpy(&dst, RTA_DATA(rta), sizeof(dst));
+                    break;
+                case RTA_GATEWAY:
+                    if (RTA_PAYLOAD(rta) >= sizeof(gw))
+                        std::memcpy(&gw, RTA_DATA(rta), sizeof(gw));
+                    break;
+                case RTA_OIF:
+                    if (RTA_PAYLOAD(rta) >= sizeof(ifindex))
+                    {
+                        std::memcpy(&ifindex, RTA_DATA(rta), sizeof(ifindex));
+                        if_indextoname(static_cast<unsigned>(ifindex), ifname);
+                    }
+                    break;
+                case RTA_PRIORITY:
+                    if (RTA_PAYLOAD(rta) >= sizeof(metric))
+                        std::memcpy(&metric, RTA_DATA(rta), sizeof(metric));
+                    break;
+                case RTA_TABLE:
+                    if (RTA_PAYLOAD(rta) >= sizeof(table))
+                        std::memcpy(&table, RTA_DATA(rta), sizeof(table));
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            /* Build UTC timestamp. */
+            const auto now = std::chrono::system_clock::now();
+            const auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
+                                 now.time_since_epoch()).count();
+            const std::time_t sec = static_cast<std::time_t>(us / 1'000'000);
+            const int         ms  = static_cast<int>((us % 1'000'000) / 1000);
+            std::tm tm_utc{};
+            gmtime_r(&sec, &tm_utc);
+            const std::string ts = std::format("{:02d}:{:02d}:{:02d}.{:03d}",
+                                               tm_utc.tm_hour, tm_utc.tm_min,
+                                               tm_utc.tm_sec, ms);
+
+            /* Format addresses. */
+            char dst_buf[INET_ADDRSTRLEN];
+            char gw_buf[INET_ADDRSTRLEN]  = {};
+            inet_ntop(AF_INET, &dst, dst_buf, sizeof(dst_buf));
+            if (gw.s_addr != 0)
+                inet_ntop(AF_INET, &gw, gw_buf, sizeof(gw_buf));
+
+            const char* ev =
+                (nlh->nlmsg_type == RTM_NEWROUTE)
+                    ? ((nlh->nlmsg_flags & NLM_F_REPLACE) ? "CHANGED" : "ADDED")
+                    : "REMOVED";
+            const char* src = (rtm->rtm_protocol == RTPROT_OSPF)
+                                  ? "RTPROT_OSPF"
+                                  : "RTPROT_ZEBRA";
+
+            std::println("{} [OSPF-ALL] {} dst={}/{} gw={} dev={} ifindex={}"
+                         " metric={} table={} src={}",
+                         ts, ev,
+                         dst_buf, static_cast<unsigned>(rtm->rtm_dst_len),
+                         gw.s_addr ? gw_buf : "(none)",
+                         ifname[0] ? ifname : "(none)", ifindex,
+                         metric, table, src);
+            std::cout.flush();
+        }
+    }
+}
+
+/**
  * @brief Context forwarded via the @c user_data pointer to the netlink callback.
  *
  * Carries the live gRPC client and the local map that tracks which srmd route
@@ -853,6 +982,7 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     sigaction(SIGINT,  &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
+    /* Main socket: /32 routes only, forwarded to srmd via gRPC. */
     int fd = netlink_init();
     if (fd < 0)
     {
@@ -862,7 +992,24 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     }
     g_watch_fd = fd;
 
+    /* Second socket: all-prefix OSPF event logger (RTPROT_OSPF + RTPROT_ZEBRA,
+     * every prefix length, all interfaces eth0 / Ethernet0…Ethernet128 / …). */
+    int ospf_fd = netlink_init();
+    if (ospf_fd < 0)
+    {
+        std::println(std::cerr,
+                     "Warning: OSPF all-routes logger socket failed: {} "
+                     "(OSPF-ALL logging disabled)",
+                     std::strerror(errno));
+    }
+    std::thread ospf_logger_thread;
+    if (ospf_fd >= 0)
+    {
+        ospf_logger_thread = std::thread(ospfAllRoutesLogger, ospf_fd);
+    }
+
     std::println("Watching for IPv4 /32 route events → forwarding to srmd …");
+    std::println("Logging all OSPF route events (all prefixes, all interfaces) …");
     if (!loopback.empty())
     {
         std::println("  Loopback {} → GetLoopbacks on each OSPF ADDED event",
@@ -875,6 +1022,13 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     netlink_run(fd, nlWatchCb, &ctx);
 
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
+
+    /* Stop the OSPF logger thread by closing its socket. */
+    if (ospf_fd >= 0)
+    {
+        netlink_close(ospf_fd);
+        ospf_logger_thread.join();
+    }
 
     std::println("\nStopped. {} route(s) tracked at exit.", ctx.routeIds.size());
     return EXIT_SUCCESS;
