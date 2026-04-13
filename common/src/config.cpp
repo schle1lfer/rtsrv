@@ -372,6 +372,18 @@ loadClientConfig(const std::string& path)
         config = std::move(*client);
     }
 
+    /* Optional top-level "loopback" key – the node's own loopback IP address
+     * used to authenticate GetLoopbacks requests against the SOT. */
+    if (rootObj.contains("loopback"))
+    {
+        auto lb = getString(rootObj, "loopback");
+        if (!lb)
+        {
+            return std::unexpected(lb.error());
+        }
+        config.loopback = std::move(*lb);
+    }
+
     return config;
 }
 

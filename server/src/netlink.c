@@ -27,12 +27,14 @@
 
 #include "server/netlink.h"
 
+#include <arpa/inet.h>
 #include <asm/types.h>
 #include <errno.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -43,6 +45,139 @@
 /* ---------------------------------------------------------------------------
  * Internal helpers
  * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Logs a full OSPF netlink route message to stdout.
+ *
+ * Prints a separator, the rtmsg header fields, each rtattr in message order,
+ * and a closing separator.  Called for every RTM_NEWROUTE / RTM_DELROUTE
+ * message whose rtm_protocol equals RTPROT_OSPF, before the /32 and
+ * RTN_UNICAST filters are applied so that all OSPF prefix lengths are visible.
+ *
+ * Output format (one line per attribute):
+ * @code
+ * --------------------------------------------------------------
+ * NETLINK > RTM_NEWROUTE: { family: 2 (PF_INET); dst_len: 30; ... }
+ * NETLINK > RTM_NEWROUTE: "RTA_TABLE"    : 254 (000000FE)
+ * NETLINK > RTM_NEWROUTE: "RTA_DST"      : 10.42.42.4
+ * ...
+ * --------------------------------------------------------------
+ * @endcode
+ *
+ * @param nlh  Pointer to the netlink message header.
+ */
+static void nl_log_ospf(const struct nlmsghdr *nlh)
+{
+    const struct rtmsg *rtm = NLMSG_DATA(nlh);
+
+    if (rtm->rtm_protocol != RTPROT_OSPF)
+    {
+        return;
+    }
+
+    /* Message type name */
+    const char *tn = (nlh->nlmsg_type == RTM_NEWROUTE) ? "RTM_NEWROUTE"
+                                                        : "RTM_DELROUTE";
+
+    /* Route type name */
+    const char *rtype;
+    switch (rtm->rtm_type)
+    {
+    case RTN_UNICAST:     rtype = "UNICAST";     break;
+    case RTN_BLACKHOLE:   rtype = "BLACKHOLE";   break;
+    case RTN_UNREACHABLE: rtype = "UNREACHABLE"; break;
+    case RTN_PROHIBIT:    rtype = "PROHIBIT";    break;
+    default:              rtype = "?";           break;
+    }
+
+    printf("--------------------------------------------------------------\n");
+    printf("NETLINK > %s: { family: %u (PF_INET); dst_len: %u; src_len: %u;"
+           " tos: %u; table: %u; protocol: %u (OSPF); scope: %u;"
+           " type: %u (%s); flags: %02X }\n",
+           tn,
+           (unsigned)rtm->rtm_family,
+           (unsigned)rtm->rtm_dst_len,
+           (unsigned)rtm->rtm_src_len,
+           (unsigned)rtm->rtm_tos,
+           (unsigned)rtm->rtm_table,
+           (unsigned)rtm->rtm_protocol,
+           (unsigned)rtm->rtm_scope,
+           (unsigned)rtm->rtm_type, rtype,
+           (unsigned)rtm->rtm_flags);
+
+    /* Attributes – printed in the order they appear in the message */
+    char         addr_buf[INET_ADDRSTRLEN];
+    uint32_t     u32;
+    unsigned int attrlen = (unsigned int)RTM_PAYLOAD(nlh);
+
+    for (const struct rtattr *rta = RTM_RTA(rtm);
+         RTA_OK(rta, attrlen);
+         rta = RTA_NEXT(rta, attrlen))
+    {
+        switch (rta->rta_type)
+        {
+        case RTA_TABLE:
+            if (RTA_PAYLOAD(rta) >= sizeof(u32))
+            {
+                memcpy(&u32, RTA_DATA(rta), sizeof(u32));
+                printf("NETLINK > %s: \"RTA_TABLE\"    : %u (%08X)\n",
+                       tn, u32, u32);
+            }
+            break;
+
+        case RTA_DST:
+            if (RTA_PAYLOAD(rta) >= sizeof(struct in_addr))
+            {
+                inet_ntop(AF_INET, RTA_DATA(rta), addr_buf, sizeof(addr_buf));
+                printf("NETLINK > %s: \"RTA_DST\"      : %s\n", tn, addr_buf);
+            }
+            break;
+
+        case RTA_PRIORITY:
+            if (RTA_PAYLOAD(rta) >= sizeof(u32))
+            {
+                memcpy(&u32, RTA_DATA(rta), sizeof(u32));
+                printf("NETLINK > %s: \"RTA_PRIORITY\" : %u (%08X)\n",
+                       tn, u32, u32);
+            }
+            break;
+
+        case RTA_NH_ID:
+            if (RTA_PAYLOAD(rta) >= sizeof(u32))
+            {
+                memcpy(&u32, RTA_DATA(rta), sizeof(u32));
+                printf("NETLINK > %s: \"RTA_NH_ID\"    : %u (%08X)\n",
+                       tn, u32, u32);
+            }
+            break;
+
+        case RTA_GATEWAY:
+            if (RTA_PAYLOAD(rta) >= sizeof(struct in_addr))
+            {
+                inet_ntop(AF_INET, RTA_DATA(rta), addr_buf, sizeof(addr_buf));
+                printf("NETLINK > %s: \"RTA_GATEWAY\"  : %s\n", tn, addr_buf);
+            }
+            break;
+
+        case RTA_OIF:
+            if (RTA_PAYLOAD(rta) >= sizeof(u32))
+            {
+                char ifname[IF_NAMESIZE] = {0};
+                memcpy(&u32, RTA_DATA(rta), sizeof(u32));
+                if_indextoname(u32, ifname);
+                printf("NETLINK > %s: \"RTA_OIF\"      : %s (%u)\n",
+                       tn, ifname[0] ? ifname : "?", u32);
+            }
+            break;
+
+        default:
+            break;
+        }
+    }
+
+    printf("--------------------------------------------------------------\n");
+    fflush(stdout);
+}
 
 /**
  * @brief Parses one RTM_NEWROUTE / RTM_DELROUTE message and fires @p cb.
@@ -73,6 +208,11 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
     {
         return; /* IPv6 or other; not of interest */
     }
+
+    /* Log every OSPF route event before the /32 filter so that all OSPF
+     * prefix lengths (not just host routes) appear in the output. */
+    nl_log_ospf(nlh);
+
     if (rtm->rtm_dst_len != 32)
     {
         return; /* Not a host route */
