@@ -650,11 +650,7 @@ static void nlWatchCb(netlink_event_t          event,
 
     const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
 
-    /* Debug: log every incoming /32 Netlink event before any filtering so that
-     * the operator can see all events and verify the raw protocol value.
-     * FRR Zebra may install OSPF routes with RTPROT_ZEBRA (11) on older or
-     * default setups rather than RTPROT_OSPF (188); the raw value is printed
-     * so the mismatch is immediately visible. */
+    /* Debug: log every incoming /32 Netlink event with the raw protocol value. */
     {
         const char* ev_name = (event == NETLINK_ROUTE_ADDED)   ? "ADDED"
                             : (event == NETLINK_ROUTE_CHANGED) ? "CHANGED"
@@ -668,140 +664,129 @@ static void nlWatchCb(netlink_event_t          event,
                      srmd::v1::RouteProtocol_Name(proto));
     }
 
-    /* Accept routes with RTPROT_OSPF (modern FRR per-protocol tagging) or
-     * RTPROT_ZEBRA (legacy/default FRR: Zebra installs all learned routes,
-     * including OSPF, under its own protocol number). */
-    const bool is_ospf = (proto == srmd::v1::ROUTE_PROTOCOL_OSPF) ||
-                         (route->protocol == RTPROT_ZEBRA);
-
-    // only for OSPF now
-    if (is_ospf)
+    /* ---- ADDED ---------------------------------------------------------- */
+    if (event == NETLINK_ROUTE_ADDED)
     {
-        /* ---- ADDED ---------------------------------------------------------- */
-        if (event == NETLINK_ROUTE_ADDED)
+        auto result = ctx->client->addRoute(
+            dest, gw, iface, route->metric,
+            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+
+        if (result)
         {
-            auto result = ctx->client->addRoute(
-                dest, gw, iface, route->metric,
-                srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+            ctx->routeIds[dest] = result->id();
+            std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
+                        ts, dest, gw, iface, route->metric,
+                        result->id().substr(0, 8) + "…");
 
-            if (result)
+            /* If we know our own loopback, ask the server for the full
+             * interface+prefix list and print the entry matching this
+             * nexthop (gateway). */
+            if (!ctx->loopback.empty() && !gw.empty())
             {
-                ctx->routeIds[dest] = result->id();
-                std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
-                            ts, dest, gw, iface, route->metric,
-                            result->id().substr(0, 8) + "…");
-
-                /* If we know our own loopback, ask the server for the full
-                 * interface+prefix list and print the entry matching this
-                 * nexthop (gateway). */
-                if (!ctx->loopback.empty() && !gw.empty())
+                auto lbResult = ctx->client->getLoopbacks(ctx->loopback);
+                if (lbResult)
                 {
-                    auto lbResult = ctx->client->getLoopbacks(ctx->loopback);
-                    if (lbResult)
+                    bool found = false;
+                    for (const auto& intf : lbResult->interfaces())
                     {
-                        bool found = false;
-                        for (const auto& intf : lbResult->interfaces())
+                        if (intf.nexthop() != gw)
                         {
-                            if (intf.nexthop() != gw)
-                            {
-                                continue;
-                            }
-                            found = true;
-                            std::println("{}   SOT nexthop {} → iface \"{}\" "
-                                         "(type={} local={} weight={} desc={})",
-                                         ts, gw,
-                                         intf.name(), intf.type(),
-                                         intf.local_address(), intf.weight(),
-                                         intf.description());
-                            for (const auto& pfx : intf.prefixes())
-                            {
-                                std::println("{}     prefix {} weight={} "
-                                             "role={} desc={}",
-                                             ts,
-                                             pfx.prefix(), pfx.weight(),
-                                             pfx.role(), pfx.description());
-                            }
+                            continue;
                         }
-                        if (!found)
+                        found = true;
+                        std::println("{}   SOT nexthop {} → iface \"{}\" "
+                                     "(type={} local={} weight={} desc={})",
+                                     ts, gw,
+                                     intf.name(), intf.type(),
+                                     intf.local_address(), intf.weight(),
+                                     intf.description());
+                        for (const auto& pfx : intf.prefixes())
                         {
-                            std::println("{} [ADDED]   SOT: no interface with "
-                                         "nexthop {} found for loopback {}",
-                                         ts, gw, ctx->loopback);
+                            std::println("{}     prefix {} weight={} "
+                                         "role={} desc={}",
+                                         ts,
+                                         pfx.prefix(), pfx.weight(),
+                                         pfx.role(), pfx.description());
                         }
                     }
-                    else
+                    if (!found)
                     {
-                        std::println("{} [ADDED]   GetLoopbacks FAILED: {}",
-                                    ts, lbResult.error());
+                        std::println("{} [ADDED]   SOT: no interface with "
+                                     "nexthop {} found for loopback {}",
+                                     ts, gw, ctx->loopback);
                     }
                 }
-            }
-            else
-            {
-                std::println("{} [ADDED]   {} → gRPC FAILED: {}",
-                            ts, dest, result.error());
-            }
-        }
-        /* ---- CHANGED -------------------------------------------------------- */
-        else if (event == NETLINK_ROUTE_CHANGED)
-        {
-            /* Remove the stale entry if we hold an ID for this destination. */
-            auto it = ctx->routeIds.find(dest);
-            if (it != ctx->routeIds.end())
-            {
-                auto rmResult = ctx->client->removeRoute(it->second);
-                if (!rmResult)
+                else
                 {
-                    std::println("{} [CHANGED] {} stale-remove failed: {}",
-                                ts, dest, rmResult.error());
+                    std::println("{} [ADDED]   GetLoopbacks FAILED: {}",
+                                ts, lbResult.error());
                 }
-                ctx->routeIds.erase(it);
-            }
-
-            auto result = ctx->client->addRoute(
-                dest, gw, iface, route->metric,
-                srmd::v1::ADDRESS_FAMILY_IPV4, proto);
-
-            if (result)
-            {
-                ctx->routeIds[dest] = result->id();
-                std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
-                            ts, dest, gw, iface, route->metric,
-                            result->id().substr(0, 8) + "…");
-            }
-            else
-            {
-                std::println("{} [CHANGED] {} → gRPC FAILED: {}",
-                            ts, dest, result.error());
             }
         }
-        /* ---- REMOVED -------------------------------------------------------- */
         else
         {
-            auto it = ctx->routeIds.find(dest);
-            if (it == ctx->routeIds.end())
+            std::println("{} [ADDED]   {} → gRPC FAILED: {}",
+                        ts, dest, result.error());
+        }
+    }
+    /* ---- CHANGED -------------------------------------------------------- */
+    else if (event == NETLINK_ROUTE_CHANGED)
+    {
+        /* Remove the stale entry if we hold an ID for this destination. */
+        auto it = ctx->routeIds.find(dest);
+        if (it != ctx->routeIds.end())
+        {
+            auto rmResult = ctx->client->removeRoute(it->second);
+            if (!rmResult)
             {
-                std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
-                            ts, dest);
-                return;
+                std::println("{} [CHANGED] {} stale-remove failed: {}",
+                            ts, dest, rmResult.error());
             }
-
-            const std::string id = it->second;
             ctx->routeIds.erase(it);
-
-            auto result = ctx->client->removeRoute(id);
-            if (result)
-            {
-                std::println("{} [REMOVED] {} id={}", ts, dest,
-                            id.substr(0, 8) + "…");
-            }
-            else
-            {
-                std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                            ts, dest, result.error());
-            }
         }
 
+        auto result = ctx->client->addRoute(
+            dest, gw, iface, route->metric,
+            srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+
+        if (result)
+        {
+            ctx->routeIds[dest] = result->id();
+            std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
+                        ts, dest, gw, iface, route->metric,
+                        result->id().substr(0, 8) + "…");
+        }
+        else
+        {
+            std::println("{} [CHANGED] {} → gRPC FAILED: {}",
+                        ts, dest, result.error());
+        }
+    }
+    /* ---- REMOVED -------------------------------------------------------- */
+    else
+    {
+        auto it = ctx->routeIds.find(dest);
+        if (it == ctx->routeIds.end())
+        {
+            std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
+                        ts, dest);
+            return;
+        }
+
+        const std::string id = it->second;
+        ctx->routeIds.erase(it);
+
+        auto result = ctx->client->removeRoute(id);
+        if (result)
+        {
+            std::println("{} [REMOVED] {} id={}", ts, dest,
+                        id.substr(0, 8) + "…");
+        }
+        else
+        {
+            std::println("{} [REMOVED] {} → gRPC FAILED: {}",
+                        ts, dest, result.error());
+        }
     }
 
     std::cout.flush();
