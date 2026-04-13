@@ -94,7 +94,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Threads REQUIRED)
 
 # --- Protobuf ---------------------------------------------------------------
-find_package(Protobuf REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
 message(STATUS "Found Protobuf: ${Protobuf_VERSION}")
 
 # --- gRPC -------------------------------------------------------------------
@@ -120,6 +120,17 @@ find_package(
         thread
 )
 message(STATUS "Found Boost: ${Boost_VERSION}")
+
+# ---------------------------------------------------------------------------
+# Protoc executable (cross-compilation: используем хостовый protoc)
+# ---------------------------------------------------------------------------
+if(DEFINED WITH_PROTOC AND NOT Protobuf_PROTOC_EXECUTABLE)
+    set(Protobuf_PROTOC_EXECUTABLE "${WITH_PROTOC}")
+endif()
+if(NOT Protobuf_PROTOC_EXECUTABLE)
+    find_program(Protobuf_PROTOC_EXECUTABLE NAMES protoc REQUIRED)
+endif()
+message(STATUS "Using protoc: ${Protobuf_PROTOC_EXECUTABLE}")
 
 # ---------------------------------------------------------------------------
 # Proto / gRPC code generation
