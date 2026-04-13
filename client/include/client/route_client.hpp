@@ -168,6 +168,18 @@ public:
     [[nodiscard]] std::expected<srmd::v1::GetLoopbacksResponse, std::string>
     getLoopbacks(const std::string& loopback);
 
+    /**
+     * @brief Calls RequestLoopback to retrieve this node's loopback from the SOT.
+     *
+     * The server extracts the caller's IP from the gRPC peer address and
+     * looks it up in the SOT nodes_by_loopback map.  Returns the node's
+     * loopback IPv4 address on success, or an error string if the client IP
+     * is not registered in the SOT.
+     *
+     * @return The node's loopback IPv4 string, or an error string.
+     */
+    [[nodiscard]] std::expected<std::string, std::string> requestLoopback();
+
 private:
     /**
      * @brief Builds and returns a ClientContext with the configured deadline.

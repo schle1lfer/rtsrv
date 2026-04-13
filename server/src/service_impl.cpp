@@ -444,4 +444,40 @@ SwitchRouteManagerImpl::GetLoopbacks(grpc::ServerContext* ctx,
     return grpc::Status::OK;
 }
 
+// ---------------------------------------------------------------------------
+// RequestLoopback
+// ---------------------------------------------------------------------------
+
+grpc::Status
+SwitchRouteManagerImpl::RequestLoopback(grpc::ServerContext* ctx,
+                                        const srmd::v1::RequestLoopbackRequest* /*req*/,
+                                        srmd::v1::RequestLoopbackResponse* resp)
+{
+    const std::string clientIp = extractClientIp(ctx->peer());
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "[RequestLoopback] peer='{}' clientIp='{}'", ctx->peer(), clientIp);
+
+    const SotNode* node = sotConfig_.findByManagementIp(clientIp);
+    if (!node)
+    {
+        BOOST_LOG_TRIVIAL(warning) << std::format(
+            "[RequestLoopback] clientIp='{}' not found in SOT", clientIp);
+        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
+        resp->set_message(std::format(
+            "Client IP '{}' is not registered in the SOT", clientIp));
+        return grpc::Status::OK;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "[RequestLoopback] node='{}' clientIp='{}' loopback='{}'",
+        node->hostname, clientIp, node->loopbacks.ipv4);
+
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message(std::format(
+        "OK: node '{}' ({})", node->hostname, clientIp));
+    resp->set_loopback(node->loopbacks.ipv4);
+    return grpc::Status::OK;
+}
+
 } // namespace srmd

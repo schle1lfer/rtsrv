@@ -319,6 +319,29 @@ message GetLoopbacksResponse
 }
 
 // ---------------------------------------------------------------------------
+// RequestLoopback – SOT-backed loopback lookup by client IP
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to retrieve the loopback address assigned to this client.
+ *
+ * The server extracts the client IP from the gRPC peer string and looks it
+ * up in the SOT nodes_by_loopback map.  No fields are needed from the
+ * client – the peer address is sufficient.
+ */
+message RequestLoopbackRequest {}
+
+/**
+ * @brief Response from RequestLoopback.
+ */
+message RequestLoopbackResponse
+{
+    StatusCode code = 1;  ///< Operation outcome.
+    string message = 2;   ///< Human-readable detail.
+    string loopback = 3;  ///< The node's loopback IPv4 address from the SOT.
+}
+
+// ---------------------------------------------------------------------------
 // WatchRoutes – server-side streaming
 // ---------------------------------------------------------------------------
 
@@ -426,4 +449,14 @@ service SwitchRouteManager
      * in the SOT nodes_by_loopback map.
      */
     rpc GetLoopbacks(GetLoopbacksRequest) returns (GetLoopbacksResponse);
+
+    /**
+     * @brief Look up the loopback address for this client based on its IP.
+     *
+     * The server extracts the client IP from the gRPC peer string and looks
+     * it up in the SOT nodes_by_loopback map.  If found, returns the node's
+     * loopback IPv4 address.  Returns STATUS_CODE_NOT_FOUND when the client
+     * IP is not registered in the SOT.
+     */
+    rpc RequestLoopback(RequestLoopbackRequest) returns (RequestLoopbackResponse);
 }

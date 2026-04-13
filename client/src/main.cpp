@@ -1255,6 +1255,28 @@ int main(int argc, char* argv[])
 
     sra::RouteClient client(server, useTls, caCert, timeout);
 
+    // -----------------------------------------------------------------------
+    // Startup: request loopback from server based on this client's IP
+    // -----------------------------------------------------------------------
+    std::string activeLoopback = clientCfg.loopback;
+    {
+        std::println("[Startup] Requesting loopback from server based on client IP...");
+        auto lbResult = client.requestLoopback();
+        if (lbResult)
+        {
+            std::println("[Startup] Loopback received from server: '{}'", *lbResult);
+            activeLoopback = *lbResult;
+        }
+        else
+        {
+            std::println("[Startup] No loopback from server ({}); "
+                         "falling back to config loopback: '{}'",
+                         lbResult.error(),
+                         activeLoopback);
+        }
+        std::println("[Startup] Active loopback set to: '{}'", activeLoopback);
+    }
+
     if (command == "test")
     {
         return cmdTest(client);
@@ -1361,7 +1383,7 @@ int main(int argc, char* argv[])
 
     if (command == "watch")
     {
-        return cmdNetlinkWatch(client, clientCfg.loopback);
+        return cmdNetlinkWatch(client, activeLoopback);
     }
 
     if (command == "set-loopback")
