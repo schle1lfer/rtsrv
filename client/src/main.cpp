@@ -653,6 +653,16 @@ static void nlWatchCb(netlink_event_t          event,
     // only for OSPF now
     if (proto == srmd::v1::ROUTE_PROTOCOL_OSPF)
     {
+        /* Debug: log every incoming OSPF /32 Netlink event before any gRPC call. */
+        const char* ev_name = (event == NETLINK_ROUTE_ADDED)   ? "ADDED"
+                            : (event == NETLINK_ROUTE_CHANGED) ? "CHANGED"
+                                                               : "REMOVED";
+        std::println("{} [DBG] NETLINK {} dst={} gw={} dev={} metric={} table={} proto=ospf",
+                     ts, ev_name, dest,
+                     gw.empty()    ? "(none)" : gw,
+                     iface.empty() ? "(none)" : iface,
+                     route->metric, route->table);
+
         /* ---- ADDED ---------------------------------------------------------- */
         if (event == NETLINK_ROUTE_ADDED)
         {
