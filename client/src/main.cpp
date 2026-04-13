@@ -650,19 +650,33 @@ static void nlWatchCb(netlink_event_t          event,
 
     const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
 
-    // only for OSPF now
-    if (proto == srmd::v1::ROUTE_PROTOCOL_OSPF)
+    /* Debug: log every incoming /32 Netlink event before any filtering so that
+     * the operator can see all events and verify the raw protocol value.
+     * FRR Zebra may install OSPF routes with RTPROT_ZEBRA (11) on older or
+     * default setups rather than RTPROT_OSPF (188); the raw value is printed
+     * so the mismatch is immediately visible. */
     {
-        /* Debug: log every incoming OSPF /32 Netlink event before any gRPC call. */
         const char* ev_name = (event == NETLINK_ROUTE_ADDED)   ? "ADDED"
                             : (event == NETLINK_ROUTE_CHANGED) ? "CHANGED"
                                                                : "REMOVED";
-        std::println("{} [DBG] NETLINK {} dst={} gw={} dev={} metric={} table={} proto=ospf",
+        std::println("{} [DBG] NETLINK {} dst={} gw={} dev={} metric={} table={} proto={}({})",
                      ts, ev_name, dest,
                      gw.empty()    ? "(none)" : gw,
                      iface.empty() ? "(none)" : iface,
-                     route->metric, route->table);
+                     route->metric, route->table,
+                     route->protocol,
+                     srmd::v1::RouteProtocol_Name(proto));
+    }
 
+    /* Accept routes with RTPROT_OSPF (modern FRR per-protocol tagging) or
+     * RTPROT_ZEBRA (legacy/default FRR: Zebra installs all learned routes,
+     * including OSPF, under its own protocol number). */
+    const bool is_ospf = (proto == srmd::v1::ROUTE_PROTOCOL_OSPF) ||
+                         (route->protocol == RTPROT_ZEBRA);
+
+    // only for OSPF now
+    if (is_ospf)
+    {
         /* ---- ADDED ---------------------------------------------------------- */
         if (event == NETLINK_ROUTE_ADDED)
         {
