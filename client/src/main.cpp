@@ -650,18 +650,36 @@ static void nlWatchCb(netlink_event_t          event,
 
     const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
 
+    const char* ev_name = (event == NETLINK_ROUTE_ADDED)   ? "ADDED"
+                        : (event == NETLINK_ROUTE_CHANGED) ? "CHANGED"
+                                                           : "REMOVED";
+
     /* Debug: log every incoming /32 Netlink event with the raw protocol value. */
+    std::println("{} [DBG] NETLINK {} dst={} gw={} dev={} metric={} table={} proto={}({})",
+                 ts, ev_name, dest,
+                 gw.empty()    ? "(none)" : gw,
+                 iface.empty() ? "(none)" : iface,
+                 route->metric, route->table,
+                 route->protocol,
+                 srmd::v1::RouteProtocol_Name(proto));
+
+    /* Log OSPF-origin /32 events explicitly to make them easy to spot.
+     * FRR Zebra may mark OSPF routes with RTPROT_OSPF (188, modern
+     * per-protocol tagging) or RTPROT_ZEBRA (11, legacy mode where every
+     * FRR-installed route uses Zebra's own protocol number).  Both values
+     * are recognised so no OSPF host-route event is missed regardless of
+     * the FRR version or configuration in use.
+     * The iface filter is intentionally absent – events for all network
+     * interfaces are reported. */
+    if (route->protocol == RTPROT_OSPF || route->protocol == RTPROT_ZEBRA)
     {
-        const char* ev_name = (event == NETLINK_ROUTE_ADDED)   ? "ADDED"
-                            : (event == NETLINK_ROUTE_CHANGED) ? "CHANGED"
-                                                               : "REMOVED";
-        std::println("{} [DBG] NETLINK {} dst={} gw={} dev={} metric={} table={} proto={}({})",
+        const char* src = (route->protocol == RTPROT_OSPF) ? "RTPROT_OSPF"
+                                                           : "RTPROT_ZEBRA";
+        std::println("{} [OSPF] {} dst={} gw={} dev={} metric={} table={} src={}",
                      ts, ev_name, dest,
                      gw.empty()    ? "(none)" : gw,
                      iface.empty() ? "(none)" : iface,
-                     route->metric, route->table,
-                     route->protocol,
-                     srmd::v1::RouteProtocol_Name(proto));
+                     route->metric, route->table, src);
     }
 
     /* ---- ADDED ---------------------------------------------------------- */
