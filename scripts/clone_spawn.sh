@@ -11,15 +11,26 @@ else
     echo "simple cloning mode"
 fi
 
+configs=( \
+    "config_leaf_1" \
+    "config_leaf_2" \
+    "config_leaf_3" \
+    "config_spine_1" \
+    "config_spine_2" \
+    )
+
 REMOTE_USER="admin"
 REMOTE_PASS="admin"
 
 SRC_DIRS=("local")
 DEST_PATH="/home/admin/srf"
 
+device_index=0
+
 for ip in "${IPS[@]}"; do
     echo -ne ">>> Coping to $ip...\n"
-    
+
+    # instalations
     for dir in "${SRC_DIRS[@]}"; do
         echo -ne ">>> Coping $dir..."
 
@@ -39,10 +50,19 @@ for ip in "${IPS[@]}"; do
         fi
     done
 
+    # run-sra.sh
     sshpass -p "$REMOTE_PASS" rsync -avz \
     -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
     "scripts/target-run-sra.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../run-sra.sh"
     
+    # config
+    echo "scripts/"
+    sshpass -p "$REMOTE_PASS" rsync -avz \
+    -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
+    "scripts/vtysh/${configs[$device_index]}.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../config_device.sh"
+
+    ((device_index++))
+
     echo -ne "\n>>> Coping to $ip..."
 
     if [ $? -eq 0 ]; then
