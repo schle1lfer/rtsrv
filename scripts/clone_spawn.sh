@@ -2,10 +2,12 @@
 IPS=("")
 
 if [[ "$1" == "spawn" ]]; then
-    echo "spawn  cloning mode"
-    IPS=("192.168.1.10" "192.168.1.11" "10.0.0.5")
+    echo "spawn cloning mode"
+    #        Leaf1          Leaf2           Leaf3          Spine1         Spine2
+    IPS=("10.27.192.87" "10.27.192.115" "10.27.192.87" "10.27.192.26" "10.27.192.84")
 else
-    IPS=("10.27.192.25")
+    #        Leaf1
+    IPS=("10.27.192.87")
     echo "simple cloning mode"
 fi
 
