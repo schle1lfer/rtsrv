@@ -25,22 +25,24 @@ for ip in "${IPS[@]}"; do
 
         sshpass -p "$REMOTE_PASS" rsync -avz \
         -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
+        --exclude "sbin" \
+        --exclude "lib" \
         "$dir/" "$REMOTE_USER@$ip:$DEST_PATH/"
 
         echo -ne "\n>>> Coping $dir..."
 
         if [ $? -eq 0 ]; then
-            echo " Done: $dir"
+            echo " Done\r"
         else
-            echo " Fail: $dir"
+            echo " Fail\r"
         fi
     done
     
-    echo -ne ">>> Coping to $ip..."
+    echo -ne "\n>>> Coping to $ip..."
 
     if [ $? -eq 0 ]; then
-        echo "Done: $ip"
+        echo "Done\n"
     else
-        echo "Fail: $ip"
+        echo "Fail\n"
     fi
 done
