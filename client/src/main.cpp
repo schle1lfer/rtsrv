@@ -616,10 +616,24 @@ struct WatchCtx
  * any interface-name filter.  Runs until @p fd is closed.
  *
  * @param fd   AF_NETLINK/RTMGRP_IPV4_ROUTE socket opened by the caller.
- * @param ctx  Shared watch context (gRPC client + node loopback address).
  */
-static void ospfAllRoutesLogger(int fd, const WatchCtx* ctx)
+static void netlinkAllRoutesLogger(int fd)
 {
+    /* Human-readable protocol name helper. */
+    auto proto_name = [](uint8_t p) -> const char* {
+        switch (p)
+        {
+        case RTPROT_KERNEL:  return "kernel";
+        case RTPROT_BOOT:    return "boot";
+        case RTPROT_STATIC:  return "static";
+        case RTPROT_ZEBRA:   return "zebra";
+        case RTPROT_OSPF:    return "ospf";
+        case RTPROT_BGP:     return "bgp";
+        case RTPROT_RIP:     return "rip";
+        default:             return "other";
+        }
+    };
+
     char buf[8192];
 
     for (;;)
@@ -646,8 +660,6 @@ static void ospfAllRoutesLogger(int fd, const WatchCtx* ctx)
                 reinterpret_cast<const struct rtmsg*>(NLMSG_DATA(nlh));
 
             if (rtm->rtm_family != AF_INET) continue;
-            if (rtm->rtm_protocol != RTPROT_OSPF &&
-                rtm->rtm_protocol != RTPROT_ZEBRA) continue;
 
             /* Parse rtattr fields. */
             struct in_addr dst{}, gw{};
@@ -713,61 +725,14 @@ static void ospfAllRoutesLogger(int fd, const WatchCtx* ctx)
                 (nlh->nlmsg_type == RTM_NEWROUTE)
                     ? ((nlh->nlmsg_flags & NLM_F_REPLACE) ? "CHANGED" : "ADDED")
                     : "REMOVED";
-            const char* src = (rtm->rtm_protocol == RTPROT_OSPF)
-                                  ? "RTPROT_OSPF"
-                                  : "RTPROT_ZEBRA";
 
-            std::println("{} [OSPF-ALL] {} dst={}/{} gw={} dev={} ifindex={}"
-                         " metric={} table={} src={}",
+            std::println("{} [NL-ROUTE] {} dst={}/{} gw={} dev={} ifindex={}"
+                         " metric={} table={} proto={}",
                          ts, ev,
                          dst_buf, static_cast<unsigned>(rtm->rtm_dst_len),
                          gw.s_addr ? gw_buf : "(none)",
                          ifname[0] ? ifname : "(none)", ifindex,
-                         metric, table, src);
-
-            /* SOT enrichment: on ADDED events with a gateway, query the server
-             * for the interface that carries this nexthop so the operator can
-             * correlate the kernel event with the SOT topology. */
-            if (ctx && !ctx->loopback.empty() &&
-                gw.s_addr != 0 && strcmp(ev, "ADDED") == 0)
-            {
-                auto lbResult = ctx->client->getLoopbacks(ctx->loopback);
-                if (lbResult)
-                {
-                    bool found = false;
-                    for (const auto& intf : lbResult->interfaces())
-                    {
-                        if (intf.nexthop() != std::string(gw_buf)) continue;
-                        found = true;
-                        std::println("{}   [OSPF-ALL] SOT nexthop {} → "
-                                     "iface \"{}\" (type={} local={} "
-                                     "weight={} desc={})",
-                                     ts, gw_buf,
-                                     intf.name(), intf.type(),
-                                     intf.local_address(), intf.weight(),
-                                     intf.description());
-                        for (const auto& pfx : intf.prefixes())
-                        {
-                            std::println("{}     [OSPF-ALL] prefix {} "
-                                         "weight={} role={} desc={}",
-                                         ts,
-                                         pfx.prefix(), pfx.weight(),
-                                         pfx.role(), pfx.description());
-                        }
-                    }
-                    if (!found)
-                    {
-                        std::println("{}   [OSPF-ALL] SOT: no interface "
-                                     "with nexthop {} for loopback {}",
-                                     ts, gw_buf, ctx->loopback);
-                    }
-                }
-                else
-                {
-                    std::println("{}   [OSPF-ALL] GetLoopbacks FAILED: {}",
-                                 ts, lbResult.error());
-                }
-            }
+                         metric, table, proto_name(rtm->rtm_protocol));
 
             std::cout.flush();
         }
@@ -1063,47 +1028,17 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     }
     g_ospf_fd = ospf_fd;
 
-    /* Build the shared watch context before starting the OSPF logger thread
-     * so the thread has a valid client pointer and loopback from the start. */
     WatchCtx ctx{&client, {}, loopback};
 
-    /* Resolve the loopback from the server before starting the monitor.
-     * This confirms server reachability and gives the operator an early
-     * view of the SOT topology that will be used to enrich OSPF events. */
-    if (!loopback.empty())
-    {
-        auto lbResult = client.getLoopbacks(loopback);
-        if (lbResult)
-        {
-            std::println("Loopback {} → {} interface(s) in SOT:",
-                         loopback,
-                         lbResult->interfaces().size());
-            for (const auto& intf : lbResult->interfaces())
-            {
-                std::println("  nexthop={} iface=\"{}\" local={} type={}",
-                             intf.nexthop(), intf.name(),
-                             intf.local_address(), intf.type());
-            }
-        }
-        else
-        {
-            std::println(std::cerr,
-                         "Warning: GetLoopbacks({}) failed: {} "
-                         "(OSPF events will be logged without SOT context)",
-                         loopback, lbResult.error());
-        }
-        std::cout.flush();
-    }
-
-    /* Start the OSPF all-routes logger thread now that context is ready. */
+    /* Start the all-routes logger thread (no server calls, all protocols). */
     std::thread ospf_logger_thread;
     if (ospf_fd >= 0)
     {
-        ospf_logger_thread = std::thread(ospfAllRoutesLogger, ospf_fd, &ctx);
+        ospf_logger_thread = std::thread(netlinkAllRoutesLogger, ospf_fd);
     }
 
     std::println("Watching for IPv4 /32 route events → forwarding to srmd …");
-    std::println("Logging all OSPF route events (all prefixes, all interfaces) …");
+    std::println("Logging all IPv4 netlink route events (all prefixes, all interfaces) …");
     std::println("  (Ctrl-C to stop)\n");
     std::cout.flush();
 
