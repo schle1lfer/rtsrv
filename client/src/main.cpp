@@ -47,6 +47,7 @@
 #include "client/route_client.hpp"
 #include "client/sot_config.hpp"
 #include "client/switch_config.hpp"
+#include "client/routing.hpp"
 #include "common/config.hpp"
 #include "server/netlink.h"
 
@@ -55,9 +56,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include <iostream>
 #include <linux/rtnetlink.h>
+#include <map>
 #include <mutex>
 #include <print>
 #include <queue>
@@ -582,16 +585,60 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
 }
 
 /**
+ * @brief A single entry in the dynamic /32 OSPF route table.
+ */
+struct WatchRoute
+{
+    std::string gateway;   ///< Next-hop gateway (empty if none).
+    std::string iface;     ///< Outgoing interface name.
+    uint32_t    metric{0}; ///< Route metric / preference.
+    std::string srmdId;    ///< Server-assigned ID (empty when push failed).
+};
+
+/**
+ * @brief Pretty-prints the dynamic /32 OSPF route table to stdout.
+ *
+ * @param routes  Ordered map of destination → WatchRoute entries.
+ */
+static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
+{
+    const std::string border(72, '─');
+    std::println("\n OSPF /32 Route Table  ({} route(s))", routes.size());
+    std::println(" {}", border);
+    std::println(" {:<20} {:<18} {:<14} {:>8}  {}",
+                 "Destination", "Gateway", "Interface", "Metric", "Server ID");
+    std::println(" {}", border);
+    if (routes.empty())
+    {
+        std::println("  (no routes)");
+    }
+    else
+    {
+        for (const auto& [dest, r] : routes)
+        {
+            std::println(" {:<20} {:<18} {:<14} {:>8}  {}",
+                         dest,
+                         r.gateway.empty() ? "(none)" : r.gateway,
+                         r.iface.empty()   ? "(none)" : r.iface,
+                         r.metric,
+                         r.srmdId.empty()  ? "(pending)"
+                                           : r.srmdId.substr(0, 8) + "…");
+        }
+    }
+    std::println(" {}", border);
+}
+
+/**
  * @brief Context forwarded via the @c user_data pointer to the netlink callback.
  *
- * Carries the live gRPC client and the local map that tracks which srmd route
- * ID corresponds to each /32 destination we have pushed.
+ * Carries the live gRPC client and the dynamic route table that tracks every
+ * /32 OSPF route event together with its srmd server ID.
  */
 struct WatchCtx
 {
-    sra::RouteClient*                            client;
-    std::unordered_map<std::string, std::string> routeIds; ///< dest/32 → srmd ID
-    std::string                                  loopback; ///< Node's own loopback IP for GetLoopbacks
+    sra::RouteClient*                 client;
+    std::map<std::string, WatchRoute> routes;   ///< dest/32 → WatchRoute (ordered)
+    std::string                       loopback; ///< Node's own loopback IP for GetLoopbacks
 };
 
 /**
@@ -662,7 +709,8 @@ static void nlWatchCb(netlink_event_t          event,
 
             if (result)
             {
-                ctx->routeIds[dest] = result->id();
+                ctx->routes[dest] = WatchRoute{gw, iface, route->metric,
+                                               result->id()};
                 std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
                             ts, dest, gw, iface, route->metric,
                             result->id().substr(0, 8) + "…");
@@ -714,6 +762,8 @@ static void nlWatchCb(netlink_event_t          event,
             }
             else
             {
+                /* Track with empty srmdId so REMOVED events still clean up. */
+                ctx->routes[dest] = WatchRoute{gw, iface, route->metric, {}};
                 std::println("{} [ADDED]   {} → gRPC FAILED: {}",
                             ts, dest, result.error());
             }
@@ -722,16 +772,20 @@ static void nlWatchCb(netlink_event_t          event,
         else if (event == NETLINK_ROUTE_CHANGED)
         {
             /* Remove the stale entry if we hold an ID for this destination. */
-            auto it = ctx->routeIds.find(dest);
-            if (it != ctx->routeIds.end())
+            auto it = ctx->routes.find(dest);
+            if (it != ctx->routes.end())
             {
-                auto rmResult = ctx->client->removeRoute(it->second);
-                if (!rmResult)
+                if (!it->second.srmdId.empty())
                 {
-                    std::println("{} [CHANGED] {} stale-remove failed: {}",
-                                ts, dest, rmResult.error());
+                    auto rmResult =
+                        ctx->client->removeRoute(it->second.srmdId);
+                    if (!rmResult)
+                    {
+                        std::println("{} [CHANGED] {} stale-remove failed: {}",
+                                    ts, dest, rmResult.error());
+                    }
                 }
-                ctx->routeIds.erase(it);
+                ctx->routes.erase(it);
             }
 
             auto result = ctx->client->addRoute(
@@ -740,13 +794,15 @@ static void nlWatchCb(netlink_event_t          event,
 
             if (result)
             {
-                ctx->routeIds[dest] = result->id();
+                ctx->routes[dest] = WatchRoute{gw, iface, route->metric,
+                                               result->id()};
                 std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
                             ts, dest, gw, iface, route->metric,
                             result->id().substr(0, 8) + "…");
             }
             else
             {
+                ctx->routes[dest] = WatchRoute{gw, iface, route->metric, {}};
                 std::println("{} [CHANGED] {} → gRPC FAILED: {}",
                             ts, dest, result.error());
             }
@@ -754,30 +810,40 @@ static void nlWatchCb(netlink_event_t          event,
         /* ---- REMOVED -------------------------------------------------------- */
         else
         {
-            auto it = ctx->routeIds.find(dest);
-            if (it == ctx->routeIds.end())
+            auto it = ctx->routes.find(dest);
+            if (it == ctx->routes.end())
             {
                 std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
                             ts, dest);
+                std::cout.flush();
                 return;
             }
 
-            const std::string id = it->second;
-            ctx->routeIds.erase(it);
+            const std::string id = it->second.srmdId;
+            ctx->routes.erase(it);
 
-            auto result = ctx->client->removeRoute(id);
-            if (result)
+            if (id.empty())
             {
-                std::println("{} [REMOVED] {} id={}", ts, dest,
-                            id.substr(0, 8) + "…");
+                std::println("{} [REMOVED] {} (no server ID – no gRPC call)",
+                            ts, dest);
             }
             else
             {
-                std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                            ts, dest, result.error());
+                auto result = ctx->client->removeRoute(id);
+                if (result)
+                {
+                    std::println("{} [REMOVED] {} id={}", ts, dest,
+                                id.substr(0, 8) + "…");
+                }
+                else
+                {
+                    std::println("{} [REMOVED] {} → gRPC FAILED: {}",
+                                ts, dest, result.error());
+                }
             }
         }
 
+        printRouteTable(ctx->routes);
     }
 
     std::cout.flush();
@@ -806,19 +872,105 @@ static void demoSigHandler(int /*signo*/)
 }
 
 /**
- * @brief Runs the netlink /32 route watcher, forwarding events to srmd.
+ * @brief Runs the netlink /32 OSPF route watcher.
  *
- * Opens a @c NETLINK_ROUTE socket and blocks in @c netlink_run() until
- * SIGINT / SIGTERM is received.  Every qualifying kernel route event is
- * forwarded to the connected srmd instance via AddRoute / RemoveRoute.
+ * Startup sequence:
+ *  1. Reads the current kernel routing table and builds an initial dynamic
+ *     table of IPv4 /32 OSPF routes; each existing route is pushed to srmd
+ *     via AddRoute and the server-assigned ID is stored.
+ *  2. Displays the initial route table to stdout.
+ *  3. Requests this node's loopback address from the server (used to enrich
+ *     ADDED events with SOT interface data).
+ *  4. Opens a NETLINK_ROUTE socket and enters the monitoring loop; every
+ *     subsequent kernel route event updates the dynamic table and is printed.
  *
- * @param client  Constructed and connected @c RouteClient.
- * @return @c EXIT_SUCCESS on clean stop; @c EXIT_FAILURE if the socket
- *         could not be opened.
+ * Runs until SIGINT / SIGTERM is received.
+ *
+ * @param client          Constructed and connected @c RouteClient.
+ * @param configLoopback  Fallback loopback from the client config file; used
+ *                        when the server cannot resolve this client's IP.
+ * @return @c EXIT_SUCCESS on clean stop; @c EXIT_FAILURE if the netlink
+ *         socket could not be opened.
  */
 static int cmdNetlinkWatch(sra::RouteClient& client,
-                           const std::string& loopback)
+                           const std::string& configLoopback)
 {
+    // ── Step 1: Read existing kernel /32 OSPF routes ─────────────────────
+    std::println("[Startup] Reading /32 OSPF routes from kernel routing table…");
+
+    WatchCtx ctx{&client, {}, configLoopback};
+
+    try
+    {
+        sra::RoutingManager rm;
+        auto routesResult = rm.listRoutes(AF_INET, RT_TABLE_UNSPEC);
+        if (routesResult)
+        {
+            int found = 0;
+            for (const auto& kr : *routesResult)
+            {
+                if (kr.prefixLen != 32
+                    || kr.protocol != RTPROT_OSPF
+                    || kr.type     != RTN_UNICAST)
+                {
+                    continue;
+                }
+
+                /* Push to srmd so it is reflected in the server's route table. */
+                auto result = client.addRoute(
+                    kr.destination, kr.gateway, kr.interfaceName, kr.metric,
+                    srmd::v1::ADDRESS_FAMILY_IPV4,
+                    srmd::v1::ROUTE_PROTOCOL_OSPF);
+
+                WatchRoute wr{kr.gateway, kr.interfaceName, kr.metric, {}};
+                if (result)
+                {
+                    wr.srmdId = result->id();
+                }
+                else
+                {
+                    std::println(std::cerr,
+                                 "[Startup]   AddRoute {} failed: {}",
+                                 kr.destination, result.error());
+                }
+                ctx.routes[kr.destination] = wr;
+                ++found;
+            }
+            std::println("[Startup] Found {} /32 OSPF route(s) in kernel.", found);
+        }
+        else
+        {
+            std::println(std::cerr,
+                         "[Startup] Warning: could not read kernel routes: {}",
+                         routesResult.error());
+        }
+    }
+    catch (const std::exception& e)
+    {
+        std::println(std::cerr,
+                     "[Startup] Warning: RoutingManager init failed: {}",
+                     e.what());
+    }
+
+    // ── Step 2: Display initial route table ──────────────────────────────
+    printRouteTable(ctx.routes);
+
+    // ── Step 3: Request loopback from server ─────────────────────────────
+    std::println("\n[Startup] Requesting loopback from server…");
+    auto lbResult = client.requestLoopback();
+    if (lbResult)
+    {
+        ctx.loopback = *lbResult;
+        std::println("[Startup] Loopback from server: '{}'", ctx.loopback);
+    }
+    else
+    {
+        std::println("[Startup] No loopback from server ({}); "
+                     "using config loopback: '{}'",
+                     lbResult.error(), ctx.loopback);
+    }
+
+    // ── Step 4: Start monitoring ──────────────────────────────────────────
     /* Install signal handlers. */
     struct sigaction sa{};
     sa.sa_handler = watchSigHandler;
@@ -829,27 +981,28 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     int fd = netlink_init();
     if (fd < 0)
     {
-        std::println(std::cerr, "Error: netlink_init failed: {}",
+        std::println(std::cerr, "[Monitor] Error: netlink_init failed: {}",
                      std::strerror(errno));
         return EXIT_FAILURE;
     }
     g_watch_fd = fd;
 
-    std::println("Watching for IPv4 /32 route events → forwarding to srmd …");
-    if (!loopback.empty())
+    std::println("\n[Monitor] Watching for IPv4 /32 OSPF route events"
+                 " → forwarding to srmd …");
+    if (!ctx.loopback.empty())
     {
-        std::println("  Loopback {} → GetLoopbacks on each OSPF ADDED event",
-                     loopback);
+        std::println("[Monitor] Loopback {} → GetLoopbacks on each OSPF ADDED"
+                     " event", ctx.loopback);
     }
-    std::println("  (Ctrl-C to stop)\n");
+    std::println("[Monitor] (Ctrl-C to stop)\n");
     std::cout.flush();
 
-    WatchCtx ctx{&client, {}, loopback};
     netlink_run(fd, nlWatchCb, &ctx);
 
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
 
-    std::println("\nStopped. {} route(s) tracked at exit.", ctx.routeIds.size());
+    std::println("\n[Monitor] Stopped.  Final route table:");
+    printRouteTable(ctx.routes);
     return EXIT_SUCCESS;
 }
 
@@ -1256,9 +1409,12 @@ int main(int argc, char* argv[])
     sra::RouteClient client(server, useTls, caCert, timeout);
 
     // -----------------------------------------------------------------------
-    // Startup: request loopback from server based on this client's IP
+    // Startup: request loopback from server based on this client's IP.
+    // Skipped for the "watch" command – cmdNetlinkWatch performs this step
+    // itself after displaying the initial kernel route table.
     // -----------------------------------------------------------------------
     std::string activeLoopback = clientCfg.loopback;
+    if (command != "watch")
     {
         std::println("[Startup] Requesting loopback from server based on client IP...");
         auto lbResult = client.requestLoopback();
