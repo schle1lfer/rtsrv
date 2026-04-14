@@ -962,13 +962,21 @@ static volatile int g_ospf_fd  = -1;
 /** @brief SIGINT/SIGTERM handler for the watch command. */
 static void watchSigHandler(int /*signo*/)
 {
+    /* shutdown() before close() is essential: close() alone does NOT unblock
+     * a thread that is blocked inside recv() on the same fd on Linux.
+     * shutdown(SHUT_RDWR) marks the socket as shut-down so the kernel
+     * immediately wakes any waiting recv() and returns 0 or an error,
+     * allowing both netlink_run() (main thread) and netlinkAllRoutesLogger()
+     * (logger thread) to exit their blocking loops cleanly. */
     if (g_watch_fd >= 0)
     {
+        shutdown(g_watch_fd, SHUT_RDWR);
         netlink_close(g_watch_fd);
         g_watch_fd = -1;
     }
     if (g_ospf_fd >= 0)
     {
+        shutdown(g_ospf_fd, SHUT_RDWR);
         netlink_close(g_ospf_fd);
         g_ospf_fd = -1;
     }
@@ -997,9 +1005,14 @@ static void demoSigHandler(int /*signo*/)
 static int cmdNetlinkWatch(sra::RouteClient& client,
                            const std::string& loopback)
 {
-    /* Install signal handlers. */
+    /* Install signal handlers.
+     * SA_RESETHAND: restore the default action after the first delivery so
+     * that a second Ctrl-C (if the first somehow does not complete cleanup)
+     * terminates the process immediately instead of looping into a broken
+     * handler that is operating on already-closed fds. */
     struct sigaction sa{};
     sa.sa_handler = watchSigHandler;
+    sa.sa_flags   = SA_RESETHAND;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGINT,  &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
@@ -1014,16 +1027,16 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     }
     g_watch_fd = fd;
 
-    /* Second socket: all-prefix OSPF event logger (RTPROT_OSPF + RTPROT_ZEBRA,
-     * every prefix length, all interfaces eth0 / Ethernet0…Ethernet128 / …).
-     * Stored in g_ospf_fd so the signal handler can close it and unblock the
-     * logger thread's recv() at the same time it unblocks netlink_run(). */
+    /* Second socket: all-routes logger (all IPv4 protocols, every prefix
+     * length, all interfaces).  Stored in g_ospf_fd so the signal handler
+     * can shutdown()+close() it and unblock the logger thread's recv() at
+     * the same time it unblocks netlink_run(). */
     int ospf_fd = netlink_init();
     if (ospf_fd < 0)
     {
         std::println(std::cerr,
-                     "Warning: OSPF all-routes logger socket failed: {} "
-                     "(OSPF-ALL logging disabled)",
+                     "Warning: netlink all-routes logger socket failed: {} "
+                     "(NL-ROUTE logging disabled)",
                      std::strerror(errno));
     }
     g_ospf_fd = ospf_fd;
