@@ -589,43 +589,83 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
  */
 struct WatchRoute
 {
-    std::string gateway;   ///< Next-hop gateway (empty if none).
-    std::string iface;     ///< Outgoing interface name.
+    std::string dest;     ///< Destination prefix (e.g. "10.0.0.1/32").
+    std::string gateway;  ///< Next-hop gateway (empty if none).
+    std::string iface;    ///< Outgoing interface name.
     uint32_t    metric{0}; ///< Route metric / preference.
-    std::string srmdId;    ///< Server-assigned ID (empty when push failed).
+    std::string srmdId;   ///< Server-assigned ID (empty when push failed).
 };
 
 /**
- * @brief Pretty-prints the dynamic /32 OSPF route table to stdout.
+ * @brief Pretty-prints the dynamic /32 OSPF route table using box-drawing lines.
  *
- * @param routes  Ordered map of destination → WatchRoute entries.
+ * Column widths are fixed so each redraw is aligned regardless of content.
+ * The table is keyed by the compound key dest|gateway|iface, so multiple
+ * routes to the same destination (ECMP) appear as separate rows.
+ *
+ * @param routes  Ordered map of compound-key → WatchRoute entries.
  */
 static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 {
-    const std::string border(72, '─');
+    // ── Column content widths (characters, not bytes) ─────────────────
+    // Destination : "255.255.255.255/32" = 18 chars  → 20
+    // Gateway     : "255.255.255.255"    = 15 chars  → 18
+    // Interface   : IFNAMSIZ-1           = 15 chars  → 15
+    // Metric      : up to 10 digits      →  8 (right-aligned)
+    // Server ID   : "abcdefgh…"          =  9 chars  → 10
+    constexpr int D = 20, G = 18, I = 15, M = 8, S = 10;
+
+    // ── Build horizontal border segments (content + 1 space each side) ─
+    auto hbar = [](int n) {
+        std::string s;
+        s.reserve(static_cast<std::size_t>(n) * 3); // "─" is 3 UTF-8 bytes
+        for (int i = 0; i < n; ++i) s += "─";
+        return s;
+    };
+
+    const std::string top    = "┌" + hbar(D+2) + "┬" + hbar(G+2) + "┬"
+                             + hbar(I+2) + "┬" + hbar(M+2) + "┬" + hbar(S+2)
+                             + "┐";
+    const std::string mid    = "├" + hbar(D+2) + "┼" + hbar(G+2) + "┼"
+                             + hbar(I+2) + "┼" + hbar(M+2) + "┼" + hbar(S+2)
+                             + "┤";
+    const std::string bottom = "└" + hbar(D+2) + "┴" + hbar(G+2) + "┴"
+                             + hbar(I+2) + "┴" + hbar(M+2) + "┴" + hbar(S+2)
+                             + "┘";
+
+    // ── Title + table ─────────────────────────────────────────────────
     std::println("\n OSPF /32 Route Table  ({} route(s))", routes.size());
-    std::println(" {}", border);
-    std::println(" {:<20} {:<18} {:<14} {:>8}  {}",
-                 "Destination", "Gateway", "Interface", "Metric", "Server ID");
-    std::println(" {}", border);
+    std::println("{}", top);
+    std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:<{}} │",
+                 "Destination", D,
+                 "Gateway",     G,
+                 "Interface",   I,
+                 "Metric",      M,
+                 "Server ID",   S);
+
     if (routes.empty())
     {
-        std::println("  (no routes)");
+        std::println("{}", bottom);
+        return;
     }
-    else
+
+    std::println("{}", mid);
+
+    for (const auto& [key, r] : routes)
     {
-        for (const auto& [dest, r] : routes)
-        {
-            std::println(" {:<20} {:<18} {:<14} {:>8}  {}",
-                         dest,
-                         r.gateway.empty() ? "(none)" : r.gateway,
-                         r.iface.empty()   ? "(none)" : r.iface,
-                         r.metric,
-                         r.srmdId.empty()  ? "(pending)"
-                                           : r.srmdId.substr(0, 8) + "…");
-        }
+        const std::string gw   = r.gateway.empty() ? "(none)"    : r.gateway;
+        const std::string ifc  = r.iface.empty()   ? "(none)"    : r.iface;
+        const std::string sid  = r.srmdId.empty()  ? "(pending)" : r.srmdId.substr(0, 8) + "…";
+
+        std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:<{}} │",
+                     r.dest,  D,
+                     gw,      G,
+                     ifc,     I,
+                     r.metric, M,
+                     sid,     S);
     }
-    std::println(" {}", border);
+
+    std::println("{}", bottom);
 }
 
 /**
@@ -637,7 +677,7 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 struct WatchCtx
 {
     sra::RouteClient*                 client;
-    std::map<std::string, WatchRoute> routes;   ///< dest/32 → WatchRoute (ordered)
+    std::map<std::string, WatchRoute> routes;   ///< "dest|gw|iface" → WatchRoute (ordered; allows duplicate dests)
     std::string                       loopback; ///< Node's own loopback IP for GetLoopbacks
 };
 
@@ -700,6 +740,10 @@ static void nlWatchCb(netlink_event_t          event,
     // only for OSPF now
     if (proto == srmd::v1::ROUTE_PROTOCOL_OSPF)
     {
+        /* Compound key: dest|gateway|iface – allows multiple routes to the
+         * same destination (ECMP) to coexist as separate table rows. */
+        const std::string key = dest + "|" + gw + "|" + iface;
+
         /* ---- ADDED ---------------------------------------------------------- */
         if (event == NETLINK_ROUTE_ADDED)
         {
@@ -709,8 +753,8 @@ static void nlWatchCb(netlink_event_t          event,
 
             if (result)
             {
-                ctx->routes[dest] = WatchRoute{gw, iface, route->metric,
-                                               result->id()};
+                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                                              route->metric, result->id()};
                 std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
                             ts, dest, gw, iface, route->metric,
                             result->id().substr(0, 8) + "…");
@@ -763,7 +807,8 @@ static void nlWatchCb(netlink_event_t          event,
             else
             {
                 /* Track with empty srmdId so REMOVED events still clean up. */
-                ctx->routes[dest] = WatchRoute{gw, iface, route->metric, {}};
+                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                                              route->metric, {}};
                 std::println("{} [ADDED]   {} → gRPC FAILED: {}",
                             ts, dest, result.error());
             }
@@ -771,21 +816,30 @@ static void nlWatchCb(netlink_event_t          event,
         /* ---- CHANGED -------------------------------------------------------- */
         else if (event == NETLINK_ROUTE_CHANGED)
         {
-            /* Remove the stale entry if we hold an ID for this destination. */
-            auto it = ctx->routes.find(dest);
-            if (it != ctx->routes.end())
+            /* Remove ALL existing entries for this destination (the kernel
+             * replaces the route, so old nexthops are superseded regardless
+             * of gateway/iface).  Each entry is removed from srmd first. */
+            for (auto it = ctx->routes.begin(); it != ctx->routes.end(); )
             {
-                if (!it->second.srmdId.empty())
+                if (it->second.dest == dest)
                 {
-                    auto rmResult =
-                        ctx->client->removeRoute(it->second.srmdId);
-                    if (!rmResult)
+                    if (!it->second.srmdId.empty())
                     {
-                        std::println("{} [CHANGED] {} stale-remove failed: {}",
-                                    ts, dest, rmResult.error());
+                        auto rmResult =
+                            ctx->client->removeRoute(it->second.srmdId);
+                        if (!rmResult)
+                        {
+                            std::println(
+                                "{} [CHANGED] {} stale-remove failed: {}",
+                                ts, dest, rmResult.error());
+                        }
                     }
+                    it = ctx->routes.erase(it);
                 }
-                ctx->routes.erase(it);
+                else
+                {
+                    ++it;
+                }
             }
 
             auto result = ctx->client->addRoute(
@@ -794,15 +848,16 @@ static void nlWatchCb(netlink_event_t          event,
 
             if (result)
             {
-                ctx->routes[dest] = WatchRoute{gw, iface, route->metric,
-                                               result->id()};
+                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                                              route->metric, result->id()};
                 std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
                             ts, dest, gw, iface, route->metric,
                             result->id().substr(0, 8) + "…");
             }
             else
             {
-                ctx->routes[dest] = WatchRoute{gw, iface, route->metric, {}};
+                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                                              route->metric, {}};
                 std::println("{} [CHANGED] {} → gRPC FAILED: {}",
                             ts, dest, result.error());
             }
@@ -810,11 +865,12 @@ static void nlWatchCb(netlink_event_t          event,
         /* ---- REMOVED -------------------------------------------------------- */
         else
         {
-            auto it = ctx->routes.find(dest);
+            auto it = ctx->routes.find(key);
             if (it == ctx->routes.end())
             {
-                std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
-                            ts, dest);
+                std::println("{} [REMOVED] {} via {} dev {} (not tracked – "
+                             "no gRPC call)",
+                            ts, dest, gw, iface);
                 std::cout.flush();
                 return;
             }
@@ -824,21 +880,23 @@ static void nlWatchCb(netlink_event_t          event,
 
             if (id.empty())
             {
-                std::println("{} [REMOVED] {} (no server ID – no gRPC call)",
-                            ts, dest);
+                std::println("{} [REMOVED] {} via {} dev {} "
+                             "(no server ID – no gRPC call)",
+                            ts, dest, gw, iface);
             }
             else
             {
                 auto result = ctx->client->removeRoute(id);
                 if (result)
                 {
-                    std::println("{} [REMOVED] {} id={}", ts, dest,
-                                id.substr(0, 8) + "…");
+                    std::println("{} [REMOVED] {} via {} dev {} id={}",
+                                ts, dest, gw, iface, id.substr(0, 8) + "…");
                 }
                 else
                 {
-                    std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                                ts, dest, result.error());
+                    std::println("{} [REMOVED] {} via {} dev {} → "
+                                 "gRPC FAILED: {}",
+                                ts, dest, gw, iface, result.error());
                 }
             }
         }
@@ -922,7 +980,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                     srmd::v1::ADDRESS_FAMILY_IPV4,
                     srmd::v1::ROUTE_PROTOCOL_OSPF);
 
-                WatchRoute wr{kr.gateway, kr.interfaceName, kr.metric, {}};
+                WatchRoute wr{kr.destination, kr.gateway,
+                              kr.interfaceName, kr.metric, {}};
                 if (result)
                 {
                     wr.srmdId = result->id();
@@ -933,7 +992,9 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                                  "[Startup]   AddRoute {} failed: {}",
                                  kr.destination, result.error());
                 }
-                ctx.routes[kr.destination] = wr;
+                const std::string key =
+                    kr.destination + "|" + kr.gateway + "|" + kr.interfaceName;
+                ctx.routes[key] = wr;
                 ++found;
             }
             std::println("[Startup] Found {} /32 OSPF route(s) in kernel.", found);
