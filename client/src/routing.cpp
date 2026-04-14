@@ -35,6 +35,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sra
@@ -577,6 +578,10 @@ RoutingManager::listRoutes(int family, uint32_t table) const
 
         bool hasDst{false};
 
+        // Nexthop list populated when RTA_MULTIPATH is present (ECMP or
+        // FRR/Zebra single-path encoding).  Each element is (gateway, oif).
+        std::vector<std::pair<std::string, uint32_t>> nexthops;
+
         for (; RTA_OK(rta, attrLen); rta = RTA_NEXT(rta, attrLen))
         {
             switch (rta->rta_type)
@@ -618,6 +623,47 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                     break;
                 }
 
+                case RTA_MULTIPATH:
+                {
+                    // FRR/Zebra encodes nexthops in RTA_MULTIPATH even for
+                    // single-path OSPF routes.  Walk the rtnexthop list and
+                    // collect (gateway, oif) for each entry; the caller gets
+                    // one KernelRoute per nexthop so ECMP is fully visible.
+                    auto* rtnh = reinterpret_cast<rtnexthop*>(
+                        RTA_DATA(rta));
+                    int nhrem = static_cast<int>(RTA_PAYLOAD(rta));
+
+                    while (RTNH_OK(rtnh, nhrem))
+                    {
+                        std::string nhGw;
+                        const auto  nhOif =
+                            static_cast<uint32_t>(rtnh->rtnh_ifindex);
+
+                        // Each rtnexthop may have nested rtattrs, the most
+                        // important being RTA_GATEWAY (the nexthop address).
+                        auto* inner = reinterpret_cast<rtattr*>(
+                            RTNH_DATA(rtnh));
+                        int ilen = static_cast<int>(rtnh->rtnh_len) -
+                                   static_cast<int>(sizeof(rtnexthop));
+
+                        for (; RTA_OK(inner, ilen);
+                             inner = RTA_NEXT(inner, ilen))
+                        {
+                            if (inner->rta_type == RTA_GATEWAY)
+                            {
+                                nhGw = addrToString(RTA_DATA(inner),
+                                                    route.family);
+                            }
+                        }
+
+                        nexthops.emplace_back(std::move(nhGw), nhOif);
+
+                        nhrem -= NLMSG_ALIGN(rtnh->rtnh_len);
+                        rtnh   = RTNH_NEXT(rtnh);
+                    }
+                    break;
+                }
+
                 default:
                     break;
             }
@@ -631,13 +677,33 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                 (route.family == AF_INET6) ? "::/0" : "0.0.0.0/0";
         }
 
-        // Apply the caller's table filter after RTA_TABLE has been parsed.
-        if (table != RT_TABLE_UNSPEC && route.table != table)
+        if (nexthops.empty())
         {
-            return;
+            // Simple route: gateway/interface already set from RTA_GATEWAY
+            // and RTA_OIF.  Apply table filter then push.
+            if (table != RT_TABLE_UNSPEC && route.table != table)
+            {
+                return;
+            }
+            routes.push_back(std::move(route));
         }
-
-        routes.push_back(std::move(route));
+        else
+        {
+            // ECMP (or FRR multipath encoding): emit one KernelRoute per
+            // nexthop with the per-nexthop gateway and interface filled in.
+            for (auto& [nhGw, nhOif] : nexthops)
+            {
+                if (table != RT_TABLE_UNSPEC && route.table != table)
+                {
+                    continue;
+                }
+                KernelRoute r    = route; // copy shared fields
+                r.gateway        = nhGw;
+                r.interfaceIndex = nhOif;
+                r.interfaceName  = ifIndexToName(nhOif);
+                routes.push_back(std::move(r));
+            }
+        }
     });
 
     if (!result)
