@@ -1355,14 +1355,15 @@ struct NeighCtx
 };
 
 /**
- * @brief Netlink callback: updates the neighbor table and redraws on each event.
+ * @brief Inserts or removes one neighbor entry from @p ctx.
+ *
+ * Shared by both the silent populate callback (used during the initial dump)
+ * and the display callback (used during the live-event loop).
  */
-static void nlNeighCb(netlink_neigh_event_t     event,
-                      const netlink_neigh_t    *n,
-                      void                     *user_data)
+static void nlNeighUpdate(netlink_neigh_event_t  event,
+                          const netlink_neigh_t *n,
+                          NeighCtx              *ctx)
 {
-    auto* ctx = static_cast<NeighCtx*>(user_data);
-
     const std::string key = familyLabel(n->family)
                           + "|" + std::to_string(n->ifindex)
                           + "|" + (n->dst[0] ? n->dst : "(none)");
@@ -1370,30 +1371,54 @@ static void nlNeighCb(netlink_neigh_event_t     event,
     if (event == NETLINK_NEIGH_REMOVED)
     {
         ctx->neighbors.erase(key);
-    }
-    else
-    {
-        NeighEntry e;
-        e.family       = n->family;
-        e.ifindex      = n->ifindex;
-        e.ifname       = n->ifname;
-        e.state        = n->state;
-        e.flags        = n->flags;
-        e.type         = n->type;
-        e.dst          = n->dst;
-        e.mac          = formatMac(n->lladdr, n->lladdr_len);
-        e.confirmed_ms = n->confirmed_ms;
-        e.used_ms      = n->used_ms;
-        e.updated_ms   = n->updated_ms;
-        e.refcnt       = n->refcnt;
-        e.probes       = n->probes;
-        e.vlan         = n->vlan;
-        e.master       = n->master;
-        e.master_name  = n->master_name;
-        e.protocol     = n->protocol;
-        ctx->neighbors[key] = e;
+        return;
     }
 
+    NeighEntry e;
+    e.family       = n->family;
+    e.ifindex      = n->ifindex;
+    e.ifname       = n->ifname;
+    e.state        = n->state;
+    e.flags        = n->flags;
+    e.type         = n->type;
+    e.dst          = n->dst;
+    e.mac          = formatMac(n->lladdr, n->lladdr_len);
+    e.confirmed_ms = n->confirmed_ms;
+    e.used_ms      = n->used_ms;
+    e.updated_ms   = n->updated_ms;
+    e.refcnt       = n->refcnt;
+    e.probes       = n->probes;
+    e.vlan         = n->vlan;
+    e.master       = n->master;
+    e.master_name  = n->master_name;
+    e.protocol     = n->protocol;
+    ctx->neighbors[key] = e;
+}
+
+/**
+ * @brief Silent populate callback — updates the in-memory table only.
+ *
+ * Used during the initial RTM_GETNEIGH dump so the table is not redrawn
+ * once per entry.  After the dump completes the caller prints the table once.
+ */
+static void nlNeighPopulateCb(netlink_neigh_event_t  event,
+                               const netlink_neigh_t *n,
+                               void                  *user_data)
+{
+    nlNeighUpdate(event, n, static_cast<NeighCtx*>(user_data));
+}
+
+/**
+ * @brief Live-event callback — updates the table and redraws it on every change.
+ *
+ * Used after the initial dump, for ongoing RTM_NEWNEIGH / RTM_DELNEIGH events.
+ */
+static void nlNeighCb(netlink_neigh_event_t     event,
+                      const netlink_neigh_t    *n,
+                      void                     *user_data)
+{
+    auto* ctx = static_cast<NeighCtx*>(user_data);
+    nlNeighUpdate(event, n, ctx);
     printNeighborTable(ctx->neighbors);
     std::cout.flush();
 }
@@ -1414,10 +1439,14 @@ static void neighSigHandler(int /*signo*/)
 /**
  * @brief Runs the kernel neighbor table monitor.
  *
- * 1. Opens a NETLINK_ROUTE socket subscribed to RTMGRP_NEIGH.
- * 2. Dumps the existing kernel neighbor table and displays it.
- * 3. Enters the live-event loop; each change redraws the table.
- * 4. Runs until SIGINT / SIGTERM.
+ * Startup sequence:
+ *  1. Opens a NETLINK_ROUTE socket subscribed to RTMGRP_NEIGH.
+ *  2. Reads the complete current neighbor table from the kernel via
+ *     RTM_GETNEIGH dump, silently populating the in-memory map.
+ *  3. Displays the initial table once.
+ *  4. Enters the live-event loop; each RTM_NEWNEIGH / RTM_DELNEIGH
+ *     event updates the map and redraws the table.
+ *  5. Runs until SIGINT / SIGTERM.
  *
  * @return EXIT_SUCCESS on clean stop, EXIT_FAILURE if the socket could not
  *         be opened.
@@ -1442,22 +1471,24 @@ static int cmdWatchNeighbors()
     sigaction(SIGINT,  &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    // ── Dump existing entries ─────────────────────────────────────────────
-    std::println("[Neighbors] Dumping existing neighbor table…");
+    // ── Step 1: Read the current neighbor table from the kernel ──────────
+    // Use the silent populate callback so the table is not redrawn once per
+    // entry — only the single display after the dump loop matters.
+    std::println("[Neighbors] Reading neighbor table from kernel…");
     NeighCtx ctx;
-    const int dumped = netlink_neigh_dump(fd, nlNeighCb, &ctx);
+    const int dumped = netlink_neigh_dump(fd, nlNeighPopulateCb, &ctx);
     if (dumped < 0)
     {
         std::println(std::cerr,
-                     "[Neighbors] Warning: dump failed: {}",
+                     "[Neighbors] Warning: initial read failed: {}",
                      std::strerror(errno));
     }
     else
     {
-        std::println("[Neighbors] Dump complete: {} entry/entries.", dumped);
+        std::println("[Neighbors] Read complete: {} entry/entries.", dumped);
     }
 
-    // ── Display initial table ─────────────────────────────────────────────
+    // ── Step 2: Display the initial table ────────────────────────────────
     printNeighborTable(ctx.neighbors);
 
     // ── Enter live-event loop ─────────────────────────────────────────────
@@ -1679,39 +1710,65 @@ struct NexthopCtx
 };
 
 /**
- * @brief Netlink callback: updates the nexthop table and redraws on each event.
+ * @brief Inserts or removes one nexthop entry from @p ctx.
+ *
+ * Shared by both the silent populate callback (initial dump) and the
+ * display callback (live-event loop).
+ */
+static void nlNexthopUpdate(netlink_nexthop_event_t  event,
+                             const netlink_nexthop_t *nh,
+                             NexthopCtx              *ctx)
+{
+    if (event == NETLINK_NEXTHOP_REMOVED)
+    {
+        ctx->nexthops.erase(nh->id);
+        return;
+    }
+
+    NexthopEntry e;
+    e.id          = nh->id;
+    e.family      = nh->family;
+    e.scope       = nh->scope;
+    e.protocol    = nh->protocol;
+    e.flags       = nh->flags;
+    e.oif         = nh->oif;
+    e.oif_name    = nh->oif_name;
+    e.gateway     = nh->gateway;
+    e.blackhole   = nh->blackhole;
+    e.fdb         = nh->fdb;
+    e.master      = nh->master;
+    e.master_name = nh->master_name;
+    e.group_str   = formatNhGroup(nh->group, nh->group_count, 28);
+    e.group_type  = nh->group_type;
+    e.encap_type  = nh->encap_type;
+    ctx->nexthops[nh->id] = e;
+}
+
+/**
+ * @brief Silent populate callback — updates the in-memory table only.
+ *
+ * Used during the initial RTM_GETNEXTHOP dump so the table is not redrawn
+ * once per object.  After the dump completes the caller prints the table once.
+ */
+static void nlNexthopPopulateCb(netlink_nexthop_event_t  event,
+                                 const netlink_nexthop_t *nh,
+                                 void                    *user_data)
+{
+    nlNexthopUpdate(event, nh, static_cast<NexthopCtx*>(user_data));
+}
+
+/**
+ * @brief Live-event callback — updates the table and redraws it on every change.
+ *
+ * Used after the initial dump, for ongoing RTM_NEWNEXTHOP / RTM_DELNEXTHOP
+ * events.
  */
 static void nlNexthopCb(netlink_nexthop_event_t   event,
                         const netlink_nexthop_t  *nh,
                         void                     *user_data)
 {
     auto* ctx = static_cast<NexthopCtx*>(user_data);
-
-    if (event == NETLINK_NEXTHOP_REMOVED)
-    {
-        ctx->nexthops.erase(nh->id);
-    }
-    else
-    {
-        NexthopEntry e;
-        e.id         = nh->id;
-        e.family     = nh->family;
-        e.scope      = nh->scope;
-        e.protocol   = nh->protocol;
-        e.flags      = nh->flags;
-        e.oif        = nh->oif;
-        e.oif_name   = nh->oif_name;
-        e.gateway    = nh->gateway;
-        e.blackhole  = nh->blackhole;
-        e.fdb        = nh->fdb;
-        e.master     = nh->master;
-        e.master_name = nh->master_name;
-        e.group_str  = formatNhGroup(nh->group, nh->group_count, 28);
-        e.group_type = nh->group_type;
-        e.encap_type = nh->encap_type;
-        ctx->nexthops[nh->id] = e;
-    }
-
+    nlNexthopUpdate(event, nh, ctx);
     printNexthopTable(ctx->nexthops);
     std::cout.flush();
 }
@@ -1732,10 +1789,14 @@ static void nexthopSigHandler(int /*signo*/)
 /**
  * @brief Runs the kernel nexthop object monitor.
  *
- * 1. Opens a NETLINK_ROUTE socket subscribed to RTNLGRP_NEXTHOP.
- * 2. Dumps the existing nexthop objects and displays the table.
- * 3. Enters the live-event loop; each change redraws the table.
- * 4. Runs until SIGINT / SIGTERM.
+ * Startup sequence:
+ *  1. Opens a NETLINK_ROUTE socket subscribed to RTNLGRP_NEXTHOP.
+ *  2. Reads all existing nexthop objects from the kernel via RTM_GETNEXTHOP
+ *     dump, silently populating the in-memory map.
+ *  3. Displays the initial table once.
+ *  4. Enters the live-event loop; each RTM_NEWNEXTHOP / RTM_DELNEXTHOP
+ *     event updates the map and redraws the table.
+ *  5. Runs until SIGINT / SIGTERM.
  *
  * Nexthop objects require Linux 5.3+.  On older kernels the dump returns 0
  * entries and no live events arrive; the empty table is still displayed.
@@ -1763,10 +1824,12 @@ static int cmdWatchNexthops()
     sigaction(SIGINT,  &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    // ── Dump existing nexthop objects ────────────────────────────────────
-    std::println("[Nexthops] Dumping existing nexthop objects…");
+    // ── Step 1: Read all nexthop objects from the kernel ─────────────────
+    // Use the silent populate callback so the table is not redrawn once per
+    // object — only the single display after the dump loop matters.
+    std::println("[Nexthops] Reading nexthop objects from kernel…");
     NexthopCtx ctx;
-    const int dumped = netlink_nexthop_dump(fd, nlNexthopCb, &ctx);
+    const int dumped = netlink_nexthop_dump(fd, nlNexthopPopulateCb, &ctx);
     if (dumped < 0)
     {
         std::println(std::cerr,
@@ -1776,13 +1839,13 @@ static int cmdWatchNexthops()
     }
     else
     {
-        std::println("[Nexthops] Dump complete: {} object(s).", dumped);
+        std::println("[Nexthops] Read complete: {} object(s).", dumped);
     }
 
-    // ── Display initial table ─────────────────────────────────────────────
+    // ── Step 2: Display the initial table ────────────────────────────────
     printNexthopTable(ctx.nexthops);
 
-    // ── Enter live-event loop ─────────────────────────────────────────────
+    // ── Step 3: Watch for live nexthop events ────────────────────────────
     std::println("\n[Nexthops] Watching for kernel nexthop events…");
     std::println("[Nexthops] (Ctrl-C to stop)\n");
     std::cout.flush();
