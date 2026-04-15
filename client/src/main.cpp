@@ -586,62 +586,117 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
 
 /**
  * @brief A single entry in the dynamic /32 OSPF route table.
+ *
+ * All fields mirror the corresponding @c netlink_route32_t members so the
+ * table can display the complete netlink message payload.
  */
 struct WatchRoute
 {
-    std::string dest;     ///< Destination prefix (e.g. "10.0.0.1/32").
-    std::string gateway;  ///< Next-hop gateway (empty if none).
-    std::string iface;    ///< Outgoing interface name.
-    uint32_t    metric{0}; ///< Route metric / preference.
-    std::string srmdId;   ///< Server-assigned ID (empty when push failed).
+    std::string dest;       ///< Destination prefix (e.g. "10.0.0.1/32").
+    std::string gateway;    ///< Next-hop gateway (empty if none / 0.0.0.0).
+    std::string iface;      ///< Outgoing interface name (ifname).
+    uint32_t    ifindex{0}; ///< Outgoing interface index.
+    uint32_t    metric{0};  ///< Route metric / preference.
+    uint32_t    table{0};   ///< Routing table ID (e.g. RT_TABLE_MAIN = 254).
+    uint8_t     protocol{0}; ///< Origin protocol (RTPROT_OSPF, RTPROT_ZEBRA, …).
+    std::string srmdId;     ///< Server-assigned ID (empty when push failed).
 };
+
+/**
+ * @brief Maps a Linux rtnetlink protocol byte to a short display string.
+ *
+ * @param proto  rtm_protocol byte from the kernel route message.
+ * @return       Short human-readable label (e.g. "ospf", "zebra", "static").
+ */
+static std::string protoLabel(uint8_t proto)
+{
+    switch (proto)
+    {
+    case RTPROT_KERNEL:  return "kernel";
+    case RTPROT_BOOT:    return "boot";
+    case RTPROT_STATIC:  return "static";
+    case RTPROT_OSPF:    return "ospf";
+    case RTPROT_BGP:     return "bgp";
+    case RTPROT_RIP:     return "rip";
+    case RTPROT_ZEBRA:   return "zebra";
+    default:             return std::to_string(static_cast<int>(proto));
+    }
+}
 
 /**
  * @brief Pretty-prints the dynamic /32 OSPF route table using box-drawing lines.
  *
- * Column widths are fixed so each redraw is aligned regardless of content.
- * The table is keyed by the compound key dest|gateway|iface, so multiple
- * routes to the same destination (ECMP) appear as separate rows.
+ * Columns mirror every field of @c netlink_route32_t so the operator can
+ * inspect the complete netlink payload at a glance.  Column widths are fixed
+ * so each redraw is perfectly aligned.  The table is keyed by the compound
+ * key dest|gateway|iface so ECMP routes to the same destination appear as
+ * separate rows.
+ *
+ * Columns displayed:
+ *  Destination · Gateway · Interface · IfIdx · Metric · Table · Protocol · Server ID
  *
  * @param routes  Ordered map of compound-key → WatchRoute entries.
  */
 static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 {
-    // ── Column content widths (characters, not bytes) ─────────────────
+    // ── Column content widths (characters, not including padding spaces) ──
     // Destination : "255.255.255.255/32" = 18 chars  → 20
-    // Gateway     : "255.255.255.255"    = 15 chars  → 18
+    // Gateway     : "255.255.255.255"    = 15 chars  → 17
     // Interface   : IFNAMSIZ-1           = 15 chars  → 15
-    // Metric      : up to 10 digits      →  8 (right-aligned)
-    // Server ID   : "abcdefgh…"          =  9 chars  → 10
-    constexpr int D = 20, G = 18, I = 15, M = 8, S = 10;
+    // IfIdx       : up to 5 digits       →  5 (right-aligned)
+    // Metric      : up to 10 digits      →  7 (right-aligned)
+    // Table       : up to 5 digits       →  5 (right-aligned)
+    // Protocol    : "static" = 6 chars   →  8 (left-aligned)
+    // Server ID   : "abcdefgh…" = 9 ch   →  9 (left-aligned)
+    constexpr int cD = 20, cG = 17, cI = 15, cX = 5, cM = 7, cT = 5,
+                  cP = 8,  cS = 9;
 
-    // ── Build horizontal border segments (content + 1 space each side) ─
+    // ── UTF-8 box-drawing helpers ─────────────────────────────────────────
     auto hbar = [](int n) {
         std::string s;
-        s.reserve(static_cast<std::size_t>(n) * 3); // "─" is 3 UTF-8 bytes
+        s.reserve(static_cast<std::size_t>(n) * 3); // "─" = 3 UTF-8 bytes
         for (int i = 0; i < n; ++i) s += "─";
         return s;
     };
 
-    const std::string top    = "┌" + hbar(D+2) + "┬" + hbar(G+2) + "┬"
-                             + hbar(I+2) + "┬" + hbar(M+2) + "┬" + hbar(S+2)
-                             + "┐";
-    const std::string mid    = "├" + hbar(D+2) + "┼" + hbar(G+2) + "┼"
-                             + hbar(I+2) + "┼" + hbar(M+2) + "┼" + hbar(S+2)
-                             + "┤";
-    const std::string bottom = "└" + hbar(D+2) + "┴" + hbar(G+2) + "┴"
-                             + hbar(I+2) + "┴" + hbar(M+2) + "┴" + hbar(S+2)
-                             + "┘";
+    // Build top / mid / bottom border rows with a cell for every column.
+    auto mkBorder = [&](const char* l, const char* j, const char* r) {
+        return std::string(l)
+             + hbar(cD+2) + j + hbar(cG+2) + j + hbar(cI+2) + j
+             + hbar(cX+2) + j + hbar(cM+2) + j + hbar(cT+2) + j
+             + hbar(cP+2) + j + hbar(cS+2) + r;
+    };
 
-    // ── Title + table ─────────────────────────────────────────────────
+    const std::string top    = mkBorder("┌", "┬", "┐");
+    const std::string mid    = mkBorder("├", "┼", "┤");
+    const std::string bottom = mkBorder("└", "┴", "┘");
+
+    // ── Helper: one table row ─────────────────────────────────────────────
+    auto printRow = [&](const std::string& dst,
+                        const std::string& gw,
+                        const std::string& ifc,
+                        const std::string& ifx,
+                        const std::string& met,
+                        const std::string& tbl,
+                        const std::string& prot,
+                        const std::string& sid)
+    {
+        std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:<{}} │ {:<{}} │",
+                     dst,  cD,
+                     gw,   cG,
+                     ifc,  cI,
+                     ifx,  cX,
+                     met,  cM,
+                     tbl,  cT,
+                     prot, cP,
+                     sid,  cS);
+    };
+
+    // ── Title ─────────────────────────────────────────────────────────────
     std::println("\n OSPF /32 Route Table  ({} route(s))", routes.size());
     std::println("{}", top);
-    std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:<{}} │",
-                 "Destination", D,
-                 "Gateway",     G,
-                 "Interface",   I,
-                 "Metric",      M,
-                 "Server ID",   S);
+    printRow("Destination", "Gateway", "Interface", "IfIdx",
+             "Metric",      "Table",   "Protocol",  "Server ID");
 
     if (routes.empty())
     {
@@ -653,16 +708,21 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 
     for (const auto& [key, r] : routes)
     {
-        const std::string gw   = r.gateway.empty() ? "(none)"    : r.gateway;
-        const std::string ifc  = r.iface.empty()   ? "(none)"    : r.iface;
-        const std::string sid  = r.srmdId.empty()  ? "(pending)" : r.srmdId.substr(0, 8) + "…";
+        const std::string gw   = r.gateway.empty() ? "(none)" : r.gateway;
+        const std::string ifc  = r.iface.empty()   ? "(none)" : r.iface;
+        const std::string ifx  = r.ifindex == 0
+                                    ? "-"
+                                    : std::to_string(r.ifindex);
+        const std::string met  = std::to_string(r.metric);
+        const std::string tbl  = r.table == 0
+                                    ? "-"
+                                    : std::to_string(r.table);
+        const std::string prot = protoLabel(r.protocol);
+        const std::string sid  = r.srmdId.empty()
+                                    ? "(pending)"
+                                    : r.srmdId.substr(0, 8) + "…";
 
-        std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:<{}} │",
-                     r.dest,  D,
-                     gw,      G,
-                     ifc,     I,
-                     r.metric, M,
-                     sid,     S);
+        printRow(r.dest, gw, ifc, ifx, met, tbl, prot, sid);
     }
 
     std::println("{}", bottom);
@@ -754,7 +814,9 @@ static void nlWatchCb(netlink_event_t          event,
             if (result)
             {
                 ctx->routes[key] = WatchRoute{dest, gw, iface,
-                                              route->metric, result->id()};
+                                              route->ifindex,
+                                              route->metric, route->table,
+                                              route->protocol, result->id()};
                 std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
                             ts, dest, gw, iface, route->metric,
                             result->id().substr(0, 8) + "…");
@@ -808,7 +870,9 @@ static void nlWatchCb(netlink_event_t          event,
             {
                 /* Track with empty srmdId so REMOVED events still clean up. */
                 ctx->routes[key] = WatchRoute{dest, gw, iface,
-                                              route->metric, {}};
+                                              route->ifindex,
+                                              route->metric, route->table,
+                                              route->protocol, {}};
                 std::println("{} [ADDED]   {} → gRPC FAILED: {}",
                             ts, dest, result.error());
             }
@@ -849,7 +913,9 @@ static void nlWatchCb(netlink_event_t          event,
             if (result)
             {
                 ctx->routes[key] = WatchRoute{dest, gw, iface,
-                                              route->metric, result->id()};
+                                              route->ifindex,
+                                              route->metric, route->table,
+                                              route->protocol, result->id()};
                 std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
                             ts, dest, gw, iface, route->metric,
                             result->id().substr(0, 8) + "…");
@@ -857,7 +923,9 @@ static void nlWatchCb(netlink_event_t          event,
             else
             {
                 ctx->routes[key] = WatchRoute{dest, gw, iface,
-                                              route->metric, {}};
+                                              route->ifindex,
+                                              route->metric, route->table,
+                                              route->protocol, {}};
                 std::println("{} [CHANGED] {} → gRPC FAILED: {}",
                             ts, dest, result.error());
             }
@@ -981,7 +1049,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                     srmd::v1::ROUTE_PROTOCOL_OSPF);
 
                 WatchRoute wr{kr.destination, kr.gateway,
-                              kr.interfaceName, kr.metric, {}};
+                              kr.interfaceName, kr.interfaceIndex,
+                              kr.metric, kr.table, kr.protocol, {}};
                 if (result)
                 {
                     wr.srmdId = result->id();
