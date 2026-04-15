@@ -48,6 +48,7 @@
 #include "client/sot_config.hpp"
 #include "client/switch_config.hpp"
 #include "client/routing.hpp"
+#include "client/udp_table_server.hpp"
 #include "common/config.hpp"
 #include "server/netlink.h"
 #include "client/netlink_neigh.h"
@@ -68,6 +69,7 @@
 #include <print>
 #include <queue>
 #include <signal.h>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -732,6 +734,36 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 }
 
 /**
+ * @brief Serializes the route table to a text snapshot for UDP delivery.
+ *
+ * Format (one entry per line after the header):
+ * @code
+ *   ROUTES <count>
+ *   dest=<prefix> gw=<gw> iface=<if> ifidx=<n> metric=<m> table=<t> proto=<p> id=<srmd-id>
+ *   …
+ * @endcode
+ */
+static std::string serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
+{
+    std::ostringstream os;
+    os << "ROUTES " << routes.size() << '\n';
+    for (const auto& [key, r] : routes)
+    {
+        os << std::format(
+            "dest={} gw={} iface={} ifidx={} metric={} table={} proto={} id={}\n",
+            r.dest,
+            r.gateway.empty() ? "(none)" : r.gateway,
+            r.iface.empty()   ? "(none)" : r.iface,
+            r.ifindex,
+            r.metric,
+            r.table,
+            protoLabel(r.protocol),
+            r.srmdId.empty() ? "(pending)" : r.srmdId);
+    }
+    return os.str();
+}
+
+/**
  * @brief Context forwarded via the @c user_data pointer to the netlink callback.
  *
  * Carries the live gRPC client and the dynamic route table that tracks every
@@ -740,8 +772,9 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 struct WatchCtx
 {
     sra::RouteClient*                 client;
-    std::map<std::string, WatchRoute> routes;   ///< "dest|gw|iface" → WatchRoute (ordered; allows duplicate dests)
-    std::string                       loopback; ///< Node's own loopback IP for GetLoopbacks
+    std::map<std::string, WatchRoute> routes;     ///< "dest|gw|iface" → WatchRoute
+    std::string                       loopback;   ///< Node's own loopback IP for GetLoopbacks
+    sra::UdpTableServer*              udpServer;  ///< UDP publisher (port 9003); may be nullptr
 };
 
 /**
@@ -972,7 +1005,9 @@ static void nlWatchCb(netlink_event_t          event,
             }
         }
 
-        printRouteTable(ctx->routes);
+        /* Publish updated table via UDP (port 9003) instead of printing. */
+        if (ctx->udpServer)
+            ctx->udpServer->setRouteData(serializeRouteTable(ctx->routes));
     }
 
     std::cout.flush();
@@ -1024,10 +1059,20 @@ static void demoSigHandler(int /*signo*/)
 static int cmdNetlinkWatch(sra::RouteClient& client,
                            const std::string& configLoopback)
 {
+    // ── Start UDP server on port 9003 (routing table) ─────────────────────
+    sra::UdpTableServer udpServer;
+    udpServer.setRouteData("ROUTES 0\n");
+    if (!udpServer.start())
+    {
+        std::println(std::cerr,
+                     "[Watch] Warning: UdpTableServer failed to start; "
+                     "UDP publishing disabled.");
+    }
+
     // ── Step 1: Read existing kernel /32 OSPF routes ─────────────────────
     std::println("[Startup] Reading /32 OSPF routes from kernel routing table…");
 
-    WatchCtx ctx{&client, {}, configLoopback};
+    WatchCtx ctx{&client, {}, configLoopback, &udpServer};
 
     try
     {
@@ -1085,8 +1130,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                      e.what());
     }
 
-    // ── Step 2: Display initial route table ──────────────────────────────
-    printRouteTable(ctx.routes);
+    // ── Step 2: Publish initial route table via UDP (port 9003) ─────────
+    udpServer.setRouteData(serializeRouteTable(ctx.routes));
 
     // ── Step 3: Request loopback from server ─────────────────────────────
     std::println("\n[Startup] Requesting loopback from server…");
@@ -1133,9 +1178,9 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     netlink_run(fd, nlWatchCb, &ctx);
 
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
+    udpServer.stop();
 
-    std::println("\n[Monitor] Stopped.  Final route table:");
-    printRouteTable(ctx.routes);
+    std::println("\n[Monitor] Stopped.");
     return EXIT_SUCCESS;
 }
 
@@ -1347,11 +1392,42 @@ static void printNeighborTable(
 }
 
 /**
+ * @brief Serializes the neighbor table to a text snapshot for UDP delivery.
+ *
+ * Format (one entry per line after the header):
+ * @code
+ *   NEIGHBORS <count>
+ *   family=<f> dst=<ip> mac=<mac> iface=<if> ifidx=<n> state=<s> flags=<f>
+ *   …
+ * @endcode
+ */
+static std::string serializeNeighborTable(
+    const std::map<std::string, NeighEntry>& neighbors)
+{
+    std::ostringstream os;
+    os << "NEIGHBORS " << neighbors.size() << '\n';
+    for (const auto& [key, n] : neighbors)
+    {
+        os << std::format(
+            "family={} dst={} mac={} iface={} ifidx={} state={} flags={}\n",
+            familyLabel(n.family),
+            n.dst.empty() ? "(none)" : n.dst,
+            n.mac.empty() ? "(none)" : n.mac,
+            n.ifname.empty() ? std::to_string(n.ifindex) : n.ifname,
+            n.ifindex,
+            nudStateLabel(n.state),
+            ntfFlagsLabel(n.flags));
+    }
+    return os.str();
+}
+
+/**
  * @brief Context forwarded via user_data to the neighbor netlink callback.
  */
 struct NeighCtx
 {
     std::map<std::string, NeighEntry> neighbors; ///< "family|ifidx|dst" → entry
+    sra::UdpTableServer*              udpServer; ///< UDP publisher (port 9001); may be nullptr
 };
 
 /**
@@ -1409,17 +1485,33 @@ static void nlNeighPopulateCb(netlink_neigh_event_t  event,
 }
 
 /**
- * @brief Live-event callback — updates the table and redraws it on every change.
+ * @brief Live-event callback — updates the in-memory table and publishes via UDP.
  *
  * Used after the initial dump, for ongoing RTM_NEWNEIGH / RTM_DELNEIGH events.
+ * The neighbor table is NOT redrawn on screen; only the NetLink event itself is
+ * logged.  The updated snapshot is pushed to all UDP subscribers on port 9001.
  */
 static void nlNeighCb(netlink_neigh_event_t     event,
                       const netlink_neigh_t    *n,
                       void                     *user_data)
 {
     auto* ctx = static_cast<NeighCtx*>(user_data);
+
+    const char* evLabel = (event == NETLINK_NEIGH_ADDED)   ? "ADDED"
+                        : (event == NETLINK_NEIGH_REMOVED) ? "REMOVED"
+                                                           : "CHANGED";
+    std::println("[Neighbors] {} {} on {} (state={})",
+                 evLabel,
+                 n->dst[0] ? n->dst : "(no dst)",
+                 n->ifname[0] ? n->ifname : std::to_string(n->ifindex).c_str(),
+                 nudStateLabel(n->state));
+
     nlNeighUpdate(event, n, ctx);
-    printNeighborTable(ctx->neighbors);
+
+    /* Publish updated snapshot to UDP subscribers (port 9001). */
+    if (ctx->udpServer)
+        ctx->udpServer->setNeighborData(serializeNeighborTable(ctx->neighbors));
+
     std::cout.flush();
 }
 
@@ -1440,20 +1532,35 @@ static void neighSigHandler(int /*signo*/)
  * @brief Runs the kernel neighbor table monitor.
  *
  * Startup sequence:
- *  1. Opens a NETLINK_ROUTE socket subscribed to RTMGRP_NEIGH.
- *  2. Reads the complete current neighbor table from the kernel via
- *     RTM_GETNEIGH dump, silently populating the in-memory map.
- *  3. Displays the initial table once.
+ *  1. Starts the UDP server on port 9001.
+ *  2. Opens a NETLINK_ROUTE socket subscribed to RTMGRP_NEIGH.
+ *  3. Reads the complete current neighbor table from the kernel via
+ *     RTM_GETNEIGH dump, publishing the initial snapshot via UDP.
  *  4. Enters the live-event loop; each RTM_NEWNEIGH / RTM_DELNEIGH
- *     event updates the map and redraws the table.
+ *     event logs the event to stdout and pushes the updated snapshot via UDP.
  *  5. Runs until SIGINT / SIGTERM.
+ *
+ * The neighbor table is NOT printed to the screen; only NetLink events are
+ * logged.  Clients query / subscribe via UDP port 9001.
  *
  * @return EXIT_SUCCESS on clean stop, EXIT_FAILURE if the socket could not
  *         be opened.
  */
 static int cmdWatchNeighbors()
 {
+    // ── Start UDP server on port 9001 (neighbor table) ────────────────────
+    sra::UdpTableServer udpServer;
+    udpServer.setNeighborData("NEIGHBORS 0\n");
+    if (!udpServer.start())
+    {
+        std::println(std::cerr,
+                     "[Neighbors] Warning: UdpTableServer failed to start; "
+                     "UDP publishing disabled.");
+    }
+
     std::println("[Neighbors] Opening netlink neighbor monitor…");
+    std::println("[Neighbors] Table available via UDP port {}",
+                 sra::UDP_PORT_NEIGHBORS);
 
     int fd = netlink_neigh_init();
     if (fd < 0)
@@ -1461,6 +1568,7 @@ static int cmdWatchNeighbors()
         std::println(std::cerr,
                      "[Neighbors] Error: netlink_neigh_init failed: {}",
                      std::strerror(errno));
+        udpServer.stop();
         return EXIT_FAILURE;
     }
     g_neigh_fd = fd;
@@ -1472,10 +1580,9 @@ static int cmdWatchNeighbors()
     sigaction(SIGTERM, &sa, nullptr);
 
     // ── Step 1: Read the current neighbor table from the kernel ──────────
-    // Use the silent populate callback so the table is not redrawn once per
-    // entry — only the single display after the dump loop matters.
     std::println("[Neighbors] Reading neighbor table from kernel…");
     NeighCtx ctx;
+    ctx.udpServer = &udpServer;
     const int dumped = netlink_neigh_dump(fd, nlNeighPopulateCb, &ctx);
     if (dumped < 0)
     {
@@ -1488,8 +1595,8 @@ static int cmdWatchNeighbors()
         std::println("[Neighbors] Read complete: {} entry/entries.", dumped);
     }
 
-    // ── Step 2: Display the initial table ────────────────────────────────
-    printNeighborTable(ctx.neighbors);
+    // ── Step 2: Publish initial snapshot via UDP ─────────────────────────
+    udpServer.setNeighborData(serializeNeighborTable(ctx.neighbors));
 
     // ── Enter live-event loop ─────────────────────────────────────────────
     std::println("\n[Neighbors] Watching for kernel neighbor events…");
@@ -1499,9 +1606,9 @@ static int cmdWatchNeighbors()
     netlink_neigh_run(fd, nlNeighCb, &ctx);
 
     netlink_neigh_close(g_neigh_fd);
+    udpServer.stop();
 
-    std::println("\n[Neighbors] Stopped.  Final neighbor table:");
-    printNeighborTable(ctx.neighbors);
+    std::println("\n[Neighbors] Stopped.");
     return EXIT_SUCCESS;
 }
 
@@ -1702,11 +1809,57 @@ static void printNexthopTable(
 }
 
 /**
+ * @brief Serializes the nexthop table to a text snapshot for UDP delivery.
+ *
+ * Format (one entry per line after the header):
+ * @code
+ *   NEXTHOPS <count>
+ *   id=<n> family=<f> scope=<s> proto=<p> flags=<fl> oif=<if> gw=<gw> group=<g> bh=<b> fdb=<f> master=<m>
+ *   …
+ * @endcode
+ */
+static std::string serializeNexthopTable(
+    const std::map<uint32_t, NexthopEntry>& nexthops)
+{
+    std::ostringstream os;
+    os << "NEXTHOPS " << nexthops.size() << '\n';
+    for (const auto& [id, nh] : nexthops)
+    {
+        const std::string oif = nh.oif_name.empty()
+            ? (nh.oif ? std::to_string(nh.oif) : "-")
+            : nh.oif_name;
+        const std::string mst = nh.master_name.empty()
+            ? (nh.master ? std::to_string(nh.master) : "-")
+            : nh.master_name;
+        const std::string gtp = nh.group_type == 0
+            ? (nh.group_str == "-" ? "-" : "mpath")
+            : "resilient";
+        os << std::format(
+            "id={} family={} scope={} proto={} flags={} oif={} gw={}"
+            " group={} group_type={} bh={} fdb={} master={}\n",
+            nh.id,
+            familyLabel(nh.family),
+            scopeLabel(nh.scope),
+            protoLabel(nh.protocol),
+            rtnhFlagsLabel(nh.flags),
+            oif,
+            nh.gateway.empty() ? "-" : nh.gateway,
+            nh.group_str,
+            gtp,
+            nh.blackhole ? "yes" : "no",
+            nh.fdb       ? "yes" : "no",
+            mst);
+    }
+    return os.str();
+}
+
+/**
  * @brief Context forwarded via user_data to the nexthop netlink callback.
  */
 struct NexthopCtx
 {
-    std::map<uint32_t, NexthopEntry> nexthops; ///< nexthop ID → entry
+    std::map<uint32_t, NexthopEntry> nexthops;  ///< nexthop ID → entry
+    sra::UdpTableServer*             udpServer; ///< UDP publisher (port 9002); may be nullptr
 };
 
 /**
@@ -1758,18 +1911,34 @@ static void nlNexthopPopulateCb(netlink_nexthop_event_t  event,
 }
 
 /**
- * @brief Live-event callback — updates the table and redraws it on every change.
+ * @brief Live-event callback — updates the in-memory table and publishes via UDP.
  *
  * Used after the initial dump, for ongoing RTM_NEWNEXTHOP / RTM_DELNEXTHOP
- * events.
+ * events.  The nexthop table is NOT redrawn on screen; only the NetLink event
+ * itself is logged.  The updated snapshot is pushed to UDP subscribers on
+ * port 9002.
  */
 static void nlNexthopCb(netlink_nexthop_event_t   event,
                         const netlink_nexthop_t  *nh,
                         void                     *user_data)
 {
     auto* ctx = static_cast<NexthopCtx*>(user_data);
+
+    const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)   ? "ADDED"
+                        : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
+                                                             : "CHANGED";
+    std::println("[Nexthops] {} id={} gw={} oif={}",
+                 evLabel,
+                 nh->id,
+                 nh->gateway[0] ? nh->gateway : "-",
+                 nh->oif_name[0] ? nh->oif_name : std::to_string(nh->oif).c_str());
+
     nlNexthopUpdate(event, nh, ctx);
-    printNexthopTable(ctx->nexthops);
+
+    /* Publish updated snapshot to UDP subscribers (port 9002). */
+    if (ctx->udpServer)
+        ctx->udpServer->setNexthopData(serializeNexthopTable(ctx->nexthops));
+
     std::cout.flush();
 }
 
@@ -1806,7 +1975,19 @@ static void nexthopSigHandler(int /*signo*/)
  */
 static int cmdWatchNexthops()
 {
+    // ── Start UDP server on port 9002 (nexthop table) ─────────────────────
+    sra::UdpTableServer udpServer;
+    udpServer.setNexthopData("NEXTHOPS 0\n");
+    if (!udpServer.start())
+    {
+        std::println(std::cerr,
+                     "[Nexthops] Warning: UdpTableServer failed to start; "
+                     "UDP publishing disabled.");
+    }
+
     std::println("[Nexthops] Opening netlink nexthop monitor…");
+    std::println("[Nexthops] Table available via UDP port {}",
+                 sra::UDP_PORT_NEXTHOPS);
 
     int fd = netlink_nexthop_init();
     if (fd < 0)
@@ -1814,6 +1995,7 @@ static int cmdWatchNexthops()
         std::println(std::cerr,
                      "[Nexthops] Error: netlink_nexthop_init failed: {}",
                      std::strerror(errno));
+        udpServer.stop();
         return EXIT_FAILURE;
     }
     g_nexthop_fd = fd;
@@ -1825,10 +2007,9 @@ static int cmdWatchNexthops()
     sigaction(SIGTERM, &sa, nullptr);
 
     // ── Step 1: Read all nexthop objects from the kernel ─────────────────
-    // Use the silent populate callback so the table is not redrawn once per
-    // object — only the single display after the dump loop matters.
     std::println("[Nexthops] Reading nexthop objects from kernel…");
     NexthopCtx ctx;
+    ctx.udpServer = &udpServer;
     const int dumped = netlink_nexthop_dump(fd, nlNexthopPopulateCb, &ctx);
     if (dumped < 0)
     {
@@ -1842,8 +2023,8 @@ static int cmdWatchNexthops()
         std::println("[Nexthops] Read complete: {} object(s).", dumped);
     }
 
-    // ── Step 2: Display the initial table ────────────────────────────────
-    printNexthopTable(ctx.nexthops);
+    // ── Step 2: Publish initial snapshot via UDP ──────────────────────────
+    udpServer.setNexthopData(serializeNexthopTable(ctx.nexthops));
 
     // ── Step 3: Watch for live nexthop events ────────────────────────────
     std::println("\n[Nexthops] Watching for kernel nexthop events…");
@@ -1853,9 +2034,9 @@ static int cmdWatchNexthops()
     netlink_nexthop_run(fd, nlNexthopCb, &ctx);
 
     netlink_nexthop_close(g_nexthop_fd);
+    udpServer.stop();
 
-    std::println("\n[Nexthops] Stopped.  Final nexthop table:");
-    printNexthopTable(ctx.nexthops);
+    std::println("\n[Nexthops] Stopped.");
     return EXIT_SUCCESS;
 }
 

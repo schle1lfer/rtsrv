@@ -11,6 +11,7 @@ add_executable(
     src/routing.cpp
     src/switch_config.cpp
     src/sot_config.cpp
+    src/udp_table_server.cpp
     src/netlink_neigh.c
     src/netlink_nexthop.c
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
@@ -110,6 +111,41 @@ target_link_libraries(
 )
 
 # No install rule – development / debug tool only.
+
+# ---------------------------------------------------------------------------
+# udp_table_server_example – demonstrates UdpTableServer on ports 9001/9002/9003
+# ---------------------------------------------------------------------------
+
+add_executable(
+    udp_table_server_example
+    src/udp_table_server_example.cpp
+    src/udp_table_server.cpp
+)
+
+add_dependencies(udp_table_server_example generate_proto)
+
+target_include_directories(
+    udp_table_server_example
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${PROTO_GEN_DIR}"
+        "${BUILD_INFO_GEN_DIR}"
+)
+
+target_link_libraries(
+    udp_table_server_example
+    PRIVATE
+        common_lib
+        Threads::Threads
+)
+
+target_compile_definitions(
+    udp_table_server_example
+    PRIVATE
+        BOOST_ALL_DYN_LINK
+)
+
+# No install rule – example / development tool only.
 
 # ---------------------------------------------------------------------------
 # Post-build: create versioned snapshot
