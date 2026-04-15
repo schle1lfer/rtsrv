@@ -50,8 +50,11 @@
 #include "client/routing.hpp"
 #include "common/config.hpp"
 #include "server/netlink.h"
+#include "client/netlink_neigh.h"
+#include "client/netlink_nexthop.h"
 
 #include <arpa/inet.h>
+#include <linux/neighbour.h>
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -1137,6 +1140,663 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
 }
 
 // ---------------------------------------------------------------------------
+// Neighbor monitoring command
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Maps an address family byte to a short display string.
+ */
+static std::string familyLabel(uint8_t family)
+{
+    switch (family)
+    {
+    case AF_INET:   return "inet";
+    case AF_INET6:  return "inet6";
+    case AF_BRIDGE: return "bridge";
+    default:        return std::to_string(static_cast<int>(family));
+    }
+}
+
+/**
+ * @brief Maps a NUD_* neighbor state bitmask to a human-readable string.
+ */
+static std::string nudStateLabel(uint16_t state)
+{
+    switch (state)
+    {
+    case NUD_INCOMPLETE: return "incomplete";
+    case NUD_REACHABLE:  return "reachable";
+    case NUD_STALE:      return "stale";
+    case NUD_DELAY:      return "delay";
+    case NUD_PROBE:      return "probe";
+    case NUD_FAILED:     return "failed";
+    case NUD_NOARP:      return "noarp";
+    case NUD_PERMANENT:  return "permanent";
+    case NUD_NONE:       return "none";
+    default:             return std::format("0x{:02x}", state);
+    }
+}
+
+/**
+ * @brief Maps NTF_* neighbor flag bits to a compact flag string (e.g. "RSP").
+ *
+ * Letter codes: R=router, S=self, M=master, P=proxy, X=ext-learned,
+ *               O=offloaded, K=sticky, U=use.
+ */
+static std::string ntfFlagsLabel(uint8_t flags)
+{
+    if (flags == 0)
+        return "-";
+    std::string s;
+    if (flags & NTF_USE)         s += 'U';
+    if (flags & NTF_SELF)        s += 'S';
+    if (flags & NTF_MASTER)      s += 'M';
+    if (flags & NTF_PROXY)       s += 'P';
+    if (flags & NTF_EXT_LEARNED) s += 'X';
+#ifdef NTF_OFFLOADED
+    if (flags & NTF_OFFLOADED)   s += 'O';
+#endif
+#ifdef NTF_STICKY
+    if (flags & NTF_STICKY)      s += 'K';
+#endif
+    if (flags & NTF_ROUTER)      s += 'R';
+    return s.empty() ? std::format("0x{:02x}", flags) : s;
+}
+
+/**
+ * @brief Formats a raw link-layer address as "xx:xx:xx:xx:xx:xx".
+ *
+ * Returns "(none)" when lladdr_len == 0.
+ */
+static std::string formatMac(const uint8_t *addr, uint8_t len)
+{
+    if (len == 0)
+        return "(none)";
+    std::string s;
+    s.reserve(static_cast<std::size_t>(len) * 3);
+    for (uint8_t i = 0; i < len; ++i)
+    {
+        if (i > 0)
+            s += ':';
+        s += std::format("{:02x}", addr[i]);
+    }
+    return s;
+}
+
+/**
+ * @brief A single row in the dynamic neighbor table.
+ */
+struct NeighEntry
+{
+    uint8_t  family{0};
+    int      ifindex{0};
+    std::string ifname;
+    uint16_t state{0};
+    uint8_t  flags{0};
+    uint8_t  type{0};
+    std::string dst;
+    std::string mac;
+    uint32_t confirmed_ms{0};
+    uint32_t used_ms{0};
+    uint32_t updated_ms{0};
+    uint32_t refcnt{0};
+    uint32_t probes{0};
+    uint16_t vlan{0};
+    uint32_t master{0};
+    std::string master_name;
+    uint8_t  protocol{0};
+};
+
+/**
+ * @brief Pretty-prints the dynamic neighbor table using box-drawing lines.
+ *
+ * Columns mirror every field of netlink_neigh_t so the operator can inspect
+ * the complete netlink payload.  The table is keyed by family|ifindex|dst.
+ */
+static void printNeighborTable(
+    const std::map<std::string, NeighEntry>& neighbors)
+{
+    // ── Column content widths ─────────────────────────────────────────────
+    // Family  : "bridge"   = 6   → 6
+    // Dst     : IPv6 max   = 39  → 39
+    // MAC     : "xx:xx:xx:xx:xx:xx" = 17 → 17
+    // Iface   : IFNAMSIZ-1 = 15  → 13
+    // Idx     : 5 digits   →  5
+    // State   : "incomplete"= 10 → 10
+    // Flags   : "USMPXOKR" = 8  →  6
+    // Cfm(ms) : 10 digits  → 10
+    // Used(ms): 10 digits  → 9
+    // Upd(ms) : 10 digits  → 9
+    // Ref     : 6 digits   →  5
+    // Probes  : 6 digits   →  6
+    constexpr int cF = 6, cD = 39, cL = 17, cI = 13, cX = 5, cS = 10,
+                  cG = 6, cC = 10, cU = 9,  cP = 9,  cR = 5, cQ = 6;
+
+    auto hbar = [](int n) {
+        std::string s;
+        s.reserve(static_cast<std::size_t>(n) * 3);
+        for (int i = 0; i < n; ++i) s += "─";
+        return s;
+    };
+
+    auto mkBorder = [&](const char* l, const char* j, const char* r) {
+        return std::string(l)
+             + hbar(cF+2) + j + hbar(cD+2) + j + hbar(cL+2) + j
+             + hbar(cI+2) + j + hbar(cX+2) + j + hbar(cS+2) + j
+             + hbar(cG+2) + j + hbar(cC+2) + j + hbar(cU+2) + j
+             + hbar(cP+2) + j + hbar(cR+2) + j + hbar(cQ+2) + r;
+    };
+
+    const std::string top    = mkBorder("┌", "┬", "┐");
+    const std::string mid    = mkBorder("├", "┼", "┤");
+    const std::string bottom = mkBorder("└", "┴", "┘");
+
+    auto printRow = [&](const std::string& fam,
+                        const std::string& dst,
+                        const std::string& mac,
+                        const std::string& ifc,
+                        const std::string& idx,
+                        const std::string& sta,
+                        const std::string& flg,
+                        const std::string& cfm,
+                        const std::string& usd,
+                        const std::string& upd,
+                        const std::string& ref,
+                        const std::string& prb)
+    {
+        std::println(
+            "│ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:>{}} │",
+            fam, cF, dst, cD, mac, cL, ifc, cI,
+            idx, cX, sta, cS, flg, cG,
+            cfm, cC, usd, cU, upd, cP,
+            ref, cR, prb, cQ);
+    };
+
+    std::println("\n Neighbor Table  ({} entry/entries)", neighbors.size());
+    std::println("{}", top);
+    printRow("Family", "Destination", "MAC", "Interface",
+             "Idx",    "State",       "Flags",
+             "Cfm(ms)", "Used(ms)", "Upd(ms)", "Ref", "Probes");
+
+    if (neighbors.empty())
+    {
+        std::println("{}", bottom);
+        return;
+    }
+
+    std::println("{}", mid);
+
+    for (const auto& [key, n] : neighbors)
+    {
+        printRow(
+            familyLabel(n.family),
+            n.dst.empty() ? "(none)" : n.dst,
+            n.mac.empty() ? "(none)" : n.mac,
+            n.ifname.empty() ? std::to_string(n.ifindex) : n.ifname,
+            std::to_string(n.ifindex),
+            nudStateLabel(n.state),
+            ntfFlagsLabel(n.flags),
+            std::to_string(n.confirmed_ms),
+            std::to_string(n.used_ms),
+            std::to_string(n.updated_ms),
+            std::to_string(n.refcnt),
+            std::to_string(n.probes));
+    }
+
+    std::println("{}", bottom);
+}
+
+/**
+ * @brief Context forwarded via user_data to the neighbor netlink callback.
+ */
+struct NeighCtx
+{
+    std::map<std::string, NeighEntry> neighbors; ///< "family|ifidx|dst" → entry
+};
+
+/**
+ * @brief Netlink callback: updates the neighbor table and redraws on each event.
+ */
+static void nlNeighCb(netlink_neigh_event_t     event,
+                      const netlink_neigh_t    *n,
+                      void                     *user_data)
+{
+    auto* ctx = static_cast<NeighCtx*>(user_data);
+
+    const std::string key = familyLabel(n->family)
+                          + "|" + std::to_string(n->ifindex)
+                          + "|" + (n->dst[0] ? n->dst : "(none)");
+
+    if (event == NETLINK_NEIGH_REMOVED)
+    {
+        ctx->neighbors.erase(key);
+    }
+    else
+    {
+        NeighEntry e;
+        e.family       = n->family;
+        e.ifindex      = n->ifindex;
+        e.ifname       = n->ifname;
+        e.state        = n->state;
+        e.flags        = n->flags;
+        e.type         = n->type;
+        e.dst          = n->dst;
+        e.mac          = formatMac(n->lladdr, n->lladdr_len);
+        e.confirmed_ms = n->confirmed_ms;
+        e.used_ms      = n->used_ms;
+        e.updated_ms   = n->updated_ms;
+        e.refcnt       = n->refcnt;
+        e.probes       = n->probes;
+        e.vlan         = n->vlan;
+        e.master       = n->master;
+        e.master_name  = n->master_name;
+        e.protocol     = n->protocol;
+        ctx->neighbors[key] = e;
+    }
+
+    printNeighborTable(ctx->neighbors);
+    std::cout.flush();
+}
+
+/* File-scope fd used by the neighbor signal handler. */
+static volatile int g_neigh_fd = -1;
+
+/** @brief SIGINT/SIGTERM handler for the neighbors command. */
+static void neighSigHandler(int /*signo*/)
+{
+    if (g_neigh_fd >= 0)
+    {
+        netlink_neigh_close(g_neigh_fd);
+        g_neigh_fd = -1;
+    }
+}
+
+/**
+ * @brief Runs the kernel neighbor table monitor.
+ *
+ * 1. Opens a NETLINK_ROUTE socket subscribed to RTMGRP_NEIGH.
+ * 2. Dumps the existing kernel neighbor table and displays it.
+ * 3. Enters the live-event loop; each change redraws the table.
+ * 4. Runs until SIGINT / SIGTERM.
+ *
+ * @return EXIT_SUCCESS on clean stop, EXIT_FAILURE if the socket could not
+ *         be opened.
+ */
+static int cmdWatchNeighbors()
+{
+    std::println("[Neighbors] Opening netlink neighbor monitor…");
+
+    int fd = netlink_neigh_init();
+    if (fd < 0)
+    {
+        std::println(std::cerr,
+                     "[Neighbors] Error: netlink_neigh_init failed: {}",
+                     std::strerror(errno));
+        return EXIT_FAILURE;
+    }
+    g_neigh_fd = fd;
+
+    struct sigaction sa{};
+    sa.sa_handler = neighSigHandler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+
+    // ── Dump existing entries ─────────────────────────────────────────────
+    std::println("[Neighbors] Dumping existing neighbor table…");
+    NeighCtx ctx;
+    const int dumped = netlink_neigh_dump(fd, nlNeighCb, &ctx);
+    if (dumped < 0)
+    {
+        std::println(std::cerr,
+                     "[Neighbors] Warning: dump failed: {}",
+                     std::strerror(errno));
+    }
+    else
+    {
+        std::println("[Neighbors] Dump complete: {} entry/entries.", dumped);
+    }
+
+    // ── Display initial table ─────────────────────────────────────────────
+    printNeighborTable(ctx.neighbors);
+
+    // ── Enter live-event loop ─────────────────────────────────────────────
+    std::println("\n[Neighbors] Watching for kernel neighbor events…");
+    std::println("[Neighbors] (Ctrl-C to stop)\n");
+    std::cout.flush();
+
+    netlink_neigh_run(fd, nlNeighCb, &ctx);
+
+    netlink_neigh_close(g_neigh_fd);
+
+    std::println("\n[Neighbors] Stopped.  Final neighbor table:");
+    printNeighborTable(ctx.neighbors);
+    return EXIT_SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// Nexthop monitoring command
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Maps an RT_SCOPE_* value to a short display string.
+ */
+static std::string scopeLabel(uint8_t scope)
+{
+    switch (scope)
+    {
+    case RT_SCOPE_UNIVERSE: return "global";
+    case RT_SCOPE_SITE:     return "site";
+    case RT_SCOPE_LINK:     return "link";
+    case RT_SCOPE_HOST:     return "host";
+    case RT_SCOPE_NOWHERE:  return "nowhere";
+    default:                return std::to_string(static_cast<int>(scope));
+    }
+}
+
+/**
+ * @brief Maps RTNH_F_* nexthop flags to a compact string (e.g. "dead|onlink").
+ */
+static std::string rtnhFlagsLabel(uint32_t flags)
+{
+    if (flags == 0)
+        return "-";
+    std::vector<std::string> parts;
+    if (flags & RTNH_F_DEAD)        parts.emplace_back("dead");
+    if (flags & RTNH_F_PERVASIVE)   parts.emplace_back("perv");
+    if (flags & RTNH_F_ONLINK)      parts.emplace_back("onlink");
+    if (flags & RTNH_F_OFFLOAD)     parts.emplace_back("offload");
+    if (flags & RTNH_F_LINKDOWN)    parts.emplace_back("down");
+    if (flags & RTNH_F_UNRESOLVED)  parts.emplace_back("unresolved");
+    if (parts.empty())
+        return std::format("0x{:08x}", flags);
+    std::string s;
+    for (std::size_t i = 0; i < parts.size(); ++i)
+    {
+        if (i > 0) s += '|';
+        s += parts[i];
+    }
+    return s;
+}
+
+/**
+ * @brief Formats a nexthop group as "id(w+1),id(w+1),…" (truncated to fit).
+ */
+static std::string formatNhGroup(const netlink_nexthop_grp_t *grp,
+                                 uint32_t                     count,
+                                 int                          maxlen)
+{
+    if (count == 0)
+        return "-";
+    std::string s;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        if (i > 0) s += ',';
+        s += std::to_string(grp[i].id)
+           + '('
+           + std::to_string(static_cast<int>(grp[i].weight) + 1)
+           + ')';
+    }
+    if (static_cast<int>(s.size()) > maxlen)
+        s = s.substr(0, static_cast<std::size_t>(maxlen - 1)) + "…";
+    return s;
+}
+
+/**
+ * @brief A single row in the dynamic nexthop table.
+ */
+struct NexthopEntry
+{
+    uint32_t id{0};
+    uint8_t  family{0};
+    uint8_t  scope{0};
+    uint8_t  protocol{0};
+    uint32_t flags{0};
+    uint32_t oif{0};
+    std::string oif_name;
+    std::string gateway;
+    uint8_t  blackhole{0};
+    uint8_t  fdb{0};
+    uint32_t master{0};
+    std::string master_name;
+    std::string group_str;   ///< Pre-formatted group member list
+    uint16_t group_type{0};
+    uint16_t encap_type{0};
+};
+
+/**
+ * @brief Pretty-prints the dynamic nexthop table using box-drawing lines.
+ *
+ * Columns mirror every field of netlink_nexthop_t.
+ */
+static void printNexthopTable(
+    const std::map<uint32_t, NexthopEntry>& nexthops)
+{
+    // ── Column widths ─────────────────────────────────────────────────────
+    // ID       : 6 digits      →  6
+    // Family   : "inet6" = 5   →  6
+    // Scope    : "nowhere" = 7 →  7
+    // Protocol : "zebra" = 5   →  8
+    // Flags    : "unresolved"=10 → 12
+    // OIF      : IFNAMSIZ-1=15 → 13
+    // Gateway  : IPv6=39       → 25  (most will be IPv4)
+    // Group    : list          → 28
+    // GrpType  : "resilient"=9 →  9
+    // BH       : "yes/no"=3    →  3
+    // FDB      : "yes/no"=3    →  3
+    // Master   : IFNAMSIZ-1    → 12
+    constexpr int cI = 6, cF = 6, cO = 7, cP = 8, cL = 12, cN = 13,
+                  cG = 25, cR = 28, cT = 9, cB = 3, cD = 3, cM = 12;
+
+    auto hbar = [](int n) {
+        std::string s;
+        s.reserve(static_cast<std::size_t>(n) * 3);
+        for (int i = 0; i < n; ++i) s += "─";
+        return s;
+    };
+
+    auto mkBorder = [&](const char* l, const char* j, const char* r) {
+        return std::string(l)
+             + hbar(cI+2) + j + hbar(cF+2) + j + hbar(cO+2) + j
+             + hbar(cP+2) + j + hbar(cL+2) + j + hbar(cN+2) + j
+             + hbar(cG+2) + j + hbar(cR+2) + j + hbar(cT+2) + j
+             + hbar(cB+2) + j + hbar(cD+2) + j + hbar(cM+2) + r;
+    };
+
+    const std::string top    = mkBorder("┌", "┬", "┐");
+    const std::string mid    = mkBorder("├", "┼", "┤");
+    const std::string bottom = mkBorder("└", "┴", "┘");
+
+    auto printRow = [&](const std::string& id,
+                        const std::string& fam,
+                        const std::string& scp,
+                        const std::string& pro,
+                        const std::string& flg,
+                        const std::string& oif,
+                        const std::string& gw,
+                        const std::string& grp,
+                        const std::string& gtp,
+                        const std::string& bh,
+                        const std::string& fdb,
+                        const std::string& mst)
+    {
+        std::println(
+            "│ {:>{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │",
+            id,  cI, fam, cF, scp, cO, pro, cP,
+            flg, cL, oif, cN, gw,  cG,
+            grp, cR, gtp, cT, bh,  cB, fdb, cD, mst, cM);
+    };
+
+    std::println("\n Nexthop Table  ({} entry/entries)", nexthops.size());
+    std::println("{}", top);
+    printRow("ID", "Family", "Scope", "Protocol",
+             "Flags", "OIF", "Gateway",
+             "Group", "GrpType", "BH", "FDB", "Master");
+
+    if (nexthops.empty())
+    {
+        std::println("{}", bottom);
+        return;
+    }
+
+    std::println("{}", mid);
+
+    for (const auto& [id, nh] : nexthops)
+    {
+        const std::string oif = nh.oif_name.empty()
+                                    ? (nh.oif ? std::to_string(nh.oif) : "-")
+                                    : nh.oif_name;
+        const std::string mst = nh.master_name.empty()
+                                    ? (nh.master ? std::to_string(nh.master) : "-")
+                                    : nh.master_name;
+        const std::string gtp = nh.group_type == 0
+                                    ? (nh.group_str == "-" ? "-" : "mpath")
+                                    : "resilient";
+        printRow(
+            std::to_string(nh.id),
+            familyLabel(nh.family),
+            scopeLabel(nh.scope),
+            protoLabel(nh.protocol),
+            rtnhFlagsLabel(nh.flags),
+            oif,
+            nh.gateway.empty() ? "-" : nh.gateway,
+            nh.group_str,
+            gtp,
+            nh.blackhole ? "yes" : "no",
+            nh.fdb       ? "yes" : "no",
+            mst);
+    }
+
+    std::println("{}", bottom);
+}
+
+/**
+ * @brief Context forwarded via user_data to the nexthop netlink callback.
+ */
+struct NexthopCtx
+{
+    std::map<uint32_t, NexthopEntry> nexthops; ///< nexthop ID → entry
+};
+
+/**
+ * @brief Netlink callback: updates the nexthop table and redraws on each event.
+ */
+static void nlNexthopCb(netlink_nexthop_event_t   event,
+                        const netlink_nexthop_t  *nh,
+                        void                     *user_data)
+{
+    auto* ctx = static_cast<NexthopCtx*>(user_data);
+
+    if (event == NETLINK_NEXTHOP_REMOVED)
+    {
+        ctx->nexthops.erase(nh->id);
+    }
+    else
+    {
+        NexthopEntry e;
+        e.id         = nh->id;
+        e.family     = nh->family;
+        e.scope      = nh->scope;
+        e.protocol   = nh->protocol;
+        e.flags      = nh->flags;
+        e.oif        = nh->oif;
+        e.oif_name   = nh->oif_name;
+        e.gateway    = nh->gateway;
+        e.blackhole  = nh->blackhole;
+        e.fdb        = nh->fdb;
+        e.master     = nh->master;
+        e.master_name = nh->master_name;
+        e.group_str  = formatNhGroup(nh->group, nh->group_count, 28);
+        e.group_type = nh->group_type;
+        e.encap_type = nh->encap_type;
+        ctx->nexthops[nh->id] = e;
+    }
+
+    printNexthopTable(ctx->nexthops);
+    std::cout.flush();
+}
+
+/* File-scope fd used by the nexthop signal handler. */
+static volatile int g_nexthop_fd = -1;
+
+/** @brief SIGINT/SIGTERM handler for the nexthops command. */
+static void nexthopSigHandler(int /*signo*/)
+{
+    if (g_nexthop_fd >= 0)
+    {
+        netlink_nexthop_close(g_nexthop_fd);
+        g_nexthop_fd = -1;
+    }
+}
+
+/**
+ * @brief Runs the kernel nexthop object monitor.
+ *
+ * 1. Opens a NETLINK_ROUTE socket subscribed to RTNLGRP_NEXTHOP.
+ * 2. Dumps the existing nexthop objects and displays the table.
+ * 3. Enters the live-event loop; each change redraws the table.
+ * 4. Runs until SIGINT / SIGTERM.
+ *
+ * Nexthop objects require Linux 5.3+.  On older kernels the dump returns 0
+ * entries and no live events arrive; the empty table is still displayed.
+ *
+ * @return EXIT_SUCCESS on clean stop, EXIT_FAILURE if the socket could not
+ *         be opened.
+ */
+static int cmdWatchNexthops()
+{
+    std::println("[Nexthops] Opening netlink nexthop monitor…");
+
+    int fd = netlink_nexthop_init();
+    if (fd < 0)
+    {
+        std::println(std::cerr,
+                     "[Nexthops] Error: netlink_nexthop_init failed: {}",
+                     std::strerror(errno));
+        return EXIT_FAILURE;
+    }
+    g_nexthop_fd = fd;
+
+    struct sigaction sa{};
+    sa.sa_handler = nexthopSigHandler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+
+    // ── Dump existing nexthop objects ────────────────────────────────────
+    std::println("[Nexthops] Dumping existing nexthop objects…");
+    NexthopCtx ctx;
+    const int dumped = netlink_nexthop_dump(fd, nlNexthopCb, &ctx);
+    if (dumped < 0)
+    {
+        std::println(std::cerr,
+                     "[Nexthops] Warning: dump failed: {} "
+                     "(kernel may not support nexthop objects; requires 5.3+)",
+                     std::strerror(errno));
+    }
+    else
+    {
+        std::println("[Nexthops] Dump complete: {} object(s).", dumped);
+    }
+
+    // ── Display initial table ─────────────────────────────────────────────
+    printNexthopTable(ctx.nexthops);
+
+    // ── Enter live-event loop ─────────────────────────────────────────────
+    std::println("\n[Nexthops] Watching for kernel nexthop events…");
+    std::println("[Nexthops] (Ctrl-C to stop)\n");
+    std::cout.flush();
+
+    netlink_nexthop_run(fd, nlNexthopCb, &ctx);
+
+    netlink_nexthop_close(g_nexthop_fd);
+
+    std::println("\n[Nexthops] Stopped.  Final nexthop table:");
+    printNexthopTable(ctx.nexthops);
+    return EXIT_SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
 // grpc-proc-demo command
 // ---------------------------------------------------------------------------
 
@@ -1334,6 +1994,7 @@ int main(int argc, char* argv[])
             "Path to PEM CA certificate for TLS")
         ("command",  po::value<std::string>(),
             "Command: test | sync | echo | add | remove | get | list | watch"
+            " | neighbors | nexthops"
             " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
@@ -1379,6 +2040,10 @@ int main(int argc, char* argv[])
         std::println("  list   [--active]       List routes");
         std::println("  watch                   Listen for kernel /32 route "
                      "events and forward to srmd");
+        std::println("  neighbors               Dump and watch kernel neighbor "
+                     "(ARP/NDP) table — no gRPC required");
+        std::println("  nexthops                Dump and watch kernel nexthop "
+                     "objects (Linux 5.3+) — no gRPC required");
         std::println("  set-loopback <address>  Store a loopback address on the server");
         std::println("  get-loopback            Retrieve the stored loopback address");
         std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
@@ -1529,6 +2194,19 @@ int main(int argc, char* argv[])
     }
 
     // -----------------------------------------------------------------------
+    // Local-only commands (no gRPC connection required)
+    // -----------------------------------------------------------------------
+    if (command == "neighbors")
+    {
+        return cmdWatchNeighbors();
+    }
+
+    if (command == "nexthops")
+    {
+        return cmdWatchNexthops();
+    }
+
+    // -----------------------------------------------------------------------
     // Single-server commands
     // -----------------------------------------------------------------------
     std::println("sra  build #{}  server={}  tls={}",
@@ -1544,7 +2222,7 @@ int main(int argc, char* argv[])
     // itself after displaying the initial kernel route table.
     // -----------------------------------------------------------------------
     std::string activeLoopback = clientCfg.loopback;
-    if (command != "watch")
+    if (command != "watch" && command != "neighbors" && command != "nexthops")
     {
         std::println("[Startup] Requesting loopback from server based on client IP...");
         auto lbResult = client.requestLoopback();

@@ -11,6 +11,8 @@ add_executable(
     src/routing.cpp
     src/switch_config.cpp
     src/sot_config.cpp
+    src/netlink_neigh.c
+    src/netlink_nexthop.c
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
     ${PROTO_SRCS}
     ${GRPC_SRCS}
