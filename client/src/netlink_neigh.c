@@ -31,9 +31,15 @@
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+/* RTNLGRP_NEIGH multicast group (Linux 2.6+). */
+#ifndef RTNLGRP_NEIGH
+#define RTNLGRP_NEIGH 3
+#endif
 
 /* Receive buffer: large enough for a full-sized netlink datagram. */
 #define NL_BUF_SIZE 32768
@@ -238,10 +244,13 @@ int netlink_neigh_init(void)
     if (fd < 0)
         return -1;
 
+    /* Bind with nl_groups=0; subscribe via NETLINK_ADD_MEMBERSHIP below so
+     * that a failed subscription (e.g. inside a restricted container) does
+     * not prevent the initial dump from working. */
     struct sockaddr_nl addr;
     memset(&addr, 0, sizeof(addr));
     addr.nl_family = AF_NETLINK;
-    addr.nl_groups = RTMGRP_NEIGH; /* IPv4, IPv6, and bridge neighbors */
+    addr.nl_groups = 0;
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
@@ -249,6 +258,18 @@ int netlink_neigh_init(void)
         close(fd);
         errno = saved;
         return -1;
+    }
+
+    /* Subscribe to the neighbor multicast group.  Non-fatal: in restricted
+     * environments the dump still works and live events are simply absent. */
+    int group = RTNLGRP_NEIGH;
+    if (setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
+                   &group, sizeof(group)) < 0)
+    {
+        fprintf(stderr,
+                "netlink_neigh: multicast subscribe failed "
+                "(live events disabled): %s\n",
+                strerror(errno));
     }
 
     return fd;

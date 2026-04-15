@@ -37,6 +37,7 @@
 #include <linux/socket.h>
 #include <net/if.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -315,15 +316,16 @@ int netlink_nexthop_init(void)
         return -1;
     }
 
-    /* Subscribe to the nexthop multicast group. */
+    /* Subscribe to the nexthop multicast group.  Non-fatal: in restricted
+     * environments the dump still works and live events are simply absent. */
     int group = RTNLGRP_NEXTHOP;
     if (setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
                    &group, sizeof(group)) < 0)
     {
-        int saved = errno;
-        close(fd);
-        errno = saved;
-        return -1;
+        fprintf(stderr,
+                "netlink_nexthop: multicast subscribe failed "
+                "(live events disabled): %s\n",
+                strerror(errno));
     }
 
     return fd;
