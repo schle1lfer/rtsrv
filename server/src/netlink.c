@@ -170,6 +170,47 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
             }
             break;
 
+        case RTA_MULTIPATH:
+        {
+            /* Log each nexthop entry in the multipath list. */
+            const struct rtnexthop *rtnh =
+                (const struct rtnexthop *)RTA_DATA(rta);
+            int nhrem = (int)RTA_PAYLOAD(rta);
+            int nhidx = 0;
+
+            while (RTNH_OK(rtnh, nhrem))
+            {
+                char gw_buf[INET_ADDRSTRLEN] = "(none)";
+                char ifname[IF_NAMESIZE]      = {0};
+
+                if_indextoname((unsigned)rtnh->rtnh_ifindex, ifname);
+
+                int ilen = (int)rtnh->rtnh_len -
+                           (int)sizeof(struct rtnexthop);
+                const struct rtattr *inner =
+                    (const struct rtattr *)RTNH_DATA(rtnh);
+                for (; RTA_OK(inner, ilen); inner = RTA_NEXT(inner, ilen))
+                {
+                    if (inner->rta_type == RTA_GATEWAY &&
+                        RTA_PAYLOAD(inner) >= sizeof(struct in_addr))
+                    {
+                        inet_ntop(AF_INET, RTA_DATA(inner),
+                                  gw_buf, sizeof(gw_buf));
+                        break;
+                    }
+                }
+
+                printf("NETLINK > %s: \"RTA_MULTIPATH\"[%d]: via %s dev %s\n",
+                       tn, nhidx,
+                       gw_buf, ifname[0] ? ifname : "?");
+
+                nhrem -= (int)NLMSG_ALIGN(rtnh->rtnh_len);
+                rtnh   = RTNH_NEXT(rtnh);
+                ++nhidx;
+            }
+            break;
+        }
+
         default:
             break;
         }
