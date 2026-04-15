@@ -81,19 +81,28 @@ typedef enum
 /**
  * @brief Describes a single IPv4 /32 route event received from the kernel.
  *
- * All fields are filled from the netlink attributes present in the message.
- * If an optional attribute (gateway, oif) is absent the corresponding field
- * is left zero-initialised.
+ * Fields map directly to the struct rtmsg header members and the RTA_*
+ * rtnetlink attributes extracted from the message.  Optional attributes
+ * that were absent in the message are left zero-initialised.
  */
 typedef struct
 {
-    struct in_addr dst;            /**< Destination host address (/32). */
-    struct in_addr gateway;        /**< Next-hop gateway (0.0.0.0 if none). */
-    uint32_t       ifindex;        /**< Output interface index (0 if absent). */
-    char           ifname[IF_NAMESIZE]; /**< Interface name, NUL-terminated. */
-    uint32_t       metric;         /**< Route metric / preference. */
-    uint32_t       table;          /**< Routing table ID (e.g. RT_TABLE_MAIN). */
-    uint8_t        protocol;       /**< Origin protocol (RTPROT_ZEBRA, etc.). */
+    /* ── From struct rtmsg ─────────────────────────────────────────────── */
+    uint8_t        family;         /**< rtm_family: AF_INET (always 2 here). */
+    uint8_t        dst_len;        /**< rtm_dst_len: prefix length (always 32). */
+    uint8_t        tos;            /**< rtm_tos: type-of-service filter. */
+    uint8_t        scope;          /**< rtm_scope: RT_SCOPE_* (link/global/…). */
+    uint8_t        type;           /**< rtm_type: RTN_UNICAST (always here). */
+    uint32_t       flags;          /**< rtm_flags: RTM_F_* bitmask. */
+    uint8_t        protocol;       /**< rtm_protocol: RTPROT_ZEBRA, RTPROT_OSPF, … */
+    uint32_t       table;          /**< rtm_table / RTA_TABLE override. */
+
+    /* ── RTA_* attributes ──────────────────────────────────────────────── */
+    struct in_addr dst;            /**< RTA_DST: destination host address (/32). */
+    struct in_addr gateway;        /**< RTA_GATEWAY: next-hop (0.0.0.0 if none). */
+    uint32_t       ifindex;        /**< RTA_OIF: output interface index (0 if absent). */
+    char           ifname[IF_NAMESIZE]; /**< Resolved interface name, NUL-terminated. */
+    uint32_t       metric;         /**< RTA_PRIORITY: route metric / preference. */
 } netlink_route32_t;
 
 /* ---------------------------------------------------------------------------

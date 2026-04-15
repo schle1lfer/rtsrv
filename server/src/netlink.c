@@ -287,10 +287,18 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
         return; /* Should not happen given the caller's pre-filter */
     }
 
-    /* --- Populate route descriptor from rtnetlink attributes -------------- */
+    /* --- Populate route descriptor from rtmsg header + attributes --------- */
 
     netlink_route32_t route;
     memset(&route, 0, sizeof(route));
+
+    /* rtmsg header fields */
+    route.family   = rtm->rtm_family;
+    route.dst_len  = rtm->rtm_dst_len;
+    route.tos      = rtm->rtm_tos;
+    route.scope    = rtm->rtm_scope;
+    route.type     = rtm->rtm_type;
+    route.flags    = rtm->rtm_flags;
     route.protocol = rtm->rtm_protocol;
     route.table    = rtm->rtm_table; /* May be overridden by RTA_TABLE below */
 
