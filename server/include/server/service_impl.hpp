@@ -159,6 +159,19 @@ public:
                                  const srmd::v1::RequestLoopbackRequest* req,
                                  srmd::v1::RequestLoopbackResponse* resp) override;
 
+    /**
+     * @brief Returns all VRF routes for the calling client.
+     *
+     * Authorises by matching the client's peer IP against loopback IPv4
+     * addresses in the SOT (client IP must equal a node's loopbacks.ipv4).
+     * On success, returns every VRF → interface → prefix entry for the
+     * matched node as a flat list of VrfRoute messages.
+     * Returns STATUS_CODE_NOT_FOUND when the client IP is not in the SOT.
+     */
+    grpc::Status GetAllRoutes(grpc::ServerContext* ctx,
+                              const srmd::v1::GetAllRoutesRequest* req,
+                              srmd::v1::GetAllRoutesResponse* resp) override;
+
 private:
     /**
      * @brief Returns the current Unix epoch time in microseconds.

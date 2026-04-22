@@ -220,6 +220,19 @@ struct SotConfig
     findByManagementIp(const std::string& managementIp) const noexcept;
 
     /**
+     * @brief Looks up a node by its loopback IPv4 address.
+     *
+     * Used by GetAllRoutes to authorise a client whose gRPC peer IP must
+     * equal a node's @c loopbacks.ipv4 field in the SOT.
+     *
+     * @param loopbackIpv4  The loopback IPv4 address to match
+     *                      (e.g. "1.1.1.1").
+     * @return Const pointer to the matching @c SotNode, or @c nullptr.
+     */
+    [[nodiscard]] const SotNode*
+    findByLoopbackIpv4(const std::string& loopbackIpv4) const noexcept;
+
+    /**
      * @brief Returns the total count of prefixes across all nodes,
      *        VRFs, and interfaces.
      *

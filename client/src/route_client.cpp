@@ -341,4 +341,28 @@ std::expected<std::string, std::string> RouteClient::requestLoopback()
     return resp.loopback();
 }
 
+// ---------------------------------------------------------------------------
+// GetAllRoutes
+// ---------------------------------------------------------------------------
+
+std::expected<srmd::v1::GetAllRoutesResponse, std::string>
+RouteClient::getAllRoutes()
+{
+    srmd::v1::GetAllRoutesRequest req;
+    srmd::v1::GetAllRoutesResponse resp;
+    auto ctx = makeContext();
+    const grpc::Status status = stub_->GetAllRoutes(ctx.get(), req, &resp);
+    if (!status.ok())
+    {
+        return std::unexpected(statusToError(status));
+    }
+    if (resp.code() != srmd::v1::STATUS_CODE_OK)
+    {
+        return std::unexpected(std::format(
+            "GetAllRoutes failed ({}): {}",
+            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+    }
+    return resp;
+}
+
 } // namespace sra

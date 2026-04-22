@@ -319,6 +319,53 @@ message GetLoopbacksResponse
 }
 
 // ---------------------------------------------------------------------------
+// GetAllRoutes – all VRF routes for the requesting client
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief One IPv4 interface entry within a named VRF, returned by GetAllRoutes.
+ *
+ * Carries the complete interface context (VRF name, interface attributes, and
+ * the full prefix list) so the client can reconstruct the intended routing
+ * state for every VRF without additional queries.
+ */
+message VrfRoute
+{
+    string vrf_name = 1;                  ///< VRF name (e.g. "default").
+    string interface_name = 2;            ///< Interface name (e.g. "Ethernet0").
+    string interface_type = 3;            ///< Interface type: "nni" or "uni".
+    string local_address = 4;             ///< Local address with prefix (CIDR).
+    string nexthop = 5;                   ///< Next-hop gateway; empty for uni.
+    uint32 weight = 6;                    ///< Interface weight / preference.
+    string description = 7;              ///< Human-readable description.
+    repeated LoopbackPrefix prefixes = 8; ///< Prefixes reachable via this interface.
+}
+
+/**
+ * @brief Request to retrieve all VRF routes for the calling client.
+ *
+ * No fields are required — the server extracts the client IP from the gRPC
+ * peer string and matches it against loopback IPv4 addresses in the SOT.
+ */
+message GetAllRoutesRequest {}
+
+/**
+ * @brief Response from GetAllRoutes: all VRF routes for the identified node.
+ *
+ * The server walks every VRF → every IPv4 interface → every prefix of the
+ * SOT node whose loopback IPv4 matches the client's peer IP, and returns
+ * the complete list as a flat sequence of VrfRoute entries.
+ */
+message GetAllRoutesResponse
+{
+    StatusCode code = 1;           ///< Operation outcome.
+    string message = 2;            ///< Human-readable detail.
+    string hostname = 3;           ///< Node hostname from SOT.
+    string loopback_ipv4 = 4;      ///< Loopback IPv4 that matched the client IP.
+    repeated VrfRoute routes = 5;  ///< All VRF route entries for this node.
+}
+
+// ---------------------------------------------------------------------------
 // RequestLoopback – SOT-backed loopback lookup by client IP
 // ---------------------------------------------------------------------------
 
@@ -459,4 +506,15 @@ service SwitchRouteManager
      * IP is not registered in the SOT.
      */
     rpc RequestLoopback(RequestLoopbackRequest) returns (RequestLoopbackResponse);
+
+    /**
+     * @brief Retrieve all VRF routes for the calling client.
+     *
+     * The server matches the client's peer IP against loopback IPv4 addresses
+     * in the SOT.  Returns every VRF → interface → prefix entry for the
+     * matched node, giving the client a complete picture of its intended
+     * routing state in a single call.
+     * Returns STATUS_CODE_NOT_FOUND when the client IP is not in the SOT.
+     */
+    rpc GetAllRoutes(GetAllRoutesRequest) returns (GetAllRoutesResponse);
 }

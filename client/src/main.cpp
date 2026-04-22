@@ -112,6 +112,42 @@ static void printRoute(const srmd::v1::Route& route, int indent = 2)
 }
 
 // ---------------------------------------------------------------------------
+// Output helpers (continued)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Prints a GetAllRoutesResponse to stdout.
+ *
+ * Lists the matched hostname, loopback, and every VRF → interface → prefix
+ * entry in a structured format so the operator can verify the SOT data.
+ *
+ * @param resp  Populated GetAllRoutesResponse from the server.
+ */
+static void printAllRoutes(const srmd::v1::GetAllRoutesResponse& resp)
+{
+    std::println("GetAllRoutes: {} (loopback={})",
+                 resp.hostname(),
+                 resp.loopback_ipv4());
+    std::println("  {} VRF interface(s):", resp.routes_size());
+    for (const auto& r : resp.routes())
+    {
+        std::println("  ── vrf='{}' iface='{}' type={} local={} nexthop={}"
+                     " weight={}",
+                     r.vrf_name(),
+                     r.interface_name(),
+                     r.interface_type(),
+                     r.local_address(),
+                     r.nexthop().empty() ? "(none)" : r.nexthop(),
+                     r.weight());
+        for (const auto& p : r.prefixes())
+        {
+            std::println("       prefix={} weight={} role={} desc={}",
+                         p.prefix(), p.weight(), p.role(), p.description());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
 
@@ -1202,6 +1238,33 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
         std::println("[Startup] No loopback from server ({}); "
                      "using config loopback: '{}'",
                      lbResult.error(), ctx.loopback);
+    }
+
+    // ── Step 3b: GetLoopbacks then GetAllRoutes ───────────────────────────
+    if (!ctx.loopback.empty())
+    {
+        std::println("[Startup] GetLoopbacks for loopback '{}'…", ctx.loopback);
+        auto glResult = client.getLoopbacks(ctx.loopback);
+        if (glResult)
+        {
+            std::println("[Startup] GetLoopbacks: {} — {} interface(s)",
+                         glResult->message(), glResult->interfaces_size());
+        }
+        else
+        {
+            std::println("[Startup] GetLoopbacks failed: {}", glResult.error());
+        }
+
+        std::println("[Startup] GetAllRoutes…");
+        auto arResult = client.getAllRoutes();
+        if (arResult)
+        {
+            printAllRoutes(*arResult);
+        }
+        else
+        {
+            std::println("[Startup] GetAllRoutes failed: {}", arResult.error());
+        }
     }
 
     // ── Step 4: Start monitoring ──────────────────────────────────────────
@@ -3093,6 +3156,36 @@ int main(int argc, char* argv[])
             std::println("[vrf-route-add] loopback from srmd: {} (using config: '{}')",
                          lbResult.error(),
                          activeLoopback);
+        }
+
+        // GetLoopbacks → GetAllRoutes after the loopback is known.
+        if (!activeLoopback.empty())
+        {
+            std::println("[vrf-route-add] GetLoopbacks for loopback '{}'…",
+                         activeLoopback);
+            auto glResult = client.getLoopbacks(activeLoopback);
+            if (glResult)
+            {
+                std::println("[vrf-route-add] GetLoopbacks: {} — {} interface(s)",
+                             glResult->message(), glResult->interfaces_size());
+            }
+            else
+            {
+                std::println("[vrf-route-add] GetLoopbacks failed: {}",
+                             glResult.error());
+            }
+
+            std::println("[vrf-route-add] GetAllRoutes…");
+            auto arResult = client.getAllRoutes();
+            if (arResult)
+            {
+                printAllRoutes(*arResult);
+            }
+            else
+            {
+                std::println("[vrf-route-add] GetAllRoutes failed: {}",
+                             arResult.error());
+            }
         }
 
         // Join: wait for the VRF request/response cycle to finish.

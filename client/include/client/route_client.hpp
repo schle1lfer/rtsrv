@@ -180,6 +180,19 @@ public:
      */
     [[nodiscard]] std::expected<std::string, std::string> requestLoopback();
 
+    /**
+     * @brief Calls GetAllRoutes to retrieve all VRF routes for this client.
+     *
+     * The server matches the caller's gRPC peer IP against loopback IPv4
+     * addresses in the SOT.  On success the response carries every
+     * VRF → interface → prefix entry for the matched node.
+     * Returns an error string when the client IP is not found in the SOT.
+     *
+     * @return Populated GetAllRoutesResponse on success, or an error string.
+     */
+    [[nodiscard]] std::expected<srmd::v1::GetAllRoutesResponse, std::string>
+    getAllRoutes();
+
 private:
     /**
      * @brief Builds and returns a ClientContext with the configured deadline.
