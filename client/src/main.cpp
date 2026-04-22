@@ -2849,7 +2849,8 @@ int main(int argc, char* argv[])
     // itself after displaying the initial kernel route table.
     // -----------------------------------------------------------------------
     std::string activeLoopback = clientCfg.loopback;
-    if (command != "watch" && command != "neighbors" && command != "nexthops")
+    if (command != "watch" && command != "neighbors" && command != "nexthops"
+        && command != "vrf-route-add")
     {
         std::println("[Startup] Requesting loopback from server based on client IP...");
         auto lbResult = client.requestLoopback();
@@ -3070,12 +3071,31 @@ int main(int argc, char* argv[])
         if (!args.empty())
             vrfCfg.socket_path = args[0];
 
-        std::println("[vrf-route-add] socket={}", vrfCfg.socket_path);
+        std::println("[vrf-route-add] socket={} — starting VRF thread",
+                     vrfCfg.socket_path);
 
+        // Start the UNIX-domain VRF thread first so it runs concurrently with
+        // the gRPC RequestLoopback call below.
         sra::VrfUdpClient vrfClient{vrfCfg};
         vrfClient.start();
 
-        // Join: the thread exits after one request/response cycle.
+        // Issue RequestLoopback to srmd in parallel while the VRF thread is
+        // connecting to the unix-domain server.
+        std::println("[vrf-route-add] requesting loopback from srmd in parallel…");
+        auto lbResult = client.requestLoopback();
+        if (lbResult)
+        {
+            std::println("[vrf-route-add] loopback from srmd: '{}'", *lbResult);
+            activeLoopback = *lbResult;
+        }
+        else
+        {
+            std::println("[vrf-route-add] loopback from srmd: {} (using config: '{}')",
+                         lbResult.error(),
+                         activeLoopback);
+        }
+
+        // Join: wait for the VRF request/response cycle to finish.
         vrfClient.stop();
         return EXIT_SUCCESS;
     }
