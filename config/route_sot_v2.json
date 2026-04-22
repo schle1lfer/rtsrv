@@ -139,6 +139,49 @@
           }
         }
       }
+    },
+    "10.124.224.60": {
+      "hostname": "Leaf4",
+      "loopbacks": {
+        "ipv4": "6.6.6.6",
+        "ipv6": "fd00:100::6"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {
+              "Ethernet0": {
+                "type": "nni",
+                "local_address": "192.168.1.10/30",
+                "nexthop": "192.168.1.1",
+                "weight": 100,
+                "description": "Server#4",
+                "prefixes": [
+                  {
+                    "prefix": "10.0.1.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#7"
+                  },
+                  {
+                    "prefix": "10.0.2.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#8"
+                  },
+                  {
+                    "prefix": "10.0.3.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#9"
+                  }
+                ]
+              }
+            },
+            "ipv6": {}
+          }
+        }
+      }
     }
   }
 }

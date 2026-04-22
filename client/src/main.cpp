@@ -55,8 +55,11 @@
 #include "client/netlink_neigh.h"
 #include "client/netlink_nexthop.h"
 
+#include "lib/cmd_proto.hpp"
+
 #include <arpa/inet.h>
 #include <linux/neighbour.h>
+#include <poll.h>
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -1097,6 +1100,33 @@ static volatile int g_startup_nexthop_fd = -1;
 
 /* File-scope fd used by the signal handler to unblock netlink_run(). */
 static volatile int g_watch_fd = -1;
+
+/** @brief Stop flag for the 'run' daemon command (set by signal handler). */
+static volatile sig_atomic_t g_run_stop = 0;
+
+/** @brief SIGINT/SIGTERM handler for the 'run' daemon command.
+ *
+ *  Sets g_run_stop and closes startup netlink fds so all background
+ *  monitor threads unblock and can be joined cleanly. */
+static void runSigHandler(int /*signo*/)
+{
+    g_run_stop = 1;
+    if (g_startup_route_fd >= 0)
+    {
+        netlink_close(g_startup_route_fd);
+        g_startup_route_fd = -1;
+    }
+    if (g_startup_neigh_fd >= 0)
+    {
+        netlink_neigh_close(g_startup_neigh_fd);
+        g_startup_neigh_fd = -1;
+    }
+    if (g_startup_nexthop_fd >= 0)
+    {
+        netlink_nexthop_close(g_startup_nexthop_fd);
+        g_startup_nexthop_fd = -1;
+    }
+}
 
 /** @brief SIGINT/SIGTERM handler for the watch command.
  *
@@ -3128,23 +3158,273 @@ int main(int argc, char* argv[])
         return cmdGrpcProcDemo(client);
     }
 
+    // -----------------------------------------------------------------------
+    // 'run' command — full SRA daemon mode
+    //
+    // Startup sequence:
+    //   1. Start GrpcProc (non-blocking gRPC via background thread).
+    //   2. RequestLoopback → if PERMISSION_DENIED, close channel and exit.
+    //   3. GetLoopbacks(loopback) → log interface list.
+    //   4. Display nexthop / neighbor / /32 route tables (populated at startup).
+    //   5. GetAllRoutes → build VrfsRouteRequest for each nni interface,
+    //      looking up nexthop_id from the kernel nexthop table.
+    //   6. Submit VrfsRouteRequest to VrfUdpClient (non-blocking Unix socket).
+    //   7. Main loop: keep running until SIGINT/SIGTERM.
+    //
+    // GRPC and Unix-domain sockets both operate in non-blocking mode:
+    //   - gRPC: all RPCs are submitted to GrpcProc and executed in a
+    //     dedicated background thread; the main thread polls responses.
+    //   - Unix-domain: VrfUdpClient sets O_NONBLOCK + uses poll() for I/O.
+    // -----------------------------------------------------------------------
+    if (command == "run")
+    {
+        // Install signal handler for the run command.
+        {
+            struct sigaction sa{};
+            sa.sa_handler = runSigHandler;
+            sigemptyset(&sa.sa_mask);
+            sigaction(SIGINT,  &sa, nullptr);
+            sigaction(SIGTERM, &sa, nullptr);
+        }
+
+        std::println("[run] SRA daemon starting — server={} tls={}",
+                     server, useTls);
+
+        // ── Step 1: Start GrpcProc (non-blocking gRPC) ──────────────────────
+        sra::GrpcProc grpcProc(client, /*autoStart=*/true);
+        std::println("[run] GrpcProc started (non-blocking gRPC thread)");
+
+        // ── Step 2: RequestLoopback ──────────────────────────────────────────
+        std::println("[run] [gRPC] Submitting RequestLoopback…");
+        const uint64_t lbId = grpcProc.submit(sra::RequestLoopbackParams{});
+        auto lbResp = grpcProc.waitForResponse(lbId, std::chrono::seconds(30));
+        if (!lbResp)
+        {
+            std::println(std::cerr, "[run] RequestLoopback: timeout");
+            return EXIT_FAILURE;
+        }
+
+        const auto& lbResult =
+            std::get<sra::RequestLoopbackResult>(lbResp->payload);
+        if (!lbResult)
+        {
+            std::println(std::cerr,
+                         "[run] RequestLoopback failed: {} — "
+                         "SRA IP not in SOT, closing gRPC connection",
+                         lbResult.error());
+            grpcProc.stop();
+            return EXIT_FAILURE;
+        }
+
+        const std::string loopback = *lbResult;
+        std::println("[run] Loopback from SRMD: '{}'", loopback);
+
+        // ── Step 3: GetLoopbacks ─────────────────────────────────────────────
+        std::println("[run] [gRPC] Submitting GetLoopbacks('{}')…", loopback);
+        const uint64_t glId =
+            grpcProc.submit(sra::GetLoopbacksParams{loopback});
+        auto glResp =
+            grpcProc.waitForResponse(glId, std::chrono::seconds(30));
+        if (glResp)
+        {
+            const auto& glResult =
+                std::get<sra::GetLoopbacksResult>(glResp->payload);
+            if (glResult)
+            {
+                std::println("[run] GetLoopbacks: {} — {} interface(s)",
+                             glResult->message(),
+                             glResult->interfaces_size());
+                for (const auto& ifc : glResult->interfaces())
+                {
+                    std::println("[run]   iface='{}' type={} local={} "
+                                 "nexthop={} weight={}",
+                                 ifc.name(), ifc.type(), ifc.local_address(),
+                                 ifc.nexthop().empty() ? "(none)" : ifc.nexthop(),
+                                 ifc.weight());
+                    for (const auto& pfx : ifc.prefixes())
+                    {
+                        std::println("[run]     prefix={} weight={} role={}",
+                                     pfx.prefix(), pfx.weight(), pfx.role());
+                    }
+                }
+            }
+            else
+            {
+                std::println("[run] GetLoopbacks failed: {}",
+                             glResult.error());
+            }
+        }
+
+        // ── Step 4: Log kernel tables (populated during startup) ─────────────
+        std::println("[run] Nexthop table : {} entry/entries",
+                     startupNhCtx.nexthops.size());
+        for (const auto& [id, nh] : startupNhCtx.nexthops)
+        {
+            std::println("[run]   nexthop id={} gw='{}' oif='{}' proto={}",
+                         id,
+                         nh.gateway.empty() ? "-" : nh.gateway,
+                         nh.oif_name.empty()
+                             ? std::to_string(nh.oif)
+                             : nh.oif_name,
+                         static_cast<unsigned>(nh.protocol));
+        }
+
+        std::println("[run] Neighbor table: {} entry/entries",
+                     startupNeighCtx.neighbors.size());
+        std::println("[run] /32 route table: {} entry/entries",
+                     startupRouteCtx.routes.size());
+
+        // ── Step 5: GetAllRoutes ─────────────────────────────────────────────
+        std::println("[run] [gRPC] Submitting GetAllRoutes…");
+        const uint64_t arId = grpcProc.submit(sra::GetAllRoutesParams{});
+        auto arResp =
+            grpcProc.waitForResponse(arId, std::chrono::seconds(30));
+        if (!arResp)
+        {
+            std::println(std::cerr, "[run] GetAllRoutes: timeout");
+            return EXIT_FAILURE;
+        }
+
+        const auto& arResult =
+            std::get<sra::GetAllRoutesResult>(arResp->payload);
+        if (!arResult)
+        {
+            std::println(std::cerr, "[run] GetAllRoutes failed: {}",
+                         arResult.error());
+            return EXIT_FAILURE;
+        }
+
+        printAllRoutes(*arResult);
+
+        // ── Step 6: Build VrfsRouteRequest from GetAllRoutes (nni only) ──────
+        // For each VrfRoute with interface_type == "nni":
+        //   • look up nexthop_id from the kernel nexthop table by gateway IP
+        //   • convert each prefix string to binary PrefixIpv4 entries
+        const std::string udSocketPath =
+            args.empty() ? "/tmp/ud_server.sock" : args[0];
+
+        sra::VrfUdpClient vrfClient(udSocketPath);
+        vrfClient.start();
+        std::println("[run] VrfUdpClient started (non-blocking Unix socket='{}')",
+                     udSocketPath);
+
+        cmdproto::VrfsRouteRequest vrfsReq;
+        int nniCount = 0;
+
+        for (const auto& route : arResult->routes())
+        {
+            if (route.interface_type() != "nni")
+                continue;
+            if (route.nexthop().empty())
+                continue;
+
+            // Look up nexthop_id from the kernel nexthop table by gateway IP.
+            uint32_t nexthopId = 0;
+            for (const auto& [id, nh] : startupNhCtx.nexthops)
+            {
+                if (nh.gateway == route.nexthop())
+                {
+                    nexthopId = id;
+                    break;
+                }
+            }
+
+            // Parse nexthop address into binary form.
+            struct in_addr nhAddr{};
+            if (::inet_pton(AF_INET, route.nexthop().c_str(), &nhAddr) != 1)
+            {
+                std::println(std::cerr,
+                             "[run] invalid nexthop address '{}' — skipping",
+                             route.nexthop());
+                continue;
+            }
+            const auto* nhBytes =
+                reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+
+            cmdproto::VrfsRequest vrfr{};
+            // VRF name (null-padded fixed array).
+            const std::string& vn = route.vrf_name();
+            for (std::size_t k = 0;
+                 k < cmdproto::VRFS_NAME_SIZE && k < vn.size(); ++k)
+            {
+                vrfr.vrfs_name[k] = vn[k];
+            }
+            vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
+                                      nhBytes[2], nhBytes[3]};
+            vrfr.nexthop_id_ipv4   = nexthopId;
+
+            // Convert each prefix string "A.B.C.D/N" to PrefixIpv4.
+            for (const auto& pfx : route.prefixes())
+            {
+                const std::string& pfxStr = pfx.prefix();
+                const auto slash = pfxStr.rfind('/');
+                if (slash == std::string::npos)
+                    continue;
+                const std::string addrStr = pfxStr.substr(0, slash);
+                const auto maskLen = static_cast<std::uint8_t>(
+                    std::stoul(pfxStr.substr(slash + 1)));
+
+                struct in_addr pfxAddr{};
+                if (::inet_pton(AF_INET, addrStr.c_str(), &pfxAddr) != 1)
+                    continue;
+                const auto* pfxBytes =
+                    reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
+
+                vrfr.prefixes.push_back(cmdproto::PrefixIpv4{
+                    {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]},
+                    maskLen});
+            }
+
+            std::println("[run] nni VRF entry: vrf='{}' nexthop='{}' "
+                         "nexthop_id={} prefixes={}",
+                         route.vrf_name(), route.nexthop(),
+                         nexthopId, vrfr.prefixes.size());
+
+            vrfsReq.vrfs_requests.push_back(std::move(vrfr));
+            ++nniCount;
+        }
+
+        if (nniCount > 0)
+        {
+            std::println("[run] Submitting VrfsRouteRequest ({} nni VRF(s)) "
+                         "to Unix socket…", nniCount);
+            vrfClient.submit(std::move(vrfsReq));
+        }
+        else
+        {
+            std::println("[run] No nni interfaces found in GetAllRoutes "
+                         "response — no VRF route-add request sent");
+        }
+
+        // ── Step 7: Main daemon loop ──────────────────────────────────────────
+        // Netlink background threads (routes, neighbors, nexthops) keep
+        // running and update the in-memory tables automatically.
+        // The gRPC channel stays open via GrpcProc.
+        // The VrfUdpClient thread awaits further submit() calls.
+        std::println("[run] Daemon running (Ctrl-C to stop)…");
+        while (!g_run_stop)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        std::println("[run] Shutdown signal received — stopping");
+        vrfClient.stop();
+        grpcProc.stop();
+        return EXIT_SUCCESS;
+    }
+
     if (command == "vrf-route-add")
     {
-        sra::VrfUdpClientConfig vrfCfg;
-        if (!args.empty())
-            vrfCfg.socket_path = args[0];
+        const std::string socketPath =
+            args.empty() ? "/tmp/ud_server.sock" : args[0];
 
-        std::println("[vrf-route-add] socket={} — starting VRF thread",
-                     vrfCfg.socket_path);
+        std::println("[vrf-route-add] socket={} — starting VRF thread", socketPath);
 
-        // Start the UNIX-domain VRF thread first so it runs concurrently with
-        // the gRPC RequestLoopback call below.
-        sra::VrfUdpClient vrfClient{vrfCfg};
+        sra::VrfUdpClient vrfClient(socketPath);
         vrfClient.start();
 
-        // Issue RequestLoopback to srmd in parallel while the VRF thread is
-        // connecting to the unix-domain server.
-        std::println("[vrf-route-add] requesting loopback from srmd in parallel…");
+        // RequestLoopback to identify this node in the SOT.
+        std::println("[vrf-route-add] requesting loopback from srmd…");
         auto lbResult = client.requestLoopback();
         if (lbResult)
         {
@@ -3154,41 +3434,79 @@ int main(int argc, char* argv[])
         else
         {
             std::println("[vrf-route-add] loopback from srmd: {} (using config: '{}')",
-                         lbResult.error(),
-                         activeLoopback);
+                         lbResult.error(), activeLoopback);
         }
 
-        // GetLoopbacks → GetAllRoutes after the loopback is known.
-        if (!activeLoopback.empty())
+        // GetAllRoutes then build and submit a VrfsRouteRequest (nni only).
+        std::println("[vrf-route-add] GetAllRoutes…");
+        auto arResult = client.getAllRoutes();
+        if (arResult)
         {
-            std::println("[vrf-route-add] GetLoopbacks for loopback '{}'…",
-                         activeLoopback);
-            auto glResult = client.getLoopbacks(activeLoopback);
-            if (glResult)
+            printAllRoutes(*arResult);
+
+            cmdproto::VrfsRouteRequest vrfsReq;
+            for (const auto& route : arResult->routes())
             {
-                std::println("[vrf-route-add] GetLoopbacks: {} — {} interface(s)",
-                             glResult->message(), glResult->interfaces_size());
-            }
-            else
-            {
-                std::println("[vrf-route-add] GetLoopbacks failed: {}",
-                             glResult.error());
+                if (route.interface_type() != "nni")
+                    continue;
+                if (route.nexthop().empty())
+                    continue;
+
+                struct in_addr nhAddr{};
+                if (::inet_pton(AF_INET, route.nexthop().c_str(), &nhAddr) != 1)
+                    continue;
+                const auto* nhBytes =
+                    reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+
+                cmdproto::VrfsRequest vrfr{};
+                const std::string& vn = route.vrf_name();
+                for (std::size_t k = 0;
+                     k < cmdproto::VRFS_NAME_SIZE && k < vn.size(); ++k)
+                    vrfr.vrfs_name[k] = vn[k];
+                vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
+                                          nhBytes[2], nhBytes[3]};
+                vrfr.nexthop_id_ipv4   = 0; // no kernel nexthop table in this mode
+
+                for (const auto& pfx : route.prefixes())
+                {
+                    const std::string& pfxStr = pfx.prefix();
+                    const auto slash = pfxStr.rfind('/');
+                    if (slash == std::string::npos)
+                        continue;
+                    struct in_addr pfxAddr{};
+                    if (::inet_pton(AF_INET, pfxStr.substr(0, slash).c_str(),
+                                    &pfxAddr) != 1)
+                        continue;
+                    const auto* pb =
+                        reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
+                    const auto maskLen = static_cast<std::uint8_t>(
+                        std::stoul(pfxStr.substr(slash + 1)));
+                    vrfr.prefixes.push_back(cmdproto::PrefixIpv4{
+                        {pb[0], pb[1], pb[2], pb[3]}, maskLen});
+                }
+
+                vrfsReq.vrfs_requests.push_back(std::move(vrfr));
             }
 
-            std::println("[vrf-route-add] GetAllRoutes…");
-            auto arResult = client.getAllRoutes();
-            if (arResult)
+            if (!vrfsReq.vrfs_requests.empty())
             {
-                printAllRoutes(*arResult);
+                std::println("[vrf-route-add] submitting {} nni VRF(s) to "
+                             "Unix socket…",
+                             vrfsReq.vrfs_requests.size());
+                vrfClient.submit(std::move(vrfsReq));
             }
             else
             {
-                std::println("[vrf-route-add] GetAllRoutes failed: {}",
-                             arResult.error());
+                std::println("[vrf-route-add] no nni interfaces found — "
+                             "no request sent");
             }
         }
+        else
+        {
+            std::println("[vrf-route-add] GetAllRoutes failed: {}",
+                         arResult.error());
+        }
 
-        // Join: wait for the VRF request/response cycle to finish.
         vrfClient.stop();
         return EXIT_SUCCESS;
     }

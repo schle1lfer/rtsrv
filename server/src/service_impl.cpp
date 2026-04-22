@@ -462,11 +462,15 @@ SwitchRouteManagerImpl::RequestLoopback(grpc::ServerContext* ctx,
     if (!node)
     {
         BOOST_LOG_TRIVIAL(warning) << std::format(
-            "[RequestLoopback] clientIp='{}' not found in SOT", clientIp);
-        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
+            "[RequestLoopback] clientIp='{}' not found in SOT — "
+            "closing connection", clientIp);
+        resp->set_code(srmd::v1::STATUS_CODE_PERMISSION_DENIED);
         resp->set_message(std::format(
-            "Client IP '{}' is not registered in the SOT", clientIp));
-        return grpc::Status::OK;
+            "Client IP '{}' is not registered in the SOT — connection rejected",
+            clientIp));
+        return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                            std::format("SRA IP '{}' not in SOT nodes_by_loopback",
+                                        clientIp));
     }
 
     BOOST_LOG_TRIVIAL(info) << std::format(
@@ -494,17 +498,17 @@ SwitchRouteManagerImpl::GetAllRoutes(grpc::ServerContext* ctx,
     BOOST_LOG_TRIVIAL(info) << std::format(
         "[GetAllRoutes] peer='{}' clientIp='{}'", ctx->peer(), clientIp);
 
-    // Authorise: client IP must equal a node's loopback IPv4 in the SOT.
-    const SotNode* node = sotConfig_.findByLoopbackIpv4(clientIp);
+    // Authorise: client IP must be registered as a management IP in the SOT.
+    // Using the same lookup as RequestLoopback so that the SRA can call both
+    // RPCs on the same gRPC channel (same source IP).
+    const SotNode* node = sotConfig_.findByManagementIp(clientIp);
     if (!node)
     {
         BOOST_LOG_TRIVIAL(warning) << std::format(
-            "[GetAllRoutes] clientIp='{}' not found as loopback in SOT",
-            clientIp);
+            "[GetAllRoutes] clientIp='{}' not found in SOT", clientIp);
         resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
         resp->set_message(std::format(
-            "Client IP '{}' does not match any loopback IPv4 in the SOT",
-            clientIp));
+            "Client IP '{}' is not registered in the SOT", clientIp));
         return grpc::Status::OK;
     }
 

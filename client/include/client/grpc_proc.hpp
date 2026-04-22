@@ -148,6 +148,16 @@ struct GetLoopbacksParams
 };
 
 /**
+ * @brief Payload for a RequestLoopback RPC request (no parameters).
+ */
+struct RequestLoopbackParams {};
+
+/**
+ * @brief Payload for a GetAllRoutes RPC request (no parameters).
+ */
+struct GetAllRoutesParams {};
+
+/**
  * @brief Discriminated union of all possible request payloads.
  *
  * The active alternative determines which RPC the grpc_proc thread will call.
@@ -161,7 +171,9 @@ using RequestPayload = std::variant<
     ListRoutesParams,
     SetLoopbackParams,
     GetLoopbackParams,
-    GetLoopbacksParams>;
+    GetLoopbacksParams,
+    RequestLoopbackParams, // 9
+    GetAllRoutesParams>;   // 10
 
 // ---------------------------------------------------------------------------
 // Response result types
@@ -195,6 +207,13 @@ using GetLoopbackResult = std::expected<std::string, std::string>;
 using GetLoopbacksResult =
     std::expected<srmd::v1::GetLoopbacksResponse, std::string>;
 
+/** @brief Result type for a completed RequestLoopback RPC. */
+using RequestLoopbackResult = std::expected<std::string, std::string>;
+
+/** @brief Result type for a completed GetAllRoutes RPC. */
+using GetAllRoutesResult =
+    std::expected<srmd::v1::GetAllRoutesResponse, std::string>;
+
 /**
  * @brief Discriminated union of all possible response payloads.
  *
@@ -202,24 +221,34 @@ using GetLoopbacksResult =
  * corresponding request.
  *
  * @note Some result types are identical (e.g. AddRouteResult and GetRouteResult
- *       are both expected<Route, string>; SetLoopbackResult and GetLoopbackResult
- *       are both expected<string, string>).  The dispatch() function therefore
- *       uses std::in_place_index to construct these alternatives unambiguously.
- *       Index mapping (0-based):
- *         0 EchoResult, 1 HeartbeatResult, 2 AddRouteResult,
- *         3 RemoveRouteResult, 4 GetRouteResult, 5 ListRoutesResult,
- *         6 SetLoopbackResult, 7 GetLoopbackResult, 8 GetLoopbacksResult
+ *       are both expected<Route, string>; SetLoopbackResult, GetLoopbackResult,
+ *       and RequestLoopbackResult are all expected<string, string>).
+ *       The dispatch() function uses std::in_place_index to select the correct
+ *       alternative unambiguously.  Index mapping (0-based):
+ *         0  EchoResult
+ *         1  HeartbeatResult
+ *         2  AddRouteResult       (= expected<Route, string>)
+ *         3  RemoveRouteResult
+ *         4  GetRouteResult       (= expected<Route, string>)
+ *         5  ListRoutesResult
+ *         6  SetLoopbackResult    (= expected<string, string>)
+ *         7  GetLoopbackResult    (= expected<string, string>)
+ *         8  GetLoopbacksResult
+ *         9  RequestLoopbackResult (= expected<string, string>)
+ *        10  GetAllRoutesResult
  */
 using ResponsePayload = std::variant<
-    EchoResult,          // 0
-    HeartbeatResult,     // 1
-    AddRouteResult,      // 2  (= expected<Route, string>)
-    RemoveRouteResult,   // 3
-    GetRouteResult,      // 4  (= expected<Route, string>)
-    ListRoutesResult,    // 5
-    SetLoopbackResult,   // 6  (= expected<string, string>)
-    GetLoopbackResult,   // 7  (= expected<string, string>)
-    GetLoopbacksResult>; // 8
+    EchoResult,              // 0
+    HeartbeatResult,         // 1
+    AddRouteResult,          // 2  (= expected<Route, string>)
+    RemoveRouteResult,       // 3
+    GetRouteResult,          // 4  (= expected<Route, string>)
+    ListRoutesResult,        // 5
+    SetLoopbackResult,       // 6  (= expected<string, string>)
+    GetLoopbackResult,       // 7  (= expected<string, string>)
+    GetLoopbacksResult,      // 8
+    RequestLoopbackResult,   // 9  (= expected<string, string>)
+    GetAllRoutesResult>;     // 10
 
 // ---------------------------------------------------------------------------
 // Request structure
