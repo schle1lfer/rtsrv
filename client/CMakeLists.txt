@@ -12,6 +12,7 @@ add_executable(
     src/switch_config.cpp
     src/sot_config.cpp
     src/udp_table_server.cpp
+    src/vrf_udp_client.cpp
     src/netlink_neigh.c
     src/netlink_nexthop.c
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
@@ -26,6 +27,7 @@ target_include_directories(
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_SOURCE_DIR}/server/include"
+        "${CMAKE_SOURCE_DIR}/unix_domain"
         "${PROTO_GEN_DIR}"
         "${BUILD_INFO_GEN_DIR}"
 )
@@ -34,6 +36,7 @@ target_link_libraries(
     sra
     PRIVATE
         common_lib
+        unix_domain_lib
         Threads::Threads
         protobuf::libprotobuf
         gRPC::grpc++

@@ -49,6 +49,7 @@
 #include "client/switch_config.hpp"
 #include "client/routing.hpp"
 #include "client/udp_table_server.hpp"
+#include "client/vrf_udp_client.hpp"
 #include "common/config.hpp"
 #include "server/netlink.h"
 #include "client/netlink_neigh.h"
@@ -2439,7 +2440,8 @@ int main(int argc, char* argv[])
         ("command",  po::value<std::string>(),
             "Command: test | sync | echo | add | remove | get | list | watch"
             " | neighbors | nexthops"
-            " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo")
+            " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo"
+            " | vrf-route-add")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -2492,6 +2494,8 @@ int main(int argc, char* argv[])
         std::println("  get-loopback            Retrieve the stored loopback address");
         std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
         std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
+        std::println("  vrf-route-add [socket]  Send a VrfsRouteRequest to a unix-domain socket server");
+        std::println("                          (default socket: /tmp/ud_server.sock)");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -3058,6 +3062,22 @@ int main(int argc, char* argv[])
     if (command == "grpc-proc-demo")
     {
         return cmdGrpcProcDemo(client);
+    }
+
+    if (command == "vrf-route-add")
+    {
+        sra::VrfUdpClientConfig vrfCfg;
+        if (!args.empty())
+            vrfCfg.socket_path = args[0];
+
+        std::println("[vrf-route-add] socket={}", vrfCfg.socket_path);
+
+        sra::VrfUdpClient vrfClient{vrfCfg};
+        vrfClient.start();
+
+        // Join: the thread exits after one request/response cycle.
+        vrfClient.stop();
+        return EXIT_SUCCESS;
     }
 
     std::println(std::cerr, "Unknown command: '{}'", command);

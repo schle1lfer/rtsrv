@@ -54,3 +54,7 @@ bin/
 sbin/
 etc/
 lib/
+
+# Allow unix_domain source library (source files, not compiled artifacts)
+!unix_domain/lib/
+!unix_domain/lib/**

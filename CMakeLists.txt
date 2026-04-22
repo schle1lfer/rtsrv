@@ -204,6 +204,7 @@ add_custom_target(
 # Subdirectories
 # ---------------------------------------------------------------------------
 add_subdirectory(common)
+add_subdirectory(unix_domain)
 add_subdirectory(server)
 add_subdirectory(client)
 
