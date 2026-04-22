@@ -2534,7 +2534,7 @@ int main(int argc, char* argv[])
             "Command: test | sync | echo | add | remove | get | list | watch"
             " | neighbors | nexthops"
             " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo"
-            " | vrf-route-add")
+            " | vrf-route-add | run")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -2587,8 +2587,18 @@ int main(int argc, char* argv[])
         std::println("  get-loopback            Retrieve the stored loopback address");
         std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
         std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
-        std::println("  vrf-route-add [socket]  Send a VrfsRouteRequest to a unix-domain socket server");
+        std::println("  vrf-route-add [socket]  Query srmd via gRPC then send a VrfsRouteRequest");
+        std::println("                          to the ud_server Unix-domain socket (one-shot)");
         std::println("                          (default socket: /tmp/ud_server.sock)");
+        std::println("  run [socket]            Full SRA daemon mode (continuous):");
+        std::println("                            1. RequestLoopback → SOT auth check via srmd");
+        std::println("                            2. GetLoopbacks / GetAllRoutes via srmd");
+        std::println("                            3. Build VrfsRouteRequest (nni interfaces only)");
+        std::println("                            4. Send to ud_server via Unix-domain socket");
+        std::println("                            5. Loop until SIGINT/SIGTERM");
+        std::println("                          ud_server socket default: /tmp/ud_server.sock");
+        std::println("                          NOTE: ud_server is a separate process; srmd has");
+        std::println("                                no Unix-domain socket — gRPC only.");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
