@@ -4,7 +4,8 @@
  *
  * The Makefile passes five preprocessor defines:
  *   - BUILD_NUMBER  — static integer that increments with each release
- *   - BUILD_DATE    — ISO-8601 UTC timestamp of the build (e.g. 2026-04-16T12:00:00Z)
+ *   - BUILD_DATE    — ISO-8601 UTC timestamp of the build (e.g.
+ * 2026-04-16T12:00:00Z)
  *   - GIT_BRANCH    — branch name (git rev-parse --abbrev-ref HEAD)
  *   - GIT_COMMIT    — short commit hash (git rev-parse --short HEAD)
  *   - GIT_AUTHOR    — author of the last commit (git log -1 --format='%an')
@@ -30,10 +31,11 @@
 #define GIT_AUTHOR "unknown"
 #endif
 
-namespace build_info {
+namespace build_info
+{
 
-inline constexpr int         number = BUILD_NUMBER;
-inline constexpr const char* date   = BUILD_DATE;
+inline constexpr int number = BUILD_NUMBER;
+inline constexpr const char* date = BUILD_DATE;
 inline constexpr const char* branch = GIT_BRANCH;
 inline constexpr const char* commit = GIT_COMMIT;
 inline constexpr const char* author = GIT_AUTHOR;

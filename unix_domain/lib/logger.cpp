@@ -113,7 +113,7 @@ ParseResult parse_args(int argc, char* argv[])
                 int v = std::stoi(std::string{val});
                 if (v >= DEBUG && v <= EMERG)
                 {
-                    result.loglevel  = v;
+                    result.loglevel = v;
                     loglevel_explicit = true;
                 }
             }
@@ -130,13 +130,41 @@ ParseResult parse_args(int argc, char* argv[])
                     return true;
                 };
 
-                if      (ci_eq(val, "debug"))   { result.loglevel = DEBUG;   loglevel_explicit = true; }
-                else if (ci_eq(val, "info"))    { result.loglevel = INFO;    loglevel_explicit = true; }
-                else if (ci_eq(val, "notice"))  { result.loglevel = NOTICE;  loglevel_explicit = true; }
-                else if (ci_eq(val, "warning")) { result.loglevel = WARNING; loglevel_explicit = true; }
-                else if (ci_eq(val, "err"))     { result.loglevel = ERR;     loglevel_explicit = true; }
-                else if (ci_eq(val, "crit"))    { result.loglevel = CRIT;    loglevel_explicit = true; }
-                else if (ci_eq(val, "emerg"))   { result.loglevel = EMERG;   loglevel_explicit = true; }
+                if (ci_eq(val, "debug"))
+                {
+                    result.loglevel = DEBUG;
+                    loglevel_explicit = true;
+                }
+                else if (ci_eq(val, "info"))
+                {
+                    result.loglevel = INFO;
+                    loglevel_explicit = true;
+                }
+                else if (ci_eq(val, "notice"))
+                {
+                    result.loglevel = NOTICE;
+                    loglevel_explicit = true;
+                }
+                else if (ci_eq(val, "warning"))
+                {
+                    result.loglevel = WARNING;
+                    loglevel_explicit = true;
+                }
+                else if (ci_eq(val, "err"))
+                {
+                    result.loglevel = ERR;
+                    loglevel_explicit = true;
+                }
+                else if (ci_eq(val, "crit"))
+                {
+                    result.loglevel = CRIT;
+                    loglevel_explicit = true;
+                }
+                else if (ci_eq(val, "emerg"))
+                {
+                    result.loglevel = EMERG;
+                    loglevel_explicit = true;
+                }
             }
         }
         else

@@ -140,8 +140,8 @@ struct Field
 /// @brief A fully decoded command with its list of fields.
 struct Command
 {
-    CmdId cmd_id{};             ///< Command identifier
-    std::vector<Field> fields;  ///< TLV fields (legacy format)
+    CmdId cmd_id{};                        ///< Command identifier
+    std::vector<Field> fields;             ///< TLV fields (legacy format)
     std::vector<std::uint8_t> raw_payload; ///< Raw binary payload (new format)
 };
 
@@ -226,8 +226,8 @@ inline constexpr std::size_t PREFIX_IPV4_WIRE_SIZE = 5;
 /// @brief One IPv4 prefix entry carried inside a SingleRouteRequest.
 struct PrefixIpv4
 {
-    Ipv4Addr addr{};          ///< Prefix network address (network byte order)
-    std::uint8_t mask_len{};  ///< Prefix length in bits (0–32)
+    Ipv4Addr addr{};         ///< Prefix network address (network byte order)
+    std::uint8_t mask_len{}; ///< Prefix length in bits (0–32)
 };
 
 /**
@@ -305,10 +305,10 @@ inline constexpr std::size_t VRFS_ANSWER_WIRE_SIZE = 17;
  */
 struct VrfsRequest
 {
-    VrfsName      vrfs_name{};          ///< VRF name (16 bytes, null-padded)
-    Ipv4Addr      nexthop_addr_ipv4{};  ///< Next-hop gateway address
-    std::uint32_t nexthop_id_ipv4{};    ///< Next-hop identifier
-    std::vector<PrefixIpv4> prefixes;   ///< Prefix list for this VRF
+    VrfsName vrfs_name{};             ///< VRF name (16 bytes, null-padded)
+    Ipv4Addr nexthop_addr_ipv4{};     ///< Next-hop gateway address
+    std::uint32_t nexthop_id_ipv4{};  ///< Next-hop identifier
+    std::vector<PrefixIpv4> prefixes; ///< Prefix list for this VRF
 };
 
 /**
@@ -340,8 +340,8 @@ struct VrfsRouteRequest
  */
 struct VrfsAnswer
 {
-    VrfsName vrfs_name{};  ///< VRF name (16 bytes, null-padded)
-    bool prefix_status{};  ///< True when all prefixes for this VRF installed ok
+    VrfsName vrfs_name{}; ///< VRF name (16 bytes, null-padded)
+    bool prefix_status{}; ///< True when all prefixes for this VRF installed ok
 };
 
 /**
@@ -355,8 +355,8 @@ struct VrfsAnswer
  */
 struct VrfsRouteResponse
 {
-    std::uint8_t           status_code{}; ///< Overall status (0x00 = all ok)
-    std::vector<VrfsAnswer> answers;      ///< Per-VRF result
+    std::uint8_t status_code{};      ///< Overall status (0x00 = all ok)
+    std::vector<VrfsAnswer> answers; ///< Per-VRF result
 };
 
 // ---------------------------------------------------------------------------
