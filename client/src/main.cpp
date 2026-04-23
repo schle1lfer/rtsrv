@@ -20,11 +20,12 @@
  *     -t, --timeout  <sec>    RPC deadline (overrides config file)
  *         --tls               Use TLS channel (overrides config file)
  *         --ca-cert  <path>   CA certificate for TLS verification
- *         --logstream <dest>  Protocol-layer log output: stderr, stdout, or file
- *                             path (default: stderr)
- *         --loglevel  <n>     Protocol-layer log verbosity: 1=DEBUG (raw socket
- *                             bytes + hex dumps), 2=INFO, 3=NOTICE, 4=WARNING,
- *                             5=ERR (default: 1)
+ *         --logstream <dest>  unix_domain layer log destination: "stderr"
+ *                             (default), "stdout", or an absolute file path.
+ *                             Pass "" to silence all protocol-layer logging.
+ *         --loglevel  <n>     Minimum log level: 1=DEBUG (raw socket bytes +
+ *                             hex dumps), 2=INFO (decoded summaries), 3=NOTICE,
+ *                             4=WARNING, 5=ERR (default: 1)
  *     -v, --version           Print version and exit
  *     -h, --help              Print this help and exit
  *
@@ -2796,11 +2797,14 @@ int main(int argc, char* argv[])
             "Path to PEM CA certificate for TLS")
         ("logstream",
             po::value<std::string>()->default_value("stderr"),
-            "Protocol-layer log output: stderr, stdout, or a file path")
+            "unix_domain layer log destination: \"stderr\" (default),"
+            " \"stdout\", absolute file path, or \"\" to disable")
         ("loglevel",
             po::value<int>()->default_value(1),
-            "Protocol-layer log verbosity: 1=DEBUG (raw bytes), 2=INFO,"
-            " 3=NOTICE, 4=WARNING, 5=ERR (default: 1)")
+            "Minimum log level for unix_domain layer:"
+            " 1=DEBUG (raw socket bytes + hex dumps),"
+            " 2=INFO (decoded summaries),"
+            " 3=NOTICE, 4=WARNING, 5=ERR  [default: 1]")
         ("command",  po::value<std::string>(),
             "Command: test | sync | echo | add | remove | get | list | watch"
             " | neighbors | nexthops"
@@ -2876,11 +2880,6 @@ int main(int argc, char* argv[])
         std::println("                          ud_server socket default: /tmp/ud_server.sock");
         std::println("                          NOTE: ud_server is a separate process; srmd has");
         std::println("                                no Unix-domain socket — gRPC only.");
-        std::println("");
-        std::println("Protocol-layer logging (unix_domain socket layer):");
-        std::println("  --logstream <dest>      Output: stderr (default), stdout, or a file path");
-        std::println("  --loglevel  <n>         1=DEBUG (raw bytes + hex dumps), 2=INFO,");
-        std::println("                          3=NOTICE, 4=WARNING, 5=ERR  (default: 1)");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
