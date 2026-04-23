@@ -62,6 +62,7 @@
 #include <linux/neighbour.h>
 #include <netinet/ip_icmp.h>
 #include <poll.h>
+#include <pthread.h>
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -3675,6 +3676,17 @@ int main(int argc, char* argv[])
         }
 
         std::println("[run] Shutdown signal received — stopping");
+
+        // close() from another thread does not unblock a blocking recv() on
+        // Linux; sending a signal does (EINTR → retry on closed fd → EBADF).
+        auto interruptRecv = [](std::thread& t) noexcept {
+            if (t.joinable())
+                ::pthread_kill(t.native_handle(), SIGINT);
+        };
+        interruptRecv(startupRouteThread);
+        interruptRecv(startupNeighThread);
+        interruptRecv(startupNhThread);
+
         vrfClient.stop();
         grpcProc.stop();
         return EXIT_SUCCESS;
