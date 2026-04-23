@@ -14,7 +14,9 @@
  *     -c, --config   <path>   Path to client config.json [default: config/config.json]
  *     -s, --server   <addr>   Single srmd address  (overrides config file)
  *     -w, --switches <path>   Path to switch_config.json (multi-server mode)
- *         --sot      <path>   Path to route_sot_v2.json (Source-of-Truth)
+ *         --sot      <path>   Path to Source-of-Truth JSON file
+ *         --node-ip  <ip>     Management IP of the node to look up in the SOT
+ *                             (required for single-server sync mode)
  *     -t, --timeout  <sec>    RPC deadline (overrides config file)
  *         --tls               Use TLS channel (overrides config file)
  *         --ca-cert  <path>   CA certificate for TLS verification
@@ -37,6 +39,24 @@
  *                             routes and forward each ADDED/CHANGED/REMOVED
  *                             event to srmd via AddRoute / RemoveRoute.
  *                             Runs until Ctrl-C.
+ *     neighbors               Dump and watch kernel neighbor (ARP/NDP) table.
+ *                             No gRPC connection required.  Runs until Ctrl-C.
+ *     nexthops                Dump and watch kernel nexthop objects (Linux 5.3+).
+ *                             No gRPC connection required.  Runs until Ctrl-C.
+ *     set-loopback <address>  Store a loopback address on the server
+ *     get-loopback            Retrieve the stored loopback address
+ *     get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)
+ *     vrf-route-add [socket]  Query srmd via gRPC, build a VrfsRouteRequest from
+ *                             nni routes, and deliver it to ud_server once (one-shot).
+ *                             Default socket: /tmp/ud_server.sock
+ *     run [socket]            Full SRA daemon mode — runs until SIGINT/SIGTERM:
+ *                               1. RequestLoopback → SOT auth check via srmd
+ *                               2. GetLoopbacks / GetAllRoutes via srmd
+ *                               3. Build VrfsRouteRequest (nni interfaces only)
+ *                               4. Deliver to ud_server via Unix-domain socket
+ *                               5. Monitor kernel nexthop events continuously
+ *                             Default socket: /tmp/ud_server.sock
+ *     grpc-proc-demo          Run async GrpcProc background thread demo
  * @endcode
  *
  * @version 1.0
