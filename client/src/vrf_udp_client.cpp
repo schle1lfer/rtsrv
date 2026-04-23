@@ -47,6 +47,23 @@ static std::string fmt_ip(const cmdproto::Ipv4Addr& a)
     return buf;
 }
 
+/** Formats up to max_bytes of data as space-separated hex octets. */
+static std::string fmt_hex(std::span<const std::uint8_t> data,
+                            std::size_t max_bytes = 32)
+{
+    std::string out;
+    out.reserve(max_bytes * 3 + 16);
+    const std::size_t n = std::min(data.size(), max_bytes);
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        if (i > 0) out += ' ';
+        out += std::format("{:02x}", data[i]);
+    }
+    if (data.size() > max_bytes)
+        out += std::format(" (+{} more)", data.size() - max_bytes);
+    return out;
+}
+
 /**
  * @brief Sends all bytes of @p data over a non-blocking socket.
  *
@@ -241,7 +258,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
     const std::uint16_t  msg_id   = s_msg_id++;
 
     // Log what we're about to send
-    std::println("[VrfUdpClient] processing request: {} VRF(s)", req.vrfs_requests.size());
+    std::println("[VrfUdpClient] processing request msg_id={}: {} VRF(s)",
+                 msg_id, req.vrfs_requests.size());
     for (const auto& vr : req.vrfs_requests)
     {
         std::println("[VrfUdpClient]   vrf='{}' nexthop={} nexthop_id={} "
@@ -267,6 +285,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      cmd_bytes.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [1] cmdproto: {} byte(s)",
+                 msg_id, cmd_bytes->size());
 
     // ── [2] Wrap in routeproto ExchangeData + DATA message ──────────────────
     routeproto::ExchangeData ed;
@@ -280,6 +300,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      exch_bytes.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [2] routeproto exchange: {} byte(s)",
+                 msg_id, exch_bytes->size());
 
     auto data_msg  = routeproto::make_data(
         msg_id, std::span<const std::uint8_t>{*exch_bytes});
@@ -290,6 +312,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      msg_bytes.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [2] routeproto message: {} byte(s)",
+                 msg_id, msg_bytes->size());
 
     // ── [3] Wrap in udproto frame ────────────────────────────────────────────
     udproto::Packet pkt{
@@ -305,6 +329,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      frame.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [3] udproto frame: {} byte(s)",
+                 msg_id, frame->size());
 
     // ── [4] Create NON-BLOCKING socket ──────────────────────────────────────
     auto sock_result = net::create_socket();
@@ -322,6 +348,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      r.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [4] socket fd={}",
+                 msg_id, sock.fd());
 
     // ── [5] Connect (non-blocking) ───────────────────────────────────────────
     if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
@@ -330,16 +358,19 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      socketPath_, r.error().message());
         return;
     }
-    std::println("[VrfUdpClient] connected (non-blocking); "
-                 "sending {} byte frame", frame->size());
+    std::println("[VrfUdpClient] [dbg] msg_id={} [5] connected fd={} path='{}'",
+                 msg_id, sock.fd(), socketPath_);
 
     // ── [6] Send frame (non-blocking with poll) ──────────────────────────────
+    std::println("[VrfUdpClient] [dbg] msg_id={} [6] TX fd={} {} byte(s): {}",
+                 msg_id, sock.fd(), frame->size(), fmt_hex(*frame));
     if (auto r = nb_send_all(sock.fd(), *frame, ioTimeoutMs_); !r)
     {
         std::println(stderr, "[VrfUdpClient] send: {}", r.error().message());
         return;
     }
-    std::println("[VrfUdpClient] frame sent ({} bytes)", frame->size());
+    std::println("[VrfUdpClient] frame sent fd={} msg_id={} {} byte(s)",
+                 sock.fd(), msg_id, frame->size());
 
     // ── [7] Receive response frame (non-blocking with poll) ──────────────────
     auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
@@ -349,6 +380,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      frame_recv.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [7] RX fd={} {} byte(s): {}",
+                 msg_id, sock.fd(), frame_recv->size(), fmt_hex(*frame_recv));
 
     // ── [8] Decode udproto packet ────────────────────────────────────────────
     auto reply_pkt = udproto::decode_packet(*frame_recv);
@@ -358,6 +391,10 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      reply_pkt.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [8] udproto pkt: pkt_num={} "
+                 "total_pkts={} ctrl={:#06x} data={} byte(s)",
+                 msg_id, reply_pkt->pkt_num, reply_pkt->total_pkts,
+                 reply_pkt->ctrl, reply_pkt->data.size());
 
     // ── [9] Decode routeproto message ────────────────────────────────────────
     auto reply_msg = routeproto::decode_message(reply_pkt->data);
@@ -367,6 +404,11 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      reply_msg.error().message());
         return;
     }
+    std::println("[VrfUdpClient] [dbg] msg_id={} [9] routeproto msg: "
+                 "type=0x{:02x} payload={} byte(s)",
+                 msg_id,
+                 static_cast<unsigned>(reply_msg->msg_type),
+                 reply_msg->payload.size());
 
     if (reply_msg->payload.size() < 2)
     {
@@ -389,8 +431,9 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
     }
 
     // ── [11] Log bitmask for each VRF prefix set ─────────────────────────────
-    std::println("[VrfUdpClient] response: msg_type=0x{:02x} ack=0x{:02x} "
-                 "overall_status=0x{:02x} ({})",
+    std::println("[VrfUdpClient] response msg_id={}: msg_type=0x{:02x} "
+                 "ack=0x{:02x} overall_status=0x{:02x} ({})",
+                 msg_id,
                  static_cast<unsigned>(reply_msg->msg_type),
                  static_cast<unsigned>(ack_status),
                  static_cast<unsigned>(vrf_resp->status_code),
@@ -412,7 +455,8 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
                      ans.prefix_status ? "installed ok" : "install failed");
     }
 
-    std::println("[VrfUdpClient] exchange complete: {}",
+    std::println("[VrfUdpClient] exchange complete msg_id={}: {}",
+                 msg_id,
                  vrf_resp->status_code == 0x00 ? "PASS" : "FAIL");
 }
 
