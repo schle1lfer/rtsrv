@@ -47,9 +47,10 @@ target-build/
 
 # CMake instalations
 server-install/
-serverlocal/
+server-local/
 target-install/
 target-local/
+unix_domain/
 bin/
 sbin/
 etc/
