@@ -13,6 +13,7 @@ add_executable(
     src/sot_config.cpp
     src/udp_table_server.cpp
     src/vrf_udp_client.cpp
+    src/vrf_table.cpp
     src/netlink_neigh.c
     src/netlink_nexthop.c
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"

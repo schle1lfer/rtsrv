@@ -49,6 +49,7 @@
 #include "client/switch_config.hpp"
 #include "client/routing.hpp"
 #include "client/udp_table_server.hpp"
+#include "client/vrf_table.hpp"
 #include "client/vrf_udp_client.hpp"
 #include "common/config.hpp"
 #include "server/netlink.h"
@@ -2044,8 +2045,10 @@ static std::string serializeNexthopTable(
  */
 struct NexthopCtx
 {
-    std::map<uint32_t, NexthopEntry> nexthops;  ///< nexthop ID → entry
-    sra::UdpTableServer*             udpServer; ///< UDP publisher (port 9002); may be nullptr
+    std::map<uint32_t, NexthopEntry> nexthops;             ///< nexthop ID → entry
+    sra::UdpTableServer*             udpServer{nullptr};   ///< UDP publisher (port 9002)
+    sra::VrfTable*                   vrfTable{nullptr};    ///< VRF table from GetAllRoutes
+    sra::VrfUdpClient*               vrfClient{nullptr};   ///< Unix-domain client to ud_server
 };
 
 /**
@@ -2443,18 +2446,155 @@ static void startupNeighLiveCb(netlink_neigh_event_t  event,
 }
 
 /**
+ * @brief Checks whether @p nh exists in the VRF table and, if so, builds and
+ *        submits a SingleRoute (type=1) VrfsRouteRequest to ud_server.
+ *
+ * Called on every nexthop ADDED / CHANGED / REMOVED event.  Only nni
+ * interface entries that carry a matching nexthop gateway are included in the
+ * request.  Prefix data is taken exclusively from the VRF table; the nexthop
+ * ID is taken directly from the kernel event.
+ *
+ * @param nh         Kernel nexthop descriptor from the netlink event.
+ * @param vrfTable   Local VRF table populated from GetAllRoutes.  May be null.
+ * @param vrfClient  Unix-domain client used to submit the request.  May be null.
+ */
+static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
+                                   sra::VrfTable*           vrfTable,
+                                   sra::VrfUdpClient*       vrfClient)
+{
+    if (!vrfTable || !vrfClient)
+        return;
+
+    // Only unicast nexthops with a valid gateway address are relevant.
+    if (!nh->gateway[0])
+        return;
+
+    const std::string gateway = nh->gateway;
+
+    if (!vrfTable->hasNexthop(gateway))
+    {
+        std::println("[Nexthops] nexthop id={} gw={} not found in VRF table — skip",
+                     nh->id, gateway);
+        return;
+    }
+
+    const auto routes = vrfTable->findByNexthop(gateway);
+    std::println("[Nexthops] nexthop id={} gw={} matched {} VRF entry/entries; "
+                 "generating SingleRoute request (type=1)",
+                 nh->id, gateway, routes.size());
+
+    // Parse gateway to binary (network byte order).
+    struct in_addr nhAddr{};
+    if (::inet_pton(AF_INET, gateway.c_str(), &nhAddr) != 1)
+    {
+        std::println(std::cerr,
+                     "[Nexthops] invalid gateway address '{}' — skip", gateway);
+        return;
+    }
+    const auto* nhBytes =
+        reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+
+    cmdproto::VrfsRouteRequest vrfsReq;
+
+    for (const auto& route : routes)
+    {
+        // Only nni interfaces carry nexthop-based routes.
+        if (route.interface_type() != "nni")
+            continue;
+        if (route.nexthop().empty())
+            continue;
+
+        cmdproto::VrfsRequest vrfr{};
+
+        // Null-padded fixed-width VRF name.
+        const std::string& vn = route.vrf_name();
+        for (std::size_t k = 0;
+             k < cmdproto::VRFS_NAME_SIZE && k < vn.size(); ++k)
+        {
+            vrfr.vrfs_name[k] = vn[k];
+        }
+
+        vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
+                                   nhBytes[2], nhBytes[3]};
+        vrfr.nexthop_id_ipv4   = nh->id;
+
+        // Convert each prefix string "A.B.C.D/N" to binary PrefixIpv4.
+        for (const auto& pfx : route.prefixes())
+        {
+            const std::string& pfxStr = pfx.prefix();
+            const auto slash = pfxStr.rfind('/');
+            if (slash == std::string::npos)
+                continue;
+            const std::string addrStr = pfxStr.substr(0, slash);
+            const auto maskLen = static_cast<std::uint8_t>(
+                std::stoul(pfxStr.substr(slash + 1)));
+
+            struct in_addr pfxAddr{};
+            if (::inet_pton(AF_INET, addrStr.c_str(), &pfxAddr) != 1)
+                continue;
+            const auto* pfxBytes =
+                reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
+
+            vrfr.prefixes.push_back(cmdproto::PrefixIpv4{
+                {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]},
+                maskLen});
+        }
+
+        std::println("[Nexthops]   VRF entry: vrf='{}' nexthop='{}' "
+                     "nexthop_id={} prefixes={}",
+                     route.vrf_name(), gateway, nh->id,
+                     vrfr.prefixes.size());
+
+        vrfsReq.vrfs_requests.push_back(std::move(vrfr));
+    }
+
+    if (vrfsReq.vrfs_requests.empty())
+    {
+        std::println("[Nexthops] no nni entries for nexthop gw={} id={} — skip",
+                     gateway, nh->id);
+        return;
+    }
+
+    std::println("[Nexthops] submitting SingleRoute request "
+                 "({} VRF(s)) to ud_server for nexthop gw={} id={}",
+                 vrfsReq.vrfs_requests.size(), gateway, nh->id);
+
+    vrfClient->submit(std::move(vrfsReq));
+}
+
+/**
  * @brief Silent live-nexthop callback for the startup background thread.
  *
- * Updates the in-memory nexthop table and publishes to UDP without printing.
+ * Updates the in-memory nexthop table, publishes the snapshot to UDP
+ * subscribers, and — when the VRF table and VrfUdpClient are wired up —
+ * checks whether the changed nexthop appears in the VRF table and sends a
+ * SingleRoute request to ud_server.
  */
 static void startupNexthopLiveCb(netlink_nexthop_event_t  event,
                                   const netlink_nexthop_t *nh,
                                   void                    *user_data)
 {
     auto* ctx = static_cast<NexthopCtx*>(user_data);
+
+    const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)   ? "ADDED"
+                        : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
+                                                             : "CHANGED";
+    std::println("[Nexthops] {} id={} gw={} oif={} — checking VRF table",
+                 evLabel,
+                 nh->id,
+                 nh->gateway[0] ? nh->gateway : "-",
+                 nh->oif_name[0] ? nh->oif_name
+                                 : std::to_string(nh->oif).c_str());
+
+    // Update in-memory nexthop table first so ctx->nexthops is current.
     nlNexthopUpdate(event, nh, ctx);
+
     if (ctx->udpServer)
         ctx->udpServer->setNexthopData(serializeNexthopTable(ctx->nexthops));
+
+    // For every event (ADDED / CHANGED / REMOVED) check the VRF table and
+    // re-apply routes if this nexthop is referenced.
+    sendVrfRouteForNexthop(nh, ctx->vrfTable, ctx->vrfClient);
 }
 
 /**
@@ -3323,6 +3463,18 @@ int main(int argc, char* argv[])
         vrfClient.start();
         std::println("[run] VrfUdpClient started (non-blocking Unix socket='{}')",
                      udSocketPath);
+
+        // ── Load VRF table and arm the nexthop event handler ─────────────────
+        // Future nexthop ADDED / CHANGED / REMOVED events will look up the
+        // affected gateway in this table and re-submit a SingleRoute request
+        // (type=1) to ud_server whenever a match is found.
+        sra::VrfTable vrfTable;
+        vrfTable.load(*arResult);
+        startupNhCtx.vrfTable  = &vrfTable;
+        startupNhCtx.vrfClient = &vrfClient;
+        std::println("[run] VRF table loaded: {} entry/entries; "
+                     "nexthop event handler armed",
+                     vrfTable.size());
 
         cmdproto::VrfsRouteRequest vrfsReq;
         int nniCount = 0;
