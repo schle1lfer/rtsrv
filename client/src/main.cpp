@@ -23,9 +23,10 @@
  *         --logstream <dest>  unix_domain layer log destination: "stderr"
  *                             (default), "stdout", or an absolute file path.
  *                             Pass "" to silence all protocol-layer logging.
- *         --loglevel  <n>     Minimum log level: 1=DEBUG (raw socket bytes +
- *                             hex dumps), 2=INFO (decoded summaries), 3=NOTICE,
- *                             4=WARNING, 5=ERR (default: 1)
+ *         --loglevel  <n>     Minimum log level (name or number):
+ *                             DEBUG|1 (raw socket bytes + hex dumps),
+ *                             INFO|2 (decoded summaries), NOTICE|3,
+ *                             WARNING|4, ERR|5  [default: 1]
  *     -v, --version           Print version and exit
  *     -h, --help              Print this help and exit
  *
@@ -2800,11 +2801,11 @@ int main(int argc, char* argv[])
             "unix_domain layer log destination: \"stderr\" (default),"
             " \"stdout\", absolute file path, or \"\" to disable")
         ("loglevel",
-            po::value<int>()->default_value(1),
+            po::value<std::string>()->default_value("1"),
             "Minimum log level for unix_domain layer:"
-            " 1=DEBUG (raw socket bytes + hex dumps),"
-            " 2=INFO (decoded summaries),"
-            " 3=NOTICE, 4=WARNING, 5=ERR  [default: 1]")
+            " DEBUG|1 (raw socket bytes + hex dumps),"
+            " INFO|2 (decoded summaries),"
+            " NOTICE|3, WARNING|4, ERR|5  [default: 1]")
         ("command",  po::value<std::string>(),
             "Command: test | sync | echo | add | remove | get | list | watch"
             " | neighbors | nexthops"
@@ -2838,8 +2839,19 @@ int main(int argc, char* argv[])
     // Initialise the unix_domain protocol-layer logger as early as possible so
     // that all logger::log / logger::log_hex calls (including those in
     // vrf_udp_client, cmd_proto, etc.) are active for the lifetime of the run.
-    logger::init(vm["logstream"].as<std::string>(),
-                 vm["loglevel"].as<int>());
+    {
+        const std::string& lvlStr = vm["loglevel"].as<std::string>();
+        int lvl = logger::DEBUG;
+        if      (lvlStr == "DEBUG"   || lvlStr == "1") lvl = logger::DEBUG;
+        else if (lvlStr == "INFO"    || lvlStr == "2") lvl = logger::INFO;
+        else if (lvlStr == "NOTICE"  || lvlStr == "3") lvl = logger::NOTICE;
+        else if (lvlStr == "WARNING" || lvlStr == "4") lvl = logger::WARNING;
+        else if (lvlStr == "ERR"     || lvlStr == "5") lvl = logger::ERR;
+        else {
+            try { lvl = std::stoi(lvlStr); } catch (...) {}
+        }
+        logger::init(vm["logstream"].as<std::string>(), lvl);
+    }
 
     if (vm.count("help") || !vm.count("command"))
     {
