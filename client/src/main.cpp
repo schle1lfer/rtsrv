@@ -20,6 +20,11 @@
  *     -t, --timeout  <sec>    RPC deadline (overrides config file)
  *         --tls               Use TLS channel (overrides config file)
  *         --ca-cert  <path>   CA certificate for TLS verification
+ *         --logstream <dest>  Protocol-layer log output: stderr, stdout, or file
+ *                             path (default: stderr)
+ *         --loglevel  <n>     Protocol-layer log verbosity: 1=DEBUG (raw socket
+ *                             bytes + hex dumps), 2=INFO, 3=NOTICE, 4=WARNING,
+ *                             5=ERR (default: 1)
  *     -v, --version           Print version and exit
  *     -h, --help              Print this help and exit
  *
@@ -77,6 +82,7 @@
 #include "client/netlink_nexthop.h"
 
 #include "lib/cmd_proto.hpp"
+#include "lib/logger.hpp"
 
 #include <arpa/inet.h>
 #include <linux/neighbour.h>
@@ -2788,6 +2794,13 @@ int main(int argc, char* argv[])
         ("ca-cert",
             po::value<std::string>()->default_value(std::string{}),
             "Path to PEM CA certificate for TLS")
+        ("logstream",
+            po::value<std::string>()->default_value("stderr"),
+            "Protocol-layer log output: stderr, stdout, or a file path")
+        ("loglevel",
+            po::value<int>()->default_value(1),
+            "Protocol-layer log verbosity: 1=DEBUG (raw bytes), 2=INFO,"
+            " 3=NOTICE, 4=WARNING, 5=ERR (default: 1)")
         ("command",  po::value<std::string>(),
             "Command: test | sync | echo | add | remove | get | list | watch"
             " | neighbors | nexthops"
@@ -2817,6 +2830,12 @@ int main(int argc, char* argv[])
         std::cerr << "Error: " << ex.what() << "\n\n" << global << '\n';
         return EXIT_FAILURE;
     }
+
+    // Initialise the unix_domain protocol-layer logger as early as possible so
+    // that all logger::log / logger::log_hex calls (including those in
+    // vrf_udp_client, cmd_proto, etc.) are active for the lifetime of the run.
+    logger::init(vm["logstream"].as<std::string>(),
+                 vm["loglevel"].as<int>());
 
     if (vm.count("help") || !vm.count("command"))
     {
@@ -2857,6 +2876,11 @@ int main(int argc, char* argv[])
         std::println("                          ud_server socket default: /tmp/ud_server.sock");
         std::println("                          NOTE: ud_server is a separate process; srmd has");
         std::println("                                no Unix-domain socket — gRPC only.");
+        std::println("");
+        std::println("Protocol-layer logging (unix_domain socket layer):");
+        std::println("  --logstream <dest>      Output: stderr (default), stdout, or a file path");
+        std::println("  --loglevel  <n>         1=DEBUG (raw bytes + hex dumps), 2=INFO,");
+        std::println("                          3=NOTICE, 4=WARNING, 5=ERR  (default: 1)");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
