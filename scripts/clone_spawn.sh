@@ -61,8 +61,13 @@ for ip in "${IPS[@]}"; do
     # run-sra.sh
     sshpass -p "$REMOTE_PASS" rsync -avz \
     -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
-    "scripts/target-run-sra.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../run-sra.sh"
-    
+    "scripts/target-run-sra.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../run-sra-virt.sh"
+
+    # run-sra-hw.sh
+    sshpass -p "$REMOTE_PASS" rsync -avz \
+    -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
+    "scripts/target-run-sra-hw.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../run-sra-hw.sh"
+
     # config
     echo "scripts/"
     sshpass -p "$REMOTE_PASS" rsync -avz \
