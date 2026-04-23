@@ -3361,7 +3361,7 @@ int main(int argc, char* argv[])
         }
 
         const auto& lbResult =
-            std::get<sra::RequestLoopbackResult>(lbResp->payload);
+            std::get<9>(lbResp->payload); // index 9 = RequestLoopbackResult
         if (!lbResult)
         {
             std::println(std::cerr,
