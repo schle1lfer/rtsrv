@@ -5,6 +5,7 @@
 
 #include "client/vrf_table.hpp"
 
+#include <mutex>
 #include <print>
 
 namespace sra
