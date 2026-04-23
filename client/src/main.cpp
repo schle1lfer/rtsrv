@@ -60,6 +60,7 @@
 
 #include <arpa/inet.h>
 #include <linux/neighbour.h>
+#include <netinet/ip_icmp.h>
 #include <poll.h>
 #include <boost/program_options.hpp>
 #include <chrono>
@@ -72,9 +73,11 @@
 #include <map>
 #include <mutex>
 #include <print>
+#include <shared_mutex>
 #include <queue>
 #include <signal.h>
 #include <sstream>
+#include <unistd.h>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -1602,6 +1605,7 @@ static std::string serializeNeighborTable(
  */
 struct NeighCtx
 {
+    mutable std::shared_mutex         mtx;       ///< Guards neighbors
     std::map<std::string, NeighEntry> neighbors; ///< "family|ifidx|dst" → entry
     sra::UdpTableServer*              udpServer; ///< UDP publisher (port 9001); may be nullptr
 };
@@ -2049,6 +2053,7 @@ struct NexthopCtx
     sra::UdpTableServer*             udpServer{nullptr};   ///< UDP publisher (port 9002)
     sra::VrfTable*                   vrfTable{nullptr};    ///< VRF table from GetAllRoutes
     sra::VrfUdpClient*               vrfClient{nullptr};   ///< Unix-domain client to ud_server
+    NeighCtx*                        neighCtx{nullptr};    ///< adjacency table (shared with neigh thread)
 };
 
 /**
@@ -2440,9 +2445,82 @@ static void startupNeighLiveCb(netlink_neigh_event_t  event,
                                 void                  *user_data)
 {
     auto* ctx = static_cast<NeighCtx*>(user_data);
-    nlNeighUpdate(event, n, ctx);
-    if (ctx->udpServer)
-        ctx->udpServer->setNeighborData(serializeNeighborTable(ctx->neighbors));
+    std::string snapshot;
+    {
+        std::unique_lock lock(ctx->mtx);
+        nlNeighUpdate(event, n, ctx);
+        if (ctx->udpServer)
+            snapshot = serializeNeighborTable(ctx->neighbors);
+    }
+    if (ctx->udpServer && !snapshot.empty())
+        ctx->udpServer->setNeighborData(std::move(snapshot));
+}
+
+/**
+ * @brief Returns true if @p ip appears as a destination in the adjacency table.
+ *
+ * The caller must NOT hold ctx.mtx; this function acquires a shared lock
+ * itself so it is safe to call from any thread.
+ */
+static bool neighborHasIp(NeighCtx& ctx, const std::string& ip)
+{
+    std::shared_lock lock(ctx.mtx);
+    for (const auto& [key, entry] : ctx.neighbors)
+        if (entry.dst == ip)
+            return true;
+    return false;
+}
+
+/** @brief One's-complement checksum used in ICMP headers. */
+static uint16_t icmpChecksum(const void* data, std::size_t len)
+{
+    const auto* p = static_cast<const uint16_t*>(data);
+    uint32_t sum = 0;
+    while (len > 1) { sum += *p++; len -= 2; }
+    if (len) sum += *reinterpret_cast<const uint8_t*>(p);
+    sum  = (sum >> 16) + (sum & 0xffff);
+    sum += (sum >> 16);
+    return static_cast<uint16_t>(~sum);
+}
+
+/**
+ * @brief Sends a raw ICMP Echo Request to @p destIp.
+ *
+ * This probes the local ARP/NDP layer so that the nexthop IP gets resolved
+ * into the adjacency table even before the first data packet arrives.
+ */
+static void sendIcmpEchoRequest(const std::string& destIp)
+{
+    int sock = ::socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (sock < 0)
+    {
+        std::println(std::cerr, "[ICMP] socket() failed for {}: {}",
+                     destIp, ::strerror(errno));
+        return;
+    }
+
+    struct icmphdr pkt{};
+    pkt.type             = ICMP_ECHO;
+    pkt.code             = 0;
+    pkt.un.echo.id       = ::htons(static_cast<uint16_t>(::getpid() & 0xffff));
+    pkt.un.echo.sequence = ::htons(1);
+    pkt.checksum         = icmpChecksum(&pkt, sizeof(pkt));
+
+    struct sockaddr_in dst{};
+    dst.sin_family = AF_INET;
+    ::inet_pton(AF_INET, destIp.c_str(), &dst.sin_addr);
+
+    if (::sendto(sock, &pkt, sizeof(pkt), 0,
+                 reinterpret_cast<const sockaddr*>(&dst), sizeof(dst)) < 0)
+    {
+        std::println(std::cerr, "[ICMP] sendto() to {} failed: {}",
+                     destIp, ::strerror(errno));
+    }
+    else
+    {
+        std::println("[ICMP] sent echo request to {} to probe adjacency", destIp);
+    }
+    ::close(sock);
 }
 
 /**
@@ -2457,10 +2535,12 @@ static void startupNeighLiveCb(netlink_neigh_event_t  event,
  * @param nh         Kernel nexthop descriptor from the netlink event.
  * @param vrfTable   Local VRF table populated from GetAllRoutes.  May be null.
  * @param vrfClient  Unix-domain client used to submit the request.  May be null.
+ * @param neighCtx   Adjacency table shared with the neighbor monitor thread.  May be null.
  */
 static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
                                    sra::VrfTable*           vrfTable,
-                                   sra::VrfUdpClient*       vrfClient)
+                                   sra::VrfUdpClient*       vrfClient,
+                                   NeighCtx*                neighCtx)
 {
     if (!vrfTable || !vrfClient)
         return;
@@ -2476,6 +2556,15 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
         std::println("[Nexthops] nexthop id={} gw={} not found in VRF table — skip",
                      nh->id, gateway);
         return;
+    }
+
+    // If the nexthop is not yet in the adjacency table, send an ICMP echo
+    // request to trigger ARP/NDP resolution before the route is installed.
+    if (neighCtx && !neighborHasIp(*neighCtx, gateway))
+    {
+        std::println("[Nexthops] nexthop gw={} id={} absent from adjacency table — "
+                     "sending ICMP echo request", gateway, nh->id);
+        sendIcmpEchoRequest(gateway);
     }
 
     const auto routes = vrfTable->findByNexthop(gateway);
@@ -2594,7 +2683,7 @@ static void startupNexthopLiveCb(netlink_nexthop_event_t  event,
 
     // For every event (ADDED / CHANGED / REMOVED) check the VRF table and
     // re-apply routes if this nexthop is referenced.
-    sendVrfRouteForNexthop(nh, ctx->vrfTable, ctx->vrfClient);
+    sendVrfRouteForNexthop(nh, ctx->vrfTable, ctx->vrfClient, ctx->neighCtx);
 }
 
 /**
@@ -3472,6 +3561,7 @@ int main(int argc, char* argv[])
         vrfTable.load(*arResult);
         startupNhCtx.vrfTable  = &vrfTable;
         startupNhCtx.vrfClient = &vrfClient;
+        startupNhCtx.neighCtx  = &startupNeighCtx;
         std::println("[run] VRF table loaded: {} entry/entries; "
                      "nexthop event handler armed",
                      vrfTable.size());
@@ -3485,6 +3575,15 @@ int main(int argc, char* argv[])
                 continue;
             if (route.nexthop().empty())
                 continue;
+
+            // Check the adjacency table; probe the nexthop with an ICMP echo
+            // request if it has not yet been resolved to a MAC address.
+            if (!neighborHasIp(startupNeighCtx, route.nexthop()))
+            {
+                std::println("[run] nexthop '{}' absent from adjacency table — "
+                             "sending ICMP echo request", route.nexthop());
+                sendIcmpEchoRequest(route.nexthop());
+            }
 
             // Look up nexthop_id from the kernel nexthop table by gateway IP.
             uint32_t nexthopId = 0;
