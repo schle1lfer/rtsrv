@@ -3171,20 +3171,26 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     // 'run' command — full SRA daemon mode
     //
+    // Two separate connections are maintained:
+    //   • srmd   — gRPC over TCP (--server flag); route management / SOT auth.
+    //   • ud_server — separate process; Unix-domain socket (first positional
+    //                 arg, default /tmp/ud_server.sock); receives VRF route-add
+    //                 commands encoded in the udproto/routeproto/cmdproto stack.
+    //   srmd has NO Unix-domain socket — gRPC only.
+    //
     // Startup sequence:
-    //   1. Start GrpcProc (non-blocking gRPC via background thread).
-    //   2. RequestLoopback → if PERMISSION_DENIED, close channel and exit.
-    //   3. GetLoopbacks(loopback) → log interface list.
-    //   4. Display nexthop / neighbor / /32 route tables (populated at startup).
-    //   5. GetAllRoutes → build VrfsRouteRequest for each nni interface,
-    //      looking up nexthop_id from the kernel nexthop table.
-    //   6. Submit VrfsRouteRequest to VrfUdpClient (non-blocking Unix socket).
+    //   1. Start GrpcProc background thread (all gRPC calls go to srmd).
+    //   2. [srmd gRPC] RequestLoopback → PERMISSION_DENIED = IP not in SOT → exit.
+    //   3. [srmd gRPC] GetLoopbacks(loopback) → log VRF/interface/prefix config.
+    //   4. Display nexthop / neighbor / /32 route tables (kernel netlink).
+    //   5. [srmd gRPC] GetAllRoutes → build VrfsRouteRequest for nni interfaces,
+    //      nexthop_id looked up from the kernel nexthop table.
+    //   6. [ud_server Unix socket] Submit VrfsRouteRequest via VrfUdpClient.
     //   7. Main loop: keep running until SIGINT/SIGTERM.
     //
-    // GRPC and Unix-domain sockets both operate in non-blocking mode:
-    //   - gRPC: all RPCs are submitted to GrpcProc and executed in a
-    //     dedicated background thread; the main thread polls responses.
-    //   - Unix-domain: VrfUdpClient sets O_NONBLOCK + uses poll() for I/O.
+    // Non-blocking I/O:
+    //   - gRPC  : RPCs submitted to GrpcProc; executed in a background thread.
+    //   - Unix  : VrfUdpClient uses O_NONBLOCK + poll() for all socket I/O.
     // -----------------------------------------------------------------------
     if (command == "run")
     {
