@@ -140,8 +140,8 @@ struct Field
 /// @brief A fully decoded command with its list of fields.
 struct Command
 {
-    CmdId cmd_id{};                        ///< Command identifier
-    std::vector<Field> fields;             ///< TLV fields (legacy format)
+    CmdId cmd_id{};             ///< Command identifier
+    std::vector<Field> fields;  ///< TLV fields (legacy format)
     std::vector<std::uint8_t> raw_payload; ///< Raw binary payload (new format)
 };
 
@@ -216,38 +216,71 @@ inline constexpr std::size_t ROUTE_ENTRY_MIN_SIZE = 12;
 ///        ROUTE_ADD payload.
 enum class RouteAddPayloadType : std::uint8_t
 {
-    SINGLE_ROUTE = 1, ///< One shared next-hop with one or more prefix entries
+    SINGLE_ROUTE    = 1, ///< VRF route-add: type + vrfs_request[]
+    INTERFACE_ROUTE = 2, ///< Interface route-add: type + iface_count + interface[]
 };
 
 /// @brief Wire size in bytes of one prefix_ipv4 entry (4-byte address +
 ///        1-byte mask length).
 inline constexpr std::size_t PREFIX_IPV4_WIRE_SIZE = 5;
 
-/// @brief One IPv4 prefix entry carried inside a SingleRouteRequest.
+/// @brief One IPv4 prefix entry carried inside an Interface.
 struct PrefixIpv4
 {
-    Ipv4Addr addr{};         ///< Prefix network address (network byte order)
-    std::uint8_t mask_len{}; ///< Prefix length in bits (0–32)
+    Ipv4Addr addr{};          ///< Prefix network address (network byte order)
+    std::uint8_t mask_len{};  ///< Prefix length in bits (0–32)
 };
 
+/// @brief Fixed-length interface name field: 32 bytes, null-terminated.
+using IfaceName = std::array<char, 32>;
+
+/// @brief Wire size of the interface name field.
+inline constexpr std::size_t IFACE_NAME_SIZE = 32;
+
+/// @brief Fixed-size portion of one interface wire entry:
+///        iface_name(32) + nexthop_addr(4) + nexthop_id(4) + prefix_count(2).
+inline constexpr std::size_t INTERFACE_FIXED_SIZE = 42;
+
 /**
- * @brief Decoded ROUTE_ADD binary request payload (type == SINGLE_ROUTE).
+ * @brief One interface entry in a SingleRouteRequest.
  *
  * ## Wire layout (big-endian, no padding)
  * | Field             | Size    | Notes                              |
  * |-------------------|---------|------------------------------------|
- * | type              | 1 byte  | RouteAddPayloadType::SINGLE_ROUTE  |
- * | nexthop_addr_ipv4 | 4 bytes | Next-hop gateway (network order)   |
- * | prefix_ipv4[]     | N × 5   | Zero or more prefix entries        |
+ * | iface_name        | 32      | NUL-terminated interface name      |
+ * | nexthop_addr_ipv4 | 4       | Next-hop gateway (network order)   |
+ * | nexthop_id_ipv4   | 4       | Next-hop identifier (big-endian)   |
+ * | prefix_count      | 2       | Number of following prefix entries |
+ * | prefix_ipv4[]     | N × 5   | N prefix entries (addr+mask each)  |
+ */
+struct Interface
+{
+    IfaceName     iface_name{};         ///< Interface name (32 bytes, null-padded)
+    Ipv4Addr      nexthop_addr_ipv4{};  ///< Next-hop gateway address
+    std::uint32_t nexthop_id_ipv4{};    ///< Next-hop identifier
+    std::vector<PrefixIpv4> prefixes;   ///< Prefix list for this interface
+};
+
+/**
+ * @brief Decoded ROUTE_ADD binary request payload (type == INTERFACE_ROUTE).
  *
- * Each prefix_ipv4 entry:
- * | prefix_addr_ipv4  | 4 bytes | Prefix address (network order)     |
- * | prefix_mask       | 1 byte  | Prefix length in bits (0–32)       |
+ * ## Wire layout (big-endian, no padding)
+ * | Field             | Size    | Notes                                  |
+ * |-------------------|---------|-----------------------------------------|
+ * | type              | 1 byte  | RouteAddPayloadType::INTERFACE_ROUTE    |
+ * | iface_count       | 2 bytes | Number of interface entries (big-endian)|
+ * | interface[]       | N × var | N interface entries                     |
+ *
+ * Each interface entry:
+ * | iface_name        | 32      | NUL-terminated interface name           |
+ * | nexthop_addr_ipv4 | 4       | Next-hop gateway (network order)        |
+ * | nexthop_id_ipv4   | 4       | Next-hop identifier (big-endian)        |
+ * | prefix_count      | 2       | Number of prefix entries (big-endian)   |
+ * | prefix_ipv4[]     | M × 5   | M prefix entries (addr+mask each)       |
  */
 struct SingleRouteRequest
 {
-    Ipv4Addr nexthop{};               ///< Shared next-hop gateway address
-    std::vector<PrefixIpv4> prefixes; ///< Prefix list (may be empty)
+    std::vector<Interface> interfaces; ///< Interface list (may be empty)
 };
 
 // ---------------------------------------------------------------------------
@@ -305,10 +338,10 @@ inline constexpr std::size_t VRFS_ANSWER_WIRE_SIZE = 17;
  */
 struct VrfsRequest
 {
-    VrfsName vrfs_name{};             ///< VRF name (16 bytes, null-padded)
-    Ipv4Addr nexthop_addr_ipv4{};     ///< Next-hop gateway address
-    std::uint32_t nexthop_id_ipv4{};  ///< Next-hop identifier
-    std::vector<PrefixIpv4> prefixes; ///< Prefix list for this VRF
+    VrfsName      vrfs_name{};          ///< VRF name (16 bytes, null-padded)
+    Ipv4Addr      nexthop_addr_ipv4{};  ///< Next-hop gateway address
+    std::uint32_t nexthop_id_ipv4{};    ///< Next-hop identifier
+    std::vector<PrefixIpv4> prefixes;   ///< Prefix list for this VRF
 };
 
 /**
@@ -340,8 +373,8 @@ struct VrfsRouteRequest
  */
 struct VrfsAnswer
 {
-    VrfsName vrfs_name{}; ///< VRF name (16 bytes, null-padded)
-    bool prefix_status{}; ///< True when all prefixes for this VRF installed ok
+    VrfsName vrfs_name{};  ///< VRF name (16 bytes, null-padded)
+    bool prefix_status{};  ///< True when all prefixes for this VRF installed ok
 };
 
 /**
@@ -355,8 +388,8 @@ struct VrfsAnswer
  */
 struct VrfsRouteResponse
 {
-    std::uint8_t status_code{};      ///< Overall status (0x00 = all ok)
-    std::vector<VrfsAnswer> answers; ///< Per-VRF result
+    std::uint8_t           status_code{}; ///< Overall status (0x00 = all ok)
+    std::vector<VrfsAnswer> answers;      ///< Per-VRF result
 };
 
 // ---------------------------------------------------------------------------

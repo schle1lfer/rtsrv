@@ -130,7 +130,7 @@ void write_be32(std::vector<std::uint8_t>& out, std::uint32_t v)
 {
     out.push_back(static_cast<std::uint8_t>(v >> 24));
     out.push_back(static_cast<std::uint8_t>(v >> 16));
-    out.push_back(static_cast<std::uint8_t>(v >> 8));
+    out.push_back(static_cast<std::uint8_t>(v >>  8));
     out.push_back(static_cast<std::uint8_t>(v));
 }
 
@@ -142,10 +142,10 @@ void write_be32(std::vector<std::uint8_t>& out, std::uint32_t v)
  */
 std::uint32_t read_be32(std::span<const std::uint8_t> buf, std::size_t offset)
 {
-    return (static_cast<std::uint32_t>(buf[offset]) << 24) |
+    return (static_cast<std::uint32_t>(buf[offset])     << 24) |
            (static_cast<std::uint32_t>(buf[offset + 1]) << 16) |
-           (static_cast<std::uint32_t>(buf[offset + 2]) << 8) |
-           static_cast<std::uint32_t>(buf[offset + 3]);
+           (static_cast<std::uint32_t>(buf[offset + 2]) <<  8) |
+            static_cast<std::uint32_t>(buf[offset + 3]);
 }
 
 /**
@@ -749,22 +749,46 @@ Command make_route_add_binary(const SingleRouteRequest& req)
 std::expected<std::vector<std::uint8_t>, std::error_code>
 encode_route_add_payload(const SingleRouteRequest& req)
 {
+    if (req.interfaces.size() > 0xFFFFu)
+        return std::unexpected(make_error_code(CmdError::InvalidField));
+
     std::vector<std::uint8_t> out;
-    out.reserve(5 + req.prefixes.size() * PREFIX_IPV4_WIRE_SIZE);
+    out.reserve(3 + req.interfaces.size() * INTERFACE_FIXED_SIZE);
 
     // type (1 byte)
-    out.push_back(static_cast<std::uint8_t>(RouteAddPayloadType::SINGLE_ROUTE));
+    out.push_back(static_cast<std::uint8_t>(RouteAddPayloadType::INTERFACE_ROUTE));
 
-    // nexthop_addr_ipv4 (4 bytes, network order)
-    out.insert(out.end(), req.nexthop.begin(), req.nexthop.end());
+    // iface_count (2 bytes big-endian)
+    write_be16(out, static_cast<std::uint16_t>(req.interfaces.size()));
 
-    // prefix_ipv4[] — addr (4) + mask (1) each
-    for (const auto& p : req.prefixes)
+    for (const auto& iface : req.interfaces)
     {
-        if (p.mask_len > 32)
+        if (iface.prefixes.size() > 0xFFFFu)
             return std::unexpected(make_error_code(CmdError::InvalidField));
-        out.insert(out.end(), p.addr.begin(), p.addr.end());
-        out.push_back(p.mask_len);
+
+        // iface_name: 32 bytes, null-padded
+        for (std::size_t i = 0; i < IFACE_NAME_SIZE; ++i)
+            out.push_back(static_cast<std::uint8_t>(iface.iface_name[i]));
+
+        // nexthop_addr_ipv4: 4 bytes network order
+        out.insert(out.end(),
+                   iface.nexthop_addr_ipv4.begin(),
+                   iface.nexthop_addr_ipv4.end());
+
+        // nexthop_id_ipv4: 4 bytes big-endian
+        write_be32(out, iface.nexthop_id_ipv4);
+
+        // prefix_count: 2 bytes big-endian
+        write_be16(out, static_cast<std::uint16_t>(iface.prefixes.size()));
+
+        // prefix_ipv4[]: N × 5 bytes (addr + mask)
+        for (const auto& p : iface.prefixes)
+        {
+            if (p.mask_len > 32)
+                return std::unexpected(make_error_code(CmdError::InvalidField));
+            out.insert(out.end(), p.addr.begin(), p.addr.end());
+            out.push_back(p.mask_len);
+        }
     }
 
     return out;
@@ -774,57 +798,77 @@ encode_route_add_payload(const SingleRouteRequest& req)
 std::expected<SingleRouteRequest, std::error_code>
 decode_route_add_payload(std::span<const std::uint8_t> raw)
 {
-    // Minimum: type(1) + nexthop(4) = 5 bytes.
-    if (raw.size() < 5)
+    // Minimum: type(1) + iface_count(2) = 3 bytes.
+    if (raw.size() < 3)
         return std::unexpected(make_error_code(CmdError::InvalidCommand));
 
-    // Validate type byte.
-    if (raw[0] != static_cast<std::uint8_t>(RouteAddPayloadType::SINGLE_ROUTE))
+    if (raw[0] != static_cast<std::uint8_t>(RouteAddPayloadType::INTERFACE_ROUTE))
         return std::unexpected(make_error_code(CmdError::InvalidCommand));
 
-    // Remaining bytes after header must be an exact multiple of 5.
-    const std::size_t prefix_bytes = raw.size() - 5;
-    if (prefix_bytes % PREFIX_IPV4_WIRE_SIZE != 0)
-        return std::unexpected(make_error_code(CmdError::InvalidCommand));
+    const auto iface_count = static_cast<std::size_t>(read_be16(raw, 1));
 
     SingleRouteRequest req;
-    std::copy(raw.begin() + 1, raw.begin() + 5, req.nexthop.begin());
+    req.interfaces.reserve(iface_count);
+    std::size_t pos = 3;
 
-    const std::size_t n = prefix_bytes / PREFIX_IPV4_WIRE_SIZE;
-    req.prefixes.reserve(n);
-
-    std::size_t pos = 5;
-    for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t i = 0; i < iface_count; ++i)
     {
-        PrefixIpv4 p;
+        if (raw.size() - pos < INTERFACE_FIXED_SIZE)
+            return std::unexpected(make_error_code(CmdError::InvalidCommand));
+
+        Interface iface;
+
+        // iface_name: 32 bytes
+        for (std::size_t j = 0; j < IFACE_NAME_SIZE; ++j)
+            iface.iface_name[j] = static_cast<char>(raw[pos + j]);
+        pos += IFACE_NAME_SIZE;
+
+        // nexthop_addr_ipv4: 4 bytes
         std::copy(raw.begin() + static_cast<std::ptrdiff_t>(pos),
                   raw.begin() + static_cast<std::ptrdiff_t>(pos + 4),
-                  p.addr.begin());
-        p.mask_len = raw[pos + 4];
-        if (p.mask_len > 32)
-            return std::unexpected(make_error_code(CmdError::InvalidField));
-        pos += PREFIX_IPV4_WIRE_SIZE;
-        req.prefixes.push_back(p);
+                  iface.nexthop_addr_ipv4.begin());
+        pos += 4;
+
+        // nexthop_id_ipv4: 4 bytes big-endian
+        iface.nexthop_id_ipv4 = read_be32(raw, pos);
+        pos += 4;
+
+        // prefix_count: 2 bytes big-endian
+        const auto prefix_count = static_cast<std::size_t>(read_be16(raw, pos));
+        pos += 2;
+
+        const std::size_t prefix_bytes = prefix_count * PREFIX_IPV4_WIRE_SIZE;
+        if (raw.size() - pos < prefix_bytes)
+            return std::unexpected(make_error_code(CmdError::InvalidCommand));
+
+        iface.prefixes.reserve(prefix_count);
+        for (std::size_t k = 0; k < prefix_count; ++k)
+        {
+            PrefixIpv4 p;
+            std::copy(raw.begin() + static_cast<std::ptrdiff_t>(pos),
+                      raw.begin() + static_cast<std::ptrdiff_t>(pos + 4),
+                      p.addr.begin());
+            p.mask_len = raw[pos + 4];
+            if (p.mask_len > 32)
+                return std::unexpected(make_error_code(CmdError::InvalidField));
+            pos += PREFIX_IPV4_WIRE_SIZE;
+            iface.prefixes.push_back(p);
+        }
+
+        logger::log(logger::INFO, "cmdproto",
+                    std::format("  iface='{}' nexthop={} id={} prefixes={}",
+                                iface.iface_name.data(),
+                                fmt_ipv4(iface.nexthop_addr_ipv4),
+                                iface.nexthop_id_ipv4,
+                                iface.prefixes.size()));
+
+        req.interfaces.push_back(std::move(iface));
     }
 
-    // Log parsed fields.
-    logger::log(logger::INFO,
-                "cmdproto",
-                std::format("decode_route_add_payload: type=SINGLE_ROUTE"
-                            "  nexthop={}  prefixes={}",
-                            fmt_ipv4(req.nexthop),
-                            req.prefixes.size()));
-    for (std::size_t i = 0; i < req.prefixes.size(); ++i)
-    {
-        const auto& p = req.prefixes[i];
-        logger::log(logger::INFO,
-                    "cmdproto",
-                    std::format("  prefix[{:02}]  {}/{}",
-                                i,
-                                fmt_ipv4(p.addr),
-                                static_cast<unsigned>(p.mask_len)));
-    }
-
+    logger::log(logger::INFO, "cmdproto",
+                std::format("decode_route_add_payload: type=INTERFACE_ROUTE"
+                            "  interfaces={}",
+                            req.interfaces.size()));
     return req;
 }
 
@@ -859,12 +903,10 @@ encode_route_add_binary_response(const RouteAddBinaryResponse& resp)
             bits_hex += ' ';
         bits_hex += std::format("{:02x}", out[i]);
     }
-    logger::log(logger::INFO,
-                "cmdproto",
+    logger::log(logger::INFO, "cmdproto",
                 std::format("encode_route_add_binary_response:"
                             "  status=0x{:02x}  prefix_bytes={}  [{}]",
-                            resp.status_code,
-                            status_bytes,
+                            resp.status_code, status_bytes,
                             bits_hex.empty() ? "(none)" : bits_hex));
 
     return out;
@@ -892,58 +934,71 @@ decode_route_add_binary_response(std::span<const std::uint8_t> raw)
 std::expected<RouteAddBinaryResponse, std::error_code>
 handle_route_add_payload(const SingleRouteRequest& req)
 {
-    logger::log(logger::INFO,
-                "cmdproto",
-                std::format("handle_route_add_payload: installing {} prefix(es)"
-                            " via {}",
-                            req.prefixes.size(),
-                            fmt_ipv4(req.nexthop)));
+    std::size_t total_prefixes = 0;
+    for (const auto& iface : req.interfaces)
+        total_prefixes += iface.prefixes.size();
+
+    logger::log(logger::INFO, "cmdproto",
+                std::format("handle_route_add_payload: {} interface(s)"
+                            " {} total prefix(es)",
+                            req.interfaces.size(), total_prefixes));
 
     RouteAddBinaryResponse resp;
     resp.status_code = 0x00;
-    resp.prefix_status.reserve(req.prefixes.size());
+    resp.prefix_status.reserve(total_prefixes);
 
-    for (std::size_t i = 0; i < req.prefixes.size(); ++i)
+    for (const auto& iface : req.interfaces)
     {
-        const auto& pfx = req.prefixes[i];
+        logger::log(logger::INFO, "cmdproto",
+                    std::format("  iface='{}' nexthop={} id={} prefixes={}",
+                                iface.iface_name.data(),
+                                fmt_ipv4(iface.nexthop_addr_ipv4),
+                                iface.nexthop_id_ipv4,
+                                iface.prefixes.size()));
 
-        netlink::RouteAddParams np;
-        np.dst = pfx.addr;
-        np.prefix_len = pfx.mask_len;
-        np.gateway = req.nexthop;
-        np.has_gateway = true;
-        np.scope = netlink::RouteScope::Universe;
-        np.protocol = netlink::RouteProtocol::Static;
-        np.type = netlink::RouteType::Unicast;
-        np.table = netlink::RouteTable::Main;
+        for (std::size_t i = 0; i < iface.prefixes.size(); ++i)
+        {
+            const auto& pfx = iface.prefixes[i];
 
-        auto result = netlink::add_route(np);
-        const bool ok = result.has_value();
-        resp.prefix_status.push_back(ok);
-        if (!ok)
-            resp.status_code = 0x01;
+            netlink::RouteAddParams np;
+            np.dst         = pfx.addr;
+            np.prefix_len  = pfx.mask_len;
+            np.gateway     = iface.nexthop_addr_ipv4;
+            np.has_gateway = true;
+            np.if_name     = iface.iface_name.data();
+            np.scope       = netlink::RouteScope::Universe;
+            np.protocol    = netlink::RouteProtocol::Static;
+            np.type        = netlink::RouteType::Unicast;
+            np.table       = netlink::RouteTable::Main;
 
-        logger::log(
-            logger::INFO,
-            "cmdproto",
-            std::format("  prefix[{:02}]  {}/{}  via {}  ->  {}{}",
-                        i,
-                        fmt_ipv4(pfx.addr),
-                        static_cast<unsigned>(pfx.mask_len),
-                        fmt_ipv4(req.nexthop),
-                        ok ? "OK" : "FAIL",
-                        ok ? ""
-                           : std::format("  ({})", result.error().message())));
+            auto result = netlink::add_route(np);
+            const bool ok = result.has_value();
+            resp.prefix_status.push_back(ok);
+            if (!ok)
+                resp.status_code = 0x01;
+
+            logger::log(logger::INFO, "cmdproto",
+                        std::format("    prefix[{:02}]  {}/{}  via {}  dev {}"
+                                    "  ->  {}{}",
+                                    i,
+                                    fmt_ipv4(pfx.addr),
+                                    static_cast<unsigned>(pfx.mask_len),
+                                    fmt_ipv4(iface.nexthop_addr_ipv4),
+                                    iface.iface_name.data(),
+                                    ok ? "OK" : "FAIL",
+                                    ok ? "" : std::format("  ({})",
+                                        result.error().message())));
+        }
     }
 
-    const int ok_count = static_cast<int>(
-        std::count(resp.prefix_status.begin(), resp.prefix_status.end(), true));
-    logger::log(logger::INFO,
-                "cmdproto",
+    const int ok_count =
+        static_cast<int>(std::count(resp.prefix_status.begin(),
+                                    resp.prefix_status.end(), true));
+    logger::log(logger::INFO, "cmdproto",
                 std::format("handle_route_add_payload: {}/{} prefix(es)"
                             " installed  status=0x{:02x}",
                             ok_count,
-                            static_cast<int>(req.prefixes.size()),
+                            static_cast<int>(total_prefixes),
                             resp.status_code));
 
     return resp;
@@ -985,8 +1040,7 @@ encode_vrfs_route_request(const VrfsRouteRequest& req)
 
         // nexthop_addr_ipv4: 4 bytes network order
         out.insert(out.end(),
-                   vr.nexthop_addr_ipv4.begin(),
-                   vr.nexthop_addr_ipv4.end());
+                   vr.nexthop_addr_ipv4.begin(), vr.nexthop_addr_ipv4.end());
 
         // nexthop_id_ipv4: 4 bytes big-endian
         write_be32(out, vr.nexthop_id_ipv4);
@@ -1004,11 +1058,9 @@ encode_vrfs_route_request(const VrfsRouteRequest& req)
         }
     }
 
-    logger::log(logger::INFO,
-                "cmdproto",
+    logger::log(logger::INFO, "cmdproto",
                 std::format("encode_vrfs_route_request: vrfs={} bytes={}",
-                            req.vrfs_requests.size(),
-                            out.size()));
+                            req.vrfs_requests.size(), out.size()));
     return out;
 }
 
@@ -1069,8 +1121,7 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
             vr.prefixes.push_back(p);
         }
 
-        logger::log(logger::INFO,
-                    "cmdproto",
+        logger::log(logger::INFO, "cmdproto",
                     std::format("  vrf='{}' nexthop={} id={} prefixes={}",
                                 vr.vrfs_name.data(),
                                 fmt_ipv4(vr.nexthop_addr_ipv4),
@@ -1079,8 +1130,7 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
         req.vrfs_requests.push_back(std::move(vr));
     }
 
-    logger::log(logger::INFO,
-                "cmdproto",
+    logger::log(logger::INFO, "cmdproto",
                 std::format("decode_vrfs_route_request: vrfs={}",
                             req.vrfs_requests.size()));
     return req;
@@ -1102,13 +1152,10 @@ encode_vrfs_route_response(const VrfsRouteResponse& resp)
         out.push_back(ans.prefix_status ? 0x01u : 0x00u);
     }
 
-    logger::log(logger::INFO,
-                "cmdproto",
+    logger::log(logger::INFO, "cmdproto",
                 std::format("encode_vrfs_route_response:"
                             "  status=0x{:02x}  answers={}  bytes={}",
-                            resp.status_code,
-                            resp.answers.size(),
-                            out.size()));
+                            resp.status_code, resp.answers.size(), out.size()));
     return out;
 }
 
@@ -1146,8 +1193,7 @@ decode_vrfs_route_response(std::span<const std::uint8_t> raw)
 std::expected<VrfsRouteResponse, std::error_code>
 handle_vrfs_route_request(const VrfsRouteRequest& req)
 {
-    logger::log(logger::INFO,
-                "cmdproto",
+    logger::log(logger::INFO, "cmdproto",
                 std::format("handle_vrfs_route_request: {} vrf(s)",
                             req.vrfs_requests.size()));
 
@@ -1156,8 +1202,7 @@ handle_vrfs_route_request(const VrfsRouteRequest& req)
 
     for (const auto& vr : req.vrfs_requests)
     {
-        logger::log(logger::INFO,
-                    "cmdproto",
+        logger::log(logger::INFO, "cmdproto",
                     std::format("  vrf='{}' nexthop={} id={} prefixes={}",
                                 vr.vrfs_name.data(),
                                 fmt_ipv4(vr.nexthop_addr_ipv4),
@@ -1170,41 +1215,37 @@ handle_vrfs_route_request(const VrfsRouteRequest& req)
             const auto& pfx = vr.prefixes[i];
 
             netlink::RouteAddParams np;
-            np.dst = pfx.addr;
-            np.prefix_len = pfx.mask_len;
-            np.gateway = vr.nexthop_addr_ipv4;
+            np.dst         = pfx.addr;
+            np.prefix_len  = pfx.mask_len;
+            np.gateway     = vr.nexthop_addr_ipv4;
             np.has_gateway = true;
-            np.scope = netlink::RouteScope::Universe;
-            np.protocol = netlink::RouteProtocol::Static;
-            np.type = netlink::RouteType::Unicast;
-            np.table = netlink::RouteTable::Main;
+            np.scope       = netlink::RouteScope::Universe;
+            np.protocol    = netlink::RouteProtocol::Static;
+            np.type        = netlink::RouteType::Unicast;
+            np.table       = netlink::RouteTable::Main;
 
             auto result = netlink::add_route(np);
             const bool ok = result.has_value();
             if (!ok)
             {
                 vrf_ok = false;
-                logger::log(logger::INFO,
-                            "cmdproto",
+                logger::log(logger::INFO, "cmdproto",
                             std::format("    prefix[{:02}] {}/{} FAIL: {}",
-                                        i,
-                                        fmt_ipv4(pfx.addr),
+                                        i, fmt_ipv4(pfx.addr),
                                         static_cast<unsigned>(pfx.mask_len),
                                         result.error().message()));
             }
             else
             {
-                logger::log(logger::INFO,
-                            "cmdproto",
+                logger::log(logger::INFO, "cmdproto",
                             std::format("    prefix[{:02}] {}/{} OK",
-                                        i,
-                                        fmt_ipv4(pfx.addr),
+                                        i, fmt_ipv4(pfx.addr),
                                         static_cast<unsigned>(pfx.mask_len)));
             }
         }
 
         VrfsAnswer ans;
-        ans.vrfs_name = vr.vrfs_name;
+        ans.vrfs_name     = vr.vrfs_name;
         ans.prefix_status = vrf_ok;
         resp.answers.push_back(ans);
 
@@ -1212,8 +1253,7 @@ handle_vrfs_route_request(const VrfsRouteRequest& req)
             resp.status_code = 0x01;
     }
 
-    logger::log(logger::INFO,
-                "cmdproto",
+    logger::log(logger::INFO, "cmdproto",
                 std::format("handle_vrfs_route_request: done status=0x{:02x}",
                             resp.status_code));
     return resp;
