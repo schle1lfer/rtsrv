@@ -2,12 +2,20 @@
 IPS=("")
 
 if [[ "$1" == "spawn" ]]; then
-    echo "spawn cloning mode"
     #        Leaf1          Leaf2           Leaf3          Spine1         Spine2
-    IPS=("10.27.192.87" "10.27.192.115" "10.27.192.77" "10.27.192.26" "10.27.192.84")
+    # vASIC
+    #IPS=("10.27.192.87" "10.27.192.115" "10.27.192.77" "10.27.192.26" "10.27.192.84")
+    # hwASIC
+    IPS=("10.124.224.60" "10.124.224.61" "10.124.224.62" "10.124.224.63" "10.124.224.64")
+
+    echo "spawn cloning mode"
 else
     #        Leaf1
-    IPS=("10.27.192.87")
+    # vASIC
+    #IPS=("10.27.192.87")
+    # hwASIC
+    IPS=("10.124.224.60")
+
     echo "simple cloning mode"
 fi
 
@@ -32,7 +40,7 @@ for ip in "${IPS[@]}"; do
 
     # instalations
     for dir in "${SRC_DIRS[@]}"; do
-        echo -ne ">>> Coping $dir..."
+        echo -ne ">>> Coping $dir...\n"
 
         sshpass -p "$REMOTE_PASS" rsync -avz \
         -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
@@ -44,9 +52,9 @@ for ip in "${IPS[@]}"; do
         echo -ne "\n>>> Coping $dir..."
 
         if [ $? -eq 0 ]; then
-            echo " Done\r"
+            echo -ne " Done\r"
         else
-            echo " Fail\r"
+            echo -ne " Fail\r"
         fi
     done
 
@@ -66,8 +74,8 @@ for ip in "${IPS[@]}"; do
     echo -ne "\n>>> Coping to $ip..."
 
     if [ $? -eq 0 ]; then
-        echo "Done\n"
+        echo -ne "Done\n"
     else
-        echo "Fail\n"
+        echo -ne "Fail\n"
     fi
 done
