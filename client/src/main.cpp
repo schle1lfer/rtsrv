@@ -2624,6 +2624,14 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
             vrfr.vrfs_name[k] = vn[k];
         }
 
+        // Null-padded fixed-width interface name.
+        const std::string& ifn = route.interface_name();
+        for (std::size_t k = 0;
+             k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
+        {
+            vrfr.iface_name[k] = ifn[k];
+        }
+
         vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
                                    nhBytes[2], nhBytes[3]};
         vrfr.nexthop_id_ipv4   = nh->id;
@@ -2650,9 +2658,9 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
                 maskLen});
         }
 
-        std::println("[Nexthops]   VRF entry: vrf='{}' nexthop='{}' "
+        std::println("[Nexthops]   VRF entry: vrf='{}' iface='{}' nexthop='{}' "
                      "nexthop_id={} prefixes={}",
-                     route.vrf_name(), gateway, nh->id,
+                     route.vrf_name(), route.interface_name(), gateway, nh->id,
                      vrfr.prefixes.size());
 
         vrfsReq.vrfs_requests.push_back(std::move(vrfr));
@@ -3637,6 +3645,13 @@ int main(int argc, char* argv[])
             {
                 vrfr.vrfs_name[k] = vn[k];
             }
+            // Interface name (null-padded fixed array).
+            const std::string& ifn = route.interface_name();
+            for (std::size_t k = 0;
+                 k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
+            {
+                vrfr.iface_name[k] = ifn[k];
+            }
             vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
                                       nhBytes[2], nhBytes[3]};
             vrfr.nexthop_id_ipv4   = nexthopId;
@@ -3663,9 +3678,9 @@ int main(int argc, char* argv[])
                     maskLen});
             }
 
-            std::println("[run] nni VRF entry: vrf='{}' nexthop='{}' "
+            std::println("[run] nni VRF entry: vrf='{}' iface='{}' nexthop='{}' "
                          "nexthop_id={} prefixes={}",
-                         route.vrf_name(), route.nexthop(),
+                         route.vrf_name(), route.interface_name(), route.nexthop(),
                          nexthopId, vrfr.prefixes.size());
 
             vrfsReq.vrfs_requests.push_back(std::move(vrfr));

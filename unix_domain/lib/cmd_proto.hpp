@@ -318,8 +318,8 @@ using VrfsName = std::array<char, 16>;
 inline constexpr std::size_t VRFS_NAME_SIZE = 16;
 
 /// @brief Fixed-size portion of one vrfs_request wire entry:
-///        vrfs_name(16) + nexthop_addr(4) + nexthop_id(4) + prefix_count(2).
-inline constexpr std::size_t VRFS_REQUEST_FIXED_SIZE = 26;
+///        vrfs_name(16) + iface_name(32) + nexthop_addr(4) + nexthop_id(4) + prefix_count(2).
+inline constexpr std::size_t VRFS_REQUEST_FIXED_SIZE = 58;
 
 /// @brief Wire size of one vrfs_answer entry: vrfs_name(16) + prefix_status(1).
 inline constexpr std::size_t VRFS_ANSWER_WIRE_SIZE = 17;
@@ -331,6 +331,7 @@ inline constexpr std::size_t VRFS_ANSWER_WIRE_SIZE = 17;
  * | Field             | Size    | Notes                              |
  * |-------------------|---------|------------------------------------|
  * | vrfs_name         | 16      | NUL-terminated VRF name            |
+ * | iface_name        | 32      | NUL-terminated egress interface    |
  * | nexthop_addr_ipv4 | 4       | Next-hop gateway (network order)   |
  * | nexthop_id_ipv4   | 4       | Next-hop identifier (big-endian)   |
  * | prefix_count      | 2       | Number of following prefix entries |
@@ -339,6 +340,7 @@ inline constexpr std::size_t VRFS_ANSWER_WIRE_SIZE = 17;
 struct VrfsRequest
 {
     VrfsName      vrfs_name{};          ///< VRF name (16 bytes, null-padded)
+    IfaceName     iface_name{};         ///< Interface name (32 bytes, null-padded)
     Ipv4Addr      nexthop_addr_ipv4{};  ///< Next-hop gateway address
     std::uint32_t nexthop_id_ipv4{};    ///< Next-hop identifier
     std::vector<PrefixIpv4> prefixes;   ///< Prefix list for this VRF

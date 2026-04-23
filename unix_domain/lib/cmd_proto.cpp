@@ -1038,6 +1038,10 @@ encode_vrfs_route_request(const VrfsRouteRequest& req)
         for (std::size_t i = 0; i < VRFS_NAME_SIZE; ++i)
             out.push_back(static_cast<std::uint8_t>(vr.vrfs_name[i]));
 
+        // iface_name: 32 bytes, null-padded
+        for (std::size_t i = 0; i < IFACE_NAME_SIZE; ++i)
+            out.push_back(static_cast<std::uint8_t>(vr.iface_name[i]));
+
         // nexthop_addr_ipv4: 4 bytes network order
         out.insert(out.end(),
                    vr.nexthop_addr_ipv4.begin(), vr.nexthop_addr_ipv4.end());
@@ -1089,6 +1093,11 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
             vr.vrfs_name[i] = static_cast<char>(raw[pos + i]);
         pos += VRFS_NAME_SIZE;
 
+        // iface_name: 32 bytes
+        for (std::size_t i = 0; i < IFACE_NAME_SIZE; ++i)
+            vr.iface_name[i] = static_cast<char>(raw[pos + i]);
+        pos += IFACE_NAME_SIZE;
+
         // nexthop_addr_ipv4: 4 bytes
         std::copy(raw.begin() + static_cast<std::ptrdiff_t>(pos),
                   raw.begin() + static_cast<std::ptrdiff_t>(pos + 4),
@@ -1122,8 +1131,9 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
         }
 
         logger::log(logger::INFO, "cmdproto",
-                    std::format("  vrf='{}' nexthop={} id={} prefixes={}",
+                    std::format("  vrf='{}' iface='{}' nexthop={} id={} prefixes={}",
                                 vr.vrfs_name.data(),
+                                vr.iface_name.data(),
                                 fmt_ipv4(vr.nexthop_addr_ipv4),
                                 vr.nexthop_id_ipv4,
                                 vr.prefixes.size()));
@@ -1203,8 +1213,9 @@ handle_vrfs_route_request(const VrfsRouteRequest& req)
     for (const auto& vr : req.vrfs_requests)
     {
         logger::log(logger::INFO, "cmdproto",
-                    std::format("  vrf='{}' nexthop={} id={} prefixes={}",
+                    std::format("  vrf='{}' iface='{}' nexthop={} id={} prefixes={}",
                                 vr.vrfs_name.data(),
+                                vr.iface_name.data(),
                                 fmt_ipv4(vr.nexthop_addr_ipv4),
                                 vr.nexthop_id_ipv4,
                                 vr.prefixes.size()));
@@ -1219,6 +1230,7 @@ handle_vrfs_route_request(const VrfsRouteRequest& req)
             np.prefix_len  = pfx.mask_len;
             np.gateway     = vr.nexthop_addr_ipv4;
             np.has_gateway = true;
+            np.if_name     = vr.iface_name.data();
             np.scope       = netlink::RouteScope::Universe;
             np.protocol    = netlink::RouteProtocol::Static;
             np.type        = netlink::RouteType::Unicast;
