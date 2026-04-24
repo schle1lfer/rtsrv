@@ -202,6 +202,22 @@ std::string_view cmd_id_name(CmdId id) noexcept
     }
 }
 
+/**
+ * @brief Maps a FieldId enumerator to its human-readable name.
+ */
+std::string_view field_id_name(FieldId id) noexcept
+{
+    switch (id)
+    {
+    case FieldId::DST_ADDR:   return "DST_ADDR";
+    case FieldId::PREFIX_LEN: return "PREFIX_LEN";
+    case FieldId::GATEWAY:    return "GATEWAY";
+    case FieldId::IF_NAME:    return "IF_NAME";
+    case FieldId::METRIC:     return "METRIC";
+    default:                  return "UNKNOWN";
+    }
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -227,6 +243,12 @@ encode_command(const Command& cmd)
                     std::format("encode cmd (binary): {} payload_bytes={}",
                                 cmd_id_name(cmd.cmd_id),
                                 cmd.raw_payload.size()));
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("  hdr: cmd_id=0x{:02x}({}) data_len={}  total={}",
+                                static_cast<unsigned>(cmd.cmd_id),
+                                cmd_id_name(cmd.cmd_id),
+                                cmd.raw_payload.size(),
+                                out.size()));
         return out;
     }
 
@@ -241,12 +263,26 @@ encode_command(const Command& cmd)
     out.push_back(static_cast<std::uint8_t>(cmd.cmd_id));
     write_be16(out, static_cast<std::uint16_t>(fields_size));
 
+    logger::log(logger::DEBUG, "cmdproto",
+                std::format("encode cmd (tlv) hdr: cmd_id=0x{:02x}({}) data_len={}",
+                            static_cast<unsigned>(cmd.cmd_id),
+                            cmd_id_name(cmd.cmd_id),
+                            fields_size));
+
     // Field entries.
+    std::size_t fi = 0;
     for (const auto& f : cmd.fields)
     {
+        const std::size_t field_offset = out.size();
         out.push_back(static_cast<std::uint8_t>(f.field_id));
         out.push_back(static_cast<std::uint8_t>(f.data.size()));
         out.insert(out.end(), f.data.begin(), f.data.end());
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("  field[{}] @{}: id=0x{:02x}({}) len={}",
+                                fi++, field_offset,
+                                static_cast<unsigned>(f.field_id),
+                                field_id_name(f.field_id),
+                                f.data.size()));
     }
 
     logger::log(logger::INFO,
@@ -287,6 +323,12 @@ decode_command(std::span<const std::uint8_t> raw)
     Command cmd;
     cmd.cmd_id = static_cast<CmdId>(cmd_id_byte);
 
+    logger::log(logger::DEBUG, "cmdproto",
+                std::format("decode cmd hdr @0: cmd_id=0x{:02x}({}) data_len={}",
+                            cmd_id_byte,
+                            cmd_id_name(cmd.cmd_id),
+                            data_len));
+
     // Always capture the raw payload bytes so callers can choose between
     // binary-format and TLV-format decoding.
     cmd.raw_payload.assign(raw.begin() + CMD_HEADER_SIZE,
@@ -297,13 +339,14 @@ decode_command(std::span<const std::uint8_t> raw)
     // binary format rather than TLV).
     std::size_t pos = CMD_HEADER_SIZE;
     const std::size_t end = CMD_HEADER_SIZE + data_len;
+    std::size_t fi = 0;
 
     while (pos < end)
     {
         if (end - pos < FIELD_HEADER_SIZE)
             break; // truncated field header — stop gracefully
 
-        const auto field_id = raw[pos];
+        const auto field_id  = raw[pos];
         const auto field_len = raw[pos + 1];
         pos += FIELD_HEADER_SIZE;
 
@@ -315,6 +358,12 @@ decode_command(std::span<const std::uint8_t> raw)
         f.data.assign(raw.begin() + static_cast<std::ptrdiff_t>(pos),
                       raw.begin() +
                           static_cast<std::ptrdiff_t>(pos + field_len));
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("  field[{}] @{}: id=0x{:02x}({}) len={}",
+                                fi++, pos - FIELD_HEADER_SIZE,
+                                field_id,
+                                field_id_name(static_cast<FieldId>(field_id)),
+                                field_len));
         pos += field_len;
 
         cmd.fields.push_back(std::move(f));
@@ -1029,10 +1078,13 @@ encode_vrfs_route_request(const VrfsRouteRequest& req)
     std::vector<std::uint8_t> out;
     out.push_back(static_cast<std::uint8_t>(RouteAddPayloadType::SINGLE_ROUTE));
 
-    for (const auto& vr : req.vrfs_requests)
+    for (std::size_t vi = 0; vi < req.vrfs_requests.size(); ++vi)
     {
+        const auto& vr = req.vrfs_requests[vi];
         if (vr.prefixes.size() > 0xFFFFu)
             return std::unexpected(make_error_code(CmdError::InvalidField));
+
+        const std::size_t vrf_offset = out.size();
 
         // vrfs_name: 16 bytes, null-padded
         for (std::size_t i = 0; i < VRFS_NAME_SIZE; ++i)
@@ -1052,13 +1104,29 @@ encode_vrfs_route_request(const VrfsRouteRequest& req)
         // prefix_count: 2 bytes big-endian
         write_be16(out, static_cast<std::uint16_t>(vr.prefixes.size()));
 
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("  [enc] vrf[{}] @{}: name='{}' iface='{}'"
+                                " nexthop={} id={} prefix_count={}",
+                                vi, vrf_offset,
+                                vr.vrfs_name.data(), vr.iface_name.data(),
+                                fmt_ipv4(vr.nexthop_addr_ipv4),
+                                vr.nexthop_id_ipv4,
+                                vr.prefixes.size()));
+
         // prefix_ipv4[]: N × 5 bytes (addr + mask)
-        for (const auto& p : vr.prefixes)
+        for (std::size_t pi = 0; pi < vr.prefixes.size(); ++pi)
         {
+            const auto& p = vr.prefixes[pi];
             if (p.mask_len > 32)
                 return std::unexpected(make_error_code(CmdError::InvalidField));
+            const std::size_t pfx_offset = out.size();
             out.insert(out.end(), p.addr.begin(), p.addr.end());
             out.push_back(p.mask_len);
+            logger::log(logger::DEBUG, "cmdproto",
+                        std::format("    prefix[{}] @{}: {}/{}",
+                                    pi, pfx_offset,
+                                    fmt_ipv4(p.addr),
+                                    static_cast<unsigned>(p.mask_len)));
         }
     }
 
@@ -1080,6 +1148,12 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
 
     VrfsRouteRequest req;
     std::size_t pos = 1;
+    std::size_t vi  = 0;
+
+    logger::log(logger::DEBUG, "cmdproto",
+                std::format("decode_vrfs_route_request: type=SINGLE_ROUTE"
+                            " total_bytes={}",
+                            raw.size()));
 
     while (pos < raw.size())
     {
@@ -1087,30 +1161,46 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
             return std::unexpected(make_error_code(CmdError::InvalidCommand));
 
         VrfsRequest vr;
+        const std::size_t vrf_start = pos;
 
         // vrfs_name: 16 bytes
         for (std::size_t i = 0; i < VRFS_NAME_SIZE; ++i)
             vr.vrfs_name[i] = static_cast<char>(raw[pos + i]);
         pos += VRFS_NAME_SIZE;
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("  [dec] vrf[{}] @{}: vrfs_name='{}'",
+                                vi, vrf_start, vr.vrfs_name.data()));
 
         // iface_name: 32 bytes
         for (std::size_t i = 0; i < IFACE_NAME_SIZE; ++i)
             vr.iface_name[i] = static_cast<char>(raw[pos + i]);
         pos += IFACE_NAME_SIZE;
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("    iface_name @{}: '{}'",
+                                pos - IFACE_NAME_SIZE, vr.iface_name.data()));
 
         // nexthop_addr_ipv4: 4 bytes
         std::copy(raw.begin() + static_cast<std::ptrdiff_t>(pos),
                   raw.begin() + static_cast<std::ptrdiff_t>(pos + 4),
                   vr.nexthop_addr_ipv4.begin());
         pos += 4;
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("    nexthop_addr @{}: {}",
+                                pos - 4, fmt_ipv4(vr.nexthop_addr_ipv4)));
 
         // nexthop_id_ipv4: 4 bytes big-endian
         vr.nexthop_id_ipv4 = read_be32(raw, pos);
         pos += 4;
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("    nexthop_id   @{}: {}",
+                                pos - 4, vr.nexthop_id_ipv4));
 
         // prefix_count: 2 bytes big-endian
         const auto prefix_count = static_cast<std::size_t>(read_be16(raw, pos));
         pos += 2;
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("    prefix_count @{}: {}",
+                                pos - 2, prefix_count));
 
         const std::size_t prefix_bytes = prefix_count * PREFIX_IPV4_WIRE_SIZE;
         if (raw.size() - pos < prefix_bytes)
@@ -1120,6 +1210,7 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
         for (std::size_t i = 0; i < prefix_count; ++i)
         {
             PrefixIpv4 p;
+            const std::size_t pfx_pos = pos;
             std::copy(raw.begin() + static_cast<std::ptrdiff_t>(pos),
                       raw.begin() + static_cast<std::ptrdiff_t>(pos + 4),
                       p.addr.begin());
@@ -1128,6 +1219,11 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
                 return std::unexpected(make_error_code(CmdError::InvalidField));
             pos += PREFIX_IPV4_WIRE_SIZE;
             vr.prefixes.push_back(p);
+            logger::log(logger::DEBUG, "cmdproto",
+                        std::format("    prefix[{}] @{}: {}/{}",
+                                    i, pfx_pos,
+                                    fmt_ipv4(p.addr),
+                                    static_cast<unsigned>(p.mask_len)));
         }
 
         logger::log(logger::INFO, "cmdproto",
@@ -1138,6 +1234,7 @@ decode_vrfs_route_request(std::span<const std::uint8_t> raw)
                                 vr.nexthop_id_ipv4,
                                 vr.prefixes.size()));
         req.vrfs_requests.push_back(std::move(vr));
+        ++vi;
     }
 
     logger::log(logger::INFO, "cmdproto",
