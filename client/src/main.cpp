@@ -90,7 +90,7 @@
 #include <linux/neighbour.h>
 #include <netinet/ip_icmp.h>
 #include <poll.h>
-#include <pthread.h>
+#include <sys/socket.h>
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -3747,19 +3747,29 @@ int main(int argc, char* argv[])
 
         std::println("[run] Shutdown signal received — stopping");
 
-        // close() from another thread does not unblock a blocking recv() on
-        // Linux; sending a signal does (EINTR → retry on closed fd → EBADF).
-        auto interruptRecv = [](std::thread& t) noexcept {
-            if (t.joinable())
-                ::pthread_kill(t.native_handle(), SIGINT);
+        // shutdown(SHUT_RD) is the POSIX-guaranteed way to unblock a blocking
+        // recv() in another thread on a socket fd.  close() alone does NOT
+        // unblock recv() on Linux.  pthread_kill(SIGINT) only delivers EINTR,
+        // but all three *_run loops treat EINTR as "continue" — so the thread
+        // never exits that way.
+        // After shutdown the *_run loop's next recv() returns with a non-EINTR
+        // error (ENOTCONN / EBADF), which causes return -1 → thread exits.
+        // Setting the globals to -1 prevents the StartupGuard destructor from
+        // double-closing them.
+        auto stopNetlinkFd = [](int& fd, void (*closeFn)(int)) noexcept {
+            if (fd >= 0) {
+                ::shutdown(fd, SHUT_RD);
+                closeFn(fd);
+                fd = -1;
+            }
         };
-        interruptRecv(startupRouteThread);
-        interruptRecv(startupNeighThread);
-        interruptRecv(startupNhThread);
+        stopNetlinkFd(g_startup_route_fd,   netlink_close);
+        stopNetlinkFd(g_startup_neigh_fd,   netlink_neigh_close);
+        stopNetlinkFd(g_startup_nexthop_fd, netlink_nexthop_close);
 
         vrfClient.stop();
         grpcProc.stop();
-        return EXIT_SUCCESS;
+        return EXIT_SUCCESS; // StartupGuard joins threads (now exiting)
     }
 
     if (command == "vrf-route-add")
