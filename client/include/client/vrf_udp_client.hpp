@@ -3,7 +3,7 @@
  * @brief VRF route-add client over a non-blocking UNIX-domain socket.
  *
  * VrfUdpClient runs in a dedicated background thread.  Callers submit
- * VrfsRouteRequest values via submit(); the thread picks them up, encodes
+ * SingleRouteRequest values via submit(); the thread picks them up, encodes
  * and sends them over an AF_UNIX stream socket in non-blocking mode (using
  * poll() for all I/O readiness checks), receives the response frame, decodes
  * and logs the per-VRF status bitmask.
@@ -67,22 +67,22 @@ public:
     [[nodiscard]] bool running() const noexcept;
 
     /**
-     * @brief Enqueues a VRF route-add request for async delivery.
+     * @brief Enqueues a route-add request for async delivery.
      *
      * Thread-safe; may be called from any thread.  Returns immediately.
      *
-     * @param req  Complete VRF route-add request built from GetAllRoutes data.
+     * @param req  SingleRouteRequest to deliver to ud_server.
      */
-    void submit(cmdproto::VrfsRouteRequest req);
+    void submit(cmdproto::SingleRouteRequest req);
 
 private:
     void threadFunc();
-    void processRequest(const cmdproto::VrfsRouteRequest& req);
+    void processRequest(const cmdproto::SingleRouteRequest& req);
 
     std::string socketPath_;
     int         ioTimeoutMs_;
 
-    std::queue<cmdproto::VrfsRouteRequest> queue_;
+    std::queue<cmdproto::SingleRouteRequest> queue_;
     std::mutex                              queueMutex_;
     std::condition_variable                 queueCv_;
 

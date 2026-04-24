@@ -2,7 +2,7 @@
  * @file client/src/vrf_udp_client.cpp
  * @brief VRF UDP client — non-blocking UNIX-domain socket with command queue.
  *
- * The background thread waits for VrfsRouteRequest commands, connects to the
+ * The background thread waits for SingleRouteRequest commands, connects to the
  * UNIX-domain server (O_NONBLOCK socket + poll() for every I/O step), sends
  * the encoded frame, receives the response, decodes and logs the per-VRF
  * status bitmask.
@@ -193,7 +193,7 @@ bool VrfUdpClient::running() const noexcept
     return running_.load();
 }
 
-void VrfUdpClient::submit(cmdproto::VrfsRouteRequest req)
+void VrfUdpClient::submit(cmdproto::SingleRouteRequest req)
 {
     {
         std::lock_guard lock(queueMutex_);
@@ -212,7 +212,7 @@ void VrfUdpClient::threadFunc()
 
     while (!stopRequested_.load())
     {
-        cmdproto::VrfsRouteRequest req;
+        cmdproto::SingleRouteRequest req;
 
         {
             std::unique_lock lock(queueMutex_);
@@ -236,26 +236,25 @@ void VrfUdpClient::threadFunc()
 // processRequest — encode → connect (non-blocking) → send → recv → log
 // ---------------------------------------------------------------------------
 
-void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
+void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
 {
     static std::uint16_t s_msg_id = 1;
     const std::uint16_t  msg_id   = s_msg_id++;
 
     // Log what we're about to send
-    std::println("[VrfUdpClient] processing request msg_id={}: {} VRF(s)",
-                 msg_id, req.vrfs_requests.size());
-    for (const auto& vr : req.vrfs_requests)
+    std::println("[VrfUdpClient] processing request msg_id={}: {} interface(s)",
+                 msg_id, req.interfaces.size());
+    for (const auto& iface : req.interfaces)
     {
-        std::println("[VrfUdpClient]   vrf='{}' iface='{}' nexthop={} nexthop_id={} "
+        std::println("[VrfUdpClient]   iface='{}' nexthop={} nexthop_id={} "
                      "prefixes={}",
-                     vr.vrfs_name.data(),
-                     vr.iface_name.data(),
-                     fmt_ip(vr.nexthop_addr_ipv4),
-                     vr.nexthop_id_ipv4,
-                     vr.prefixes.size());
-        for (std::size_t i = 0; i < vr.prefixes.size(); ++i)
+                     iface.iface_name.data(),
+                     fmt_ip(iface.nexthop_addr_ipv4),
+                     iface.nexthop_id_ipv4,
+                     iface.prefixes.size());
+        for (std::size_t i = 0; i < iface.prefixes.size(); ++i)
         {
-            const auto& p = vr.prefixes[i];
+            const auto& p = iface.prefixes[i];
             std::println("[VrfUdpClient]     prefix[{}]: {}/{}", i,
                          fmt_ip(p.addr), static_cast<unsigned>(p.mask_len));
         }
@@ -263,7 +262,7 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
 
     // ── [1] Encode cmdproto ROUTE_ADD command ───────────────────────────────
     auto cmd_bytes =
-        cmdproto::encode_command(cmdproto::make_route_add_vrfs(req));
+        cmdproto::encode_command(cmdproto::make_route_add_binary(req));
     if (!cmd_bytes)
     {
         std::println(stderr, "[VrfUdpClient] encode_command: {}",
@@ -410,44 +409,35 @@ void VrfUdpClient::processRequest(const cmdproto::VrfsRouteRequest& req)
 
     const std::uint8_t ack_status = reply_msg->payload[0];
 
-    // ── [10] Decode VRF response ─────────────────────────────────────────────
-    auto vrf_resp = cmdproto::decode_vrfs_route_response(
+    // ── [10] Decode binary route-add response ────────────────────────────────
+    auto bin_resp = cmdproto::decode_route_add_binary_response(
         std::span<const std::uint8_t>{reply_msg->payload}.subspan(1));
-    if (!vrf_resp)
+    if (!bin_resp)
     {
-        std::println(stderr, "[VrfUdpClient] decode_vrfs_route_response: {}",
-                     vrf_resp.error().message());
+        std::println(stderr, "[VrfUdpClient] decode_route_add_binary_response: {}",
+                     bin_resp.error().message());
         return;
     }
 
-    // ── [11] Log bitmask for each VRF prefix set ─────────────────────────────
+    // ── [11] Log per-prefix result bits ─────────────────────────────────────
     std::println("[VrfUdpClient] response msg_id={}: msg_type=0x{:02x} "
                  "ack=0x{:02x} overall_status=0x{:02x} ({})",
                  msg_id,
                  static_cast<unsigned>(reply_msg->msg_type),
                  static_cast<unsigned>(ack_status),
-                 static_cast<unsigned>(vrf_resp->status_code),
-                 vrf_resp->status_code == 0x00 ? "all VRFs ok"
+                 static_cast<unsigned>(bin_resp->status_code),
+                 bin_resp->status_code == 0x00 ? "all prefixes ok"
                                                : "one or more failures");
 
-    for (std::size_t i = 0; i < vrf_resp->answers.size(); ++i)
+    for (std::size_t i = 0; i < bin_resp->prefix_status.size(); ++i)
     {
-        const auto& ans = vrf_resp->answers[i];
-        // prefix_status is 1 byte on wire (bit 0 = success flag) — log as hex
-        const std::uint8_t bitmask =
-            ans.prefix_status ? static_cast<std::uint8_t>(0x01)
-                              : static_cast<std::uint8_t>(0x00);
-        std::println("[VrfUdpClient]   answer[{}]: vrf='{}' "
-                     "prefix_status_bitmask=0x{:02x} ({})",
-                     i,
-                     ans.vrfs_name.data(),
-                     static_cast<unsigned>(bitmask),
-                     ans.prefix_status ? "installed ok" : "install failed");
+        std::println("[VrfUdpClient]   prefix[{}]: {}",
+                     i, bin_resp->prefix_status[i] ? "ok" : "FAIL");
     }
 
     std::println("[VrfUdpClient] exchange complete msg_id={}: {}",
                  msg_id,
-                 vrf_resp->status_code == 0x00 ? "PASS" : "FAIL");
+                 bin_resp->status_code == 0x00 ? "PASS" : "FAIL");
 }
 
 } // namespace sra

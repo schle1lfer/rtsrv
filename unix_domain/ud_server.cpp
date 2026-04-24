@@ -6,10 +6,9 @@
  * route-add requests encoded in the udproto/routeproto/cmdproto stack.
  *
  * ## Supported ROUTE_ADD payload types
- * | Type            | Value | Format          | Handler                    |
- * |-----------------|-------|-----------------|----------------------------|
- * | SINGLE_ROUTE    |   1   | VrfsRouteRequest  | handle_vrfs_route_request  |
- * | INTERFACE_ROUTE |   2   | SingleRouteRequest| handle_route_add_payload   |
+ * | Type         | Value | Format             | Handler                  |
+ * |--------------|-------|--------------------|--------------------------|
+ * | SINGLE_ROUTE |   1   | SingleRouteRequest | handle_route_add_payload |
  *
  * ## Usage
  * @code
@@ -145,16 +144,15 @@ send_response(int fd,
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Dispatches a single ROUTE_ADD command by payload type and returns
- *        the encoded response bytes.
+ * @brief Dispatches a single ROUTE_ADD command and returns the encoded
+ *        response bytes.
  *
- * Inspects raw_payload[0] to determine whether the payload uses the
- * SINGLE_ROUTE (VRF, type=1) or INTERFACE_ROUTE (single-iface, type=2)
- * binary format.  Falls back to the legacy TLV format when raw_payload is
- * empty.
+ * Expects the binary payload format: SINGLE_ROUTE (type=1) carrying a
+ * SingleRouteRequest (iface_count + interface entries).  Falls back to the
+ * legacy TLV format when raw_payload is empty.
  *
  * @param cmd  Decoded ROUTE_ADD command.
- * @return Encoded response bytes, or an error code.
+ * @return Encoded RouteAddBinaryResponse bytes, or an error code.
  */
 static std::expected<std::vector<std::uint8_t>, std::error_code>
 dispatch_route_add(const cmdproto::Command& cmd)
@@ -170,48 +168,23 @@ dispatch_route_add(const cmdproto::Command& cmd)
         if (!result)
             return std::unexpected(result.error());
 
-        // No binary response for TLV format; return an empty success byte.
+        // No binary response for TLV format; return a single success byte.
         return std::vector<std::uint8_t>{0x00};
     }
 
-    const auto type_byte = cmd.raw_payload[0];
+    // Binary format: type byte must be SINGLE_ROUTE (1).
+    auto req = cmdproto::decode_route_add_payload(cmd.raw_payload);
+    if (!req)
+        return std::unexpected(req.error());
 
-    if (type_byte == static_cast<std::uint8_t>(cmdproto::RouteAddPayloadType::SINGLE_ROUTE))
-    {
-        auto req = cmdproto::decode_vrfs_route_request(cmd.raw_payload);
-        if (!req)
-            return std::unexpected(req.error());
+    std::println("[ud_server] ROUTE_ADD SINGLE_ROUTE: {} interface(s)",
+                 req->interfaces.size());
 
-        std::println("[ud_server] ROUTE_ADD SINGLE_ROUTE: {} VRF(s)",
-                     req->vrfs_requests.size());
+    auto resp = cmdproto::handle_route_add_payload(*req);
+    if (!resp)
+        return std::unexpected(resp.error());
 
-        auto resp = cmdproto::handle_vrfs_route_request(*req);
-        if (!resp)
-            return std::unexpected(resp.error());
-
-        return cmdproto::encode_vrfs_route_response(*resp);
-    }
-
-    if (type_byte == static_cast<std::uint8_t>(cmdproto::RouteAddPayloadType::INTERFACE_ROUTE))
-    {
-        auto req = cmdproto::decode_route_add_payload(cmd.raw_payload);
-        if (!req)
-            return std::unexpected(req.error());
-
-        std::println("[ud_server] ROUTE_ADD INTERFACE_ROUTE: {} interface(s)",
-                     req->interfaces.size());
-
-        auto resp = cmdproto::handle_route_add_payload(*req);
-        if (!resp)
-            return std::unexpected(resp.error());
-
-        return cmdproto::encode_route_add_binary_response(*resp);
-    }
-
-    std::println(stderr, "[ud_server] ROUTE_ADD: unknown payload type=0x{:02x}",
-                 static_cast<unsigned>(type_byte));
-    return std::unexpected(
-        cmdproto::make_error_code(cmdproto::CmdError::InvalidCommand));
+    return cmdproto::encode_route_add_binary_response(*resp);
 }
 
 // ---------------------------------------------------------------------------

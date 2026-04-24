@@ -53,13 +53,13 @@
  *     set-loopback <address>  Store a loopback address on the server
  *     get-loopback            Retrieve the stored loopback address
  *     get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)
- *     vrf-route-add [socket]  Query srmd via gRPC, build a VrfsRouteRequest from
+ *     vrf-route-add [socket]  Query srmd via gRPC, build a SingleRouteRequest from
  *                             nni routes, and deliver it to ud_server once (one-shot).
  *                             Default socket: /tmp/ud_server.sock
  *     run [socket]            Full SRA daemon mode — runs until SIGINT/SIGTERM:
  *                               1. RequestLoopback → SOT auth check via srmd
  *                               2. GetLoopbacks / GetAllRoutes via srmd
- *                               3. Build VrfsRouteRequest (nni interfaces only)
+ *                               3. Build SingleRouteRequest (nni interfaces only)
  *                               4. Deliver to ud_server via Unix-domain socket
  *                               5. Monitor kernel nexthop events continuously
  *                             Default socket: /tmp/ud_server.sock
@@ -2554,7 +2554,7 @@ static void sendIcmpEchoRequest(const std::string& destIp)
 
 /**
  * @brief Checks whether @p nh exists in the VRF table and, if so, builds and
- *        submits a SingleRoute (type=1) VrfsRouteRequest to ud_server.
+ *        submits a SingleRouteRequest (SINGLE_ROUTE, type=1) to ud_server.
  *
  * Called on every nexthop ADDED / CHANGED / REMOVED event.  Only nni
  * interface entries that carry a matching nexthop gateway are included in the
@@ -2597,8 +2597,8 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
     }
 
     const auto routes = vrfTable->findByNexthop(gateway);
-    std::println("[Nexthops] nexthop id={} gw={} matched {} VRF entry/entries; "
-                 "generating SingleRoute request (type=1)",
+    std::println("[Nexthops] nexthop id={} gw={} matched {} entry/entries; "
+                 "generating SingleRouteRequest (SINGLE_ROUTE, type=1)",
                  nh->id, gateway, routes.size());
 
     // Parse gateway to binary (network byte order).
@@ -2612,7 +2612,7 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
     const auto* nhBytes =
         reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
-    cmdproto::VrfsRouteRequest vrfsReq;
+    cmdproto::SingleRouteRequest req;
 
     for (const auto& route : routes)
     {
@@ -2622,27 +2622,19 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
         if (route.nexthop().empty())
             continue;
 
-        cmdproto::VrfsRequest vrfr{};
-
-        // Null-padded fixed-width VRF name.
-        const std::string& vn = route.vrf_name();
-        for (std::size_t k = 0;
-             k < cmdproto::VRFS_NAME_SIZE && k < vn.size(); ++k)
-        {
-            vrfr.vrfs_name[k] = vn[k];
-        }
+        cmdproto::Interface iface{};
 
         // Null-padded fixed-width interface name.
         const std::string& ifn = route.interface_name();
         for (std::size_t k = 0;
              k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
         {
-            vrfr.iface_name[k] = ifn[k];
+            iface.iface_name[k] = ifn[k];
         }
 
-        vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
+        iface.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
                                    nhBytes[2], nhBytes[3]};
-        vrfr.nexthop_id_ipv4   = nh->id;
+        iface.nexthop_id_ipv4   = nh->id;
 
         // Convert each prefix string "A.B.C.D/N" to binary PrefixIpv4.
         for (const auto& pfx : route.prefixes())
@@ -2661,31 +2653,31 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
             const auto* pfxBytes =
                 reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
 
-            vrfr.prefixes.push_back(cmdproto::PrefixIpv4{
+            iface.prefixes.push_back(cmdproto::PrefixIpv4{
                 {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]},
                 maskLen});
         }
 
-        std::println("[Nexthops]   VRF entry: vrf='{}' iface='{}' nexthop='{}' "
+        std::println("[Nexthops]   iface='{}' nexthop='{}' "
                      "nexthop_id={} prefixes={}",
-                     route.vrf_name(), route.interface_name(), gateway, nh->id,
-                     vrfr.prefixes.size());
+                     route.interface_name(), gateway, nh->id,
+                     iface.prefixes.size());
 
-        vrfsReq.vrfs_requests.push_back(std::move(vrfr));
+        req.interfaces.push_back(std::move(iface));
     }
 
-    if (vrfsReq.vrfs_requests.empty())
+    if (req.interfaces.empty())
     {
         std::println("[Nexthops] no nni entries for nexthop gw={} id={} — skip",
                      gateway, nh->id);
         return;
     }
 
-    std::println("[Nexthops] submitting SingleRoute request "
-                 "({} VRF(s)) to ud_server for nexthop gw={} id={}",
-                 vrfsReq.vrfs_requests.size(), gateway, nh->id);
+    std::println("[Nexthops] submitting SingleRouteRequest "
+                 "({} interface(s)) to ud_server for nexthop gw={} id={}",
+                 req.interfaces.size(), gateway, nh->id);
 
-    vrfClient->submit(std::move(vrfsReq));
+    vrfClient->submit(std::move(req));
 }
 
 /**
@@ -2883,13 +2875,13 @@ int main(int argc, char* argv[])
         std::println("  get-loopback            Retrieve the stored loopback address");
         std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
         std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
-        std::println("  vrf-route-add [socket]  Query srmd via gRPC then send a VrfsRouteRequest");
+        std::println("  vrf-route-add [socket]  Query srmd via gRPC then send a SingleRouteRequest");
         std::println("                          to the ud_server Unix-domain socket (one-shot)");
         std::println("                          (default socket: /tmp/ud_server.sock)");
         std::println("  run [socket]            Full SRA daemon mode (continuous):");
         std::println("                            1. RequestLoopback → SOT auth check via srmd");
         std::println("                            2. GetLoopbacks / GetAllRoutes via srmd");
-        std::println("                            3. Build VrfsRouteRequest (nni interfaces only)");
+        std::println("                            3. Build SingleRouteRequest (nni interfaces only)");
         std::println("                            4. Send to ud_server via Unix-domain socket");
         std::println("                            5. Loop until SIGINT/SIGTERM");
         std::println("                          ud_server socket default: /tmp/ud_server.sock");
@@ -3479,9 +3471,9 @@ int main(int argc, char* argv[])
     //   2. [srmd gRPC] RequestLoopback → PERMISSION_DENIED = IP not in SOT → exit.
     //   3. [srmd gRPC] GetLoopbacks(loopback) → log VRF/interface/prefix config.
     //   4. Display nexthop / neighbor / /32 route tables (kernel netlink).
-    //   5. [srmd gRPC] GetAllRoutes → build VrfsRouteRequest for nni interfaces,
+    //   5. [srmd gRPC] GetAllRoutes → build SingleRouteRequest for nni interfaces,
     //      nexthop_id looked up from the kernel nexthop table.
-    //   6. [ud_server Unix socket] Submit VrfsRouteRequest via VrfUdpClient.
+    //   6. [ud_server Unix socket] Submit SingleRouteRequest via VrfUdpClient.
     //   7. Main loop: keep running until SIGINT/SIGTERM.
     //
     // Non-blocking I/O:
@@ -3608,7 +3600,7 @@ int main(int argc, char* argv[])
 
         printAllRoutes(*arResult);
 
-        // ── Step 6: Build VrfsRouteRequest from GetAllRoutes (nni only) ──────
+        // ── Step 6: Build SingleRouteRequest from GetAllRoutes (nni only) ─────
         // For each VrfRoute with interface_type == "nni":
         //   • look up nexthop_id from the kernel nexthop table by gateway IP
         //   • convert each prefix string to binary PrefixIpv4 entries
@@ -3622,8 +3614,8 @@ int main(int argc, char* argv[])
 
         // ── Load VRF table and arm the nexthop event handler ─────────────────
         // Future nexthop ADDED / CHANGED / REMOVED events will look up the
-        // affected gateway in this table and re-submit a SingleRoute request
-        // (type=1) to ud_server whenever a match is found.
+        // affected gateway in this table and re-submit a SingleRouteRequest
+        // (SINGLE_ROUTE, type=1) to ud_server whenever a match is found.
         sra::VrfTable vrfTable;
         vrfTable.load(*arResult);
         startupNhCtx.vrfTable  = &vrfTable;
@@ -3633,7 +3625,7 @@ int main(int argc, char* argv[])
                      "nexthop event handler armed",
                      vrfTable.size());
 
-        cmdproto::VrfsRouteRequest vrfsReq;
+        cmdproto::SingleRouteRequest singleReq;
         int nniCount = 0;
 
         for (const auto& route : arResult->routes())
@@ -3675,24 +3667,17 @@ int main(int argc, char* argv[])
             const auto* nhBytes =
                 reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
-            cmdproto::VrfsRequest vrfr{};
-            // VRF name (null-padded fixed array).
-            const std::string& vn = route.vrf_name();
-            for (std::size_t k = 0;
-                 k < cmdproto::VRFS_NAME_SIZE && k < vn.size(); ++k)
-            {
-                vrfr.vrfs_name[k] = vn[k];
-            }
+            cmdproto::Interface iface{};
             // Interface name (null-padded fixed array).
             const std::string& ifn = route.interface_name();
             for (std::size_t k = 0;
                  k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
             {
-                vrfr.iface_name[k] = ifn[k];
+                iface.iface_name[k] = ifn[k];
             }
-            vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
-                                      nhBytes[2], nhBytes[3]};
-            vrfr.nexthop_id_ipv4   = nexthopId;
+            iface.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
+                                       nhBytes[2], nhBytes[3]};
+            iface.nexthop_id_ipv4   = nexthopId;
 
             // Convert each prefix string "A.B.C.D/N" to PrefixIpv4.
             for (const auto& pfx : route.prefixes())
@@ -3711,30 +3696,30 @@ int main(int argc, char* argv[])
                 const auto* pfxBytes =
                     reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
 
-                vrfr.prefixes.push_back(cmdproto::PrefixIpv4{
+                iface.prefixes.push_back(cmdproto::PrefixIpv4{
                     {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]},
                     maskLen});
             }
 
-            std::println("[run] nni VRF entry: vrf='{}' iface='{}' nexthop='{}' "
+            std::println("[run] nni interface: iface='{}' nexthop='{}' "
                          "nexthop_id={} prefixes={}",
-                         route.vrf_name(), route.interface_name(), route.nexthop(),
-                         nexthopId, vrfr.prefixes.size());
+                         route.interface_name(), route.nexthop(),
+                         nexthopId, iface.prefixes.size());
 
-            vrfsReq.vrfs_requests.push_back(std::move(vrfr));
+            singleReq.interfaces.push_back(std::move(iface));
             ++nniCount;
         }
 
         if (nniCount > 0)
         {
-            std::println("[run] Submitting VrfsRouteRequest ({} nni VRF(s)) "
+            std::println("[run] Submitting SingleRouteRequest ({} nni interface(s)) "
                          "to Unix socket…", nniCount);
-            vrfClient.submit(std::move(vrfsReq));
+            vrfClient.submit(std::move(singleReq));
         }
         else
         {
             std::println("[run] No nni interfaces found in GetAllRoutes "
-                         "response — no VRF route-add request sent");
+                         "response — no route-add request sent");
         }
 
         // ── Step 7: Main daemon loop ──────────────────────────────────────────
@@ -3799,14 +3784,14 @@ int main(int argc, char* argv[])
                          lbResult.error(), activeLoopback);
         }
 
-        // GetAllRoutes then build and submit a VrfsRouteRequest (nni only).
+        // GetAllRoutes then build and submit a SingleRouteRequest (nni only).
         std::println("[vrf-route-add] GetAllRoutes…");
         auto arResult = client.getAllRoutes();
         if (arResult)
         {
             printAllRoutes(*arResult);
 
-            cmdproto::VrfsRouteRequest vrfsReq;
+            cmdproto::SingleRouteRequest singleReq;
             for (const auto& route : arResult->routes())
             {
                 if (route.interface_type() != "nni")
@@ -3820,14 +3805,14 @@ int main(int argc, char* argv[])
                 const auto* nhBytes =
                     reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
-                cmdproto::VrfsRequest vrfr{};
-                const std::string& vn = route.vrf_name();
+                cmdproto::Interface iface{};
+                const std::string& ifn = route.interface_name();
                 for (std::size_t k = 0;
-                     k < cmdproto::VRFS_NAME_SIZE && k < vn.size(); ++k)
-                    vrfr.vrfs_name[k] = vn[k];
-                vrfr.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
-                                          nhBytes[2], nhBytes[3]};
-                vrfr.nexthop_id_ipv4   = 0; // no kernel nexthop table in this mode
+                     k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
+                    iface.iface_name[k] = ifn[k];
+                iface.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
+                                           nhBytes[2], nhBytes[3]};
+                iface.nexthop_id_ipv4   = 0; // no kernel nexthop table in this mode
 
                 for (const auto& pfx : route.prefixes())
                 {
@@ -3843,19 +3828,19 @@ int main(int argc, char* argv[])
                         reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
                     const auto maskLen = static_cast<std::uint8_t>(
                         std::stoul(pfxStr.substr(slash + 1)));
-                    vrfr.prefixes.push_back(cmdproto::PrefixIpv4{
+                    iface.prefixes.push_back(cmdproto::PrefixIpv4{
                         {pb[0], pb[1], pb[2], pb[3]}, maskLen});
                 }
 
-                vrfsReq.vrfs_requests.push_back(std::move(vrfr));
+                singleReq.interfaces.push_back(std::move(iface));
             }
 
-            if (!vrfsReq.vrfs_requests.empty())
+            if (!singleReq.interfaces.empty())
             {
-                std::println("[vrf-route-add] submitting {} nni VRF(s) to "
+                std::println("[vrf-route-add] submitting {} nni interface(s) to "
                              "Unix socket…",
-                             vrfsReq.vrfs_requests.size());
-                vrfClient.submit(std::move(vrfsReq));
+                             singleReq.interfaces.size());
+                vrfClient.submit(std::move(singleReq));
             }
             else
             {
