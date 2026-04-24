@@ -77,6 +77,7 @@ add_compile_options(
     $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
     $<$<CONFIG:Debug>:-g3>
     $<$<CONFIG:Debug>:-O0>
+    $<$<CONFIG:Debug>:-U_FORTIFY_SOURCE>
     $<$<CONFIG:Release>:-O3>
     $<$<CONFIG:RelWithDebInfo>:-O2>
     $<$<CONFIG:RelWithDebInfo>:-g>
