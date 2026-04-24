@@ -1146,16 +1146,19 @@ static void runSigHandler(int /*signo*/)
     g_run_stop = 1;
     if (g_startup_route_fd >= 0)
     {
+        ::shutdown(g_startup_route_fd, SHUT_RD);
         netlink_close(g_startup_route_fd);
         g_startup_route_fd = -1;
     }
     if (g_startup_neigh_fd >= 0)
     {
+        ::shutdown(g_startup_neigh_fd, SHUT_RD);
         netlink_neigh_close(g_startup_neigh_fd);
         g_startup_neigh_fd = -1;
     }
     if (g_startup_nexthop_fd >= 0)
     {
+        ::shutdown(g_startup_nexthop_fd, SHUT_RD);
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
@@ -1169,16 +1172,19 @@ static void watchSigHandler(int /*signo*/)
 {
     if (g_watch_fd >= 0)
     {
+        ::shutdown(g_watch_fd, SHUT_RD);
         netlink_close(g_watch_fd);
         g_watch_fd = -1;
     }
     if (g_startup_neigh_fd >= 0)
     {
+        ::shutdown(g_startup_neigh_fd, SHUT_RD);
         netlink_neigh_close(g_startup_neigh_fd);
         g_startup_neigh_fd = -1;
     }
     if (g_startup_nexthop_fd >= 0)
     {
+        ::shutdown(g_startup_nexthop_fd, SHUT_RD);
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
@@ -1736,16 +1742,19 @@ static void neighSigHandler(int /*signo*/)
 {
     if (g_neigh_fd >= 0)
     {
+        ::shutdown(g_neigh_fd, SHUT_RD);
         netlink_neigh_close(g_neigh_fd);
         g_neigh_fd = -1;
     }
     if (g_startup_route_fd >= 0)
     {
+        ::shutdown(g_startup_route_fd, SHUT_RD);
         netlink_close(g_startup_route_fd);
         g_startup_route_fd = -1;
     }
     if (g_startup_nexthop_fd >= 0)
     {
+        ::shutdown(g_startup_nexthop_fd, SHUT_RD);
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
@@ -2177,16 +2186,19 @@ static void nexthopSigHandler(int /*signo*/)
 {
     if (g_nexthop_fd >= 0)
     {
+        ::shutdown(g_nexthop_fd, SHUT_RD);
         netlink_nexthop_close(g_nexthop_fd);
         g_nexthop_fd = -1;
     }
     if (g_startup_route_fd >= 0)
     {
+        ::shutdown(g_startup_route_fd, SHUT_RD);
         netlink_close(g_startup_route_fd);
         g_startup_route_fd = -1;
     }
     if (g_startup_neigh_fd >= 0)
     {
+        ::shutdown(g_startup_neigh_fd, SHUT_RD);
         netlink_neigh_close(g_startup_neigh_fd);
         g_startup_neigh_fd = -1;
     }
@@ -2724,16 +2736,19 @@ static void startupSigHandler(int /*signo*/)
 {
     if (g_startup_route_fd >= 0)
     {
+        ::shutdown(g_startup_route_fd, SHUT_RD);
         netlink_close(g_startup_route_fd);
         g_startup_route_fd = -1;
     }
     if (g_startup_neigh_fd >= 0)
     {
+        ::shutdown(g_startup_neigh_fd, SHUT_RD);
         netlink_neigh_close(g_startup_neigh_fd);
         g_startup_neigh_fd = -1;
     }
     if (g_startup_nexthop_fd >= 0)
     {
+        ::shutdown(g_startup_nexthop_fd, SHUT_RD);
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
@@ -3164,16 +3179,19 @@ int main(int argc, char* argv[])
         {
             if (g_startup_route_fd >= 0)
             {
+                ::shutdown(g_startup_route_fd, SHUT_RD);
                 netlink_close(g_startup_route_fd);
                 g_startup_route_fd = -1;
             }
             if (g_startup_neigh_fd >= 0)
             {
+                ::shutdown(g_startup_neigh_fd, SHUT_RD);
                 netlink_neigh_close(g_startup_neigh_fd);
                 g_startup_neigh_fd = -1;
             }
             if (g_startup_nexthop_fd >= 0)
             {
+                ::shutdown(g_startup_nexthop_fd, SHUT_RD);
                 netlink_nexthop_close(g_startup_nexthop_fd);
                 g_startup_nexthop_fd = -1;
             }
@@ -3203,6 +3221,7 @@ int main(int argc, char* argv[])
         // one (cmdWatchNeighbors installs its own signal handler).
         if (g_startup_neigh_fd >= 0)
         {
+            ::shutdown(g_startup_neigh_fd, SHUT_RD);
             netlink_neigh_close(g_startup_neigh_fd);
             g_startup_neigh_fd = -1;
         }
@@ -3216,6 +3235,7 @@ int main(int argc, char* argv[])
         // Stop the startup nexthop monitor before running the interactive one.
         if (g_startup_nexthop_fd >= 0)
         {
+            ::shutdown(g_startup_nexthop_fd, SHUT_RD);
             netlink_nexthop_close(g_startup_nexthop_fd);
             g_startup_nexthop_fd = -1;
         }
@@ -3370,6 +3390,7 @@ int main(int argc, char* argv[])
         // (cmdNetlinkWatch installs its own signal handler).
         if (g_startup_route_fd >= 0)
         {
+            ::shutdown(g_startup_route_fd, SHUT_RD);
             netlink_close(g_startup_route_fd);
             g_startup_route_fd = -1;
         }
