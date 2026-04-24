@@ -238,13 +238,8 @@ encode_command(const Command& cmd)
         write_be16(out, static_cast<std::uint16_t>(cmd.raw_payload.size()));
         out.insert(out.end(), cmd.raw_payload.begin(), cmd.raw_payload.end());
 
-        logger::log(logger::INFO,
-                    "cmdproto",
-                    std::format("encode cmd (binary): {} payload_bytes={}",
-                                cmd_id_name(cmd.cmd_id),
-                                cmd.raw_payload.size()));
         logger::log(logger::DEBUG, "cmdproto",
-                    std::format("  hdr: cmd_id=0x{:02x}({}) data_len={}  total={}",
+                    std::format("encode cmd (binary): cmd_id=0x{:02x}({}) data_len={}  total={}",
                                 static_cast<unsigned>(cmd.cmd_id),
                                 cmd_id_name(cmd.cmd_id),
                                 cmd.raw_payload.size(),
@@ -1078,6 +1073,9 @@ encode_vrfs_route_request(const VrfsRouteRequest& req)
     std::vector<std::uint8_t> out;
     out.push_back(static_cast<std::uint8_t>(RouteAddPayloadType::SINGLE_ROUTE));
 
+    logger::log(logger::DEBUG, "cmdproto",
+                std::format("encode_vrfs_route_request: vrfs={}", req.vrfs_requests.size()));
+
     for (std::size_t vi = 0; vi < req.vrfs_requests.size(); ++vi)
     {
         const auto& vr = req.vrfs_requests[vi];
@@ -1276,7 +1274,12 @@ decode_vrfs_route_response(std::span<const std::uint8_t> raw)
     VrfsRouteResponse resp;
     resp.status_code = raw[0];
 
+    logger::log(logger::DEBUG, "cmdproto",
+                std::format("decode_vrfs_route_response: status=0x{:02x} total_bytes={}",
+                            resp.status_code, raw.size()));
+
     std::size_t pos = 1;
+    std::size_t ai  = 0;
     while (pos < raw.size())
     {
         if (raw.size() - pos < VRFS_ANSWER_WIRE_SIZE)
@@ -1290,9 +1293,16 @@ decode_vrfs_route_response(std::span<const std::uint8_t> raw)
         ans.prefix_status = (raw[pos] & 0x01u) != 0;
         ++pos;
 
+        logger::log(logger::DEBUG, "cmdproto",
+                    std::format("  answer[{}]: vrf='{}' prefix_status={}",
+                                ai++, ans.vrfs_name.data(),
+                                ans.prefix_status ? "ok" : "fail"));
+
         resp.answers.push_back(ans);
     }
 
+    logger::log(logger::DEBUG, "cmdproto",
+                std::format("decode_vrfs_route_response: answers={}", resp.answers.size()));
     return resp;
 }
 

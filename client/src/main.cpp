@@ -2850,7 +2850,10 @@ int main(int argc, char* argv[])
         else {
             try { lvl = std::stoi(lvlStr); } catch (...) {}
         }
-        logger::init(vm["logstream"].as<std::string>(), lvl);
+        const std::string& logstream = vm["logstream"].as<std::string>();
+        logger::init(logstream, lvl);
+        logger::log(logger::DEBUG, "sra",
+                    std::format("logger active: stream='{}' level={}", logstream, lvl));
     }
 
     if (vm.count("help") || !vm.count("command"))
