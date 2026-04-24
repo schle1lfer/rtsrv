@@ -68,6 +68,11 @@ for ip in "${IPS[@]}"; do
     -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
     "scripts/target-run-sra-hw.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../run-sra-hw.sh"
 
+    # kill-sra.sh
+    sshpass -p "$REMOTE_PASS" rsync -avz \
+    -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
+    "scripts/kill-sra.sh" "$REMOTE_USER@$ip:/$DEST_PATH/../kill-sra-hw.sh"
+
     # config
 #    echo "scripts/"
 #    sshpass -p "$REMOTE_PASS" rsync -avz \
