@@ -71,12 +71,14 @@ add_compile_options(
     -Wconversion
     -Wshadow
     -Wcast-align
+    -Wno-unused-function
     # C++-only warnings – guard against accidental application to C sources
     $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>
     $<$<COMPILE_LANGUAGE:CXX>:-Wold-style-cast>
     $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
     $<$<CONFIG:Debug>:-g3>
     $<$<CONFIG:Debug>:-O0>
+    $<$<CONFIG:Debug>:-U_FORTIFY_SOURCE>
     $<$<CONFIG:Release>:-O3>
     $<$<CONFIG:RelWithDebInfo>:-O2>
     $<$<CONFIG:RelWithDebInfo>:-g>
