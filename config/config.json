@@ -1,9 +1,10 @@
 {
     "server": {
-        "host"       : "127.0.0.1",
+        "host"       : "10.122.20.5",
         "port"       : 50051,
         "tls_enabled": false,
         "ca_cert"    : "",
         "timeout"    : 10
-    }
+    },
+    "loopback": "0.0.0.0"
 }

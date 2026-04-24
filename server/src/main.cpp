@@ -3,14 +3,15 @@
  * @brief Entry point for srmd – the Switch Route Manager Daemon.
  *
  * Start-up sequence:
- *  1. Parse CLI flags (--config, --foreground, --version, --help).
- *  2. Load and validate the JSON configuration file.
- *  3. Initialise Boost.Log (file in daemon mode; console in foreground mode).
- *  4. Daemonise via double-fork + dup2 (skipped when --foreground is set).
- *  5. Construct the RouteManager and SwitchRouteManagerImpl.
- *  6. Start the gRPC server on the configured listen address.
- *  7. Enter the main event loop (SIGTERM/SIGINT → stop; SIGHUP → reload).
- *  8. Graceful shutdown: stop the gRPC server and exit.
+ *  1. Parse CLI flags (--config, --sot, --foreground, --version, --help).
+ *  2. Load and parse the Source-of-Truth (SOT) JSON file.
+ *  3. Load and validate the JSON configuration file.
+ *  4. Initialise Boost.Log (file in daemon mode; console in foreground mode).
+ *  5. Daemonise via double-fork + dup2 (skipped when --foreground is set).
+ *  6. Construct the RouteManager and SwitchRouteManagerImpl.
+ *  7. Start the gRPC server on the configured listen address.
+ *  8. Enter the main event loop (SIGTERM/SIGINT → stop; SIGHUP → reload).
+ *  9. Graceful shutdown: stop the gRPC server and exit.
  *
  * @version 1.0
  */
@@ -211,7 +212,7 @@ int main(int argc, char* argv[])
         ("sot,s",
             po::value<std::string>()->default_value(
                 std::string(kDefaultConfig)),
-            "Path to the JSON route_sot_v2 file (Source-of-Truth)")
+            "Path to the Source-of-Truth JSON file (route_sot)")
         ("foreground,f", "Run in the foreground (skip daemonisation)");
     // clang-format on
 

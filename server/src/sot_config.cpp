@@ -63,6 +63,15 @@ SotConfig::findByManagementIp(const std::string& managementIp) const noexcept
     return it != nodes.end() ? &*it : nullptr;
 }
 
+const SotNode*
+SotConfig::findByLoopbackIpv4(const std::string& loopbackIpv4) const noexcept
+{
+    const auto it = std::ranges::find_if(nodes, [&](const SotNode& n) {
+        return n.loopbacks.ipv4 == loopbackIpv4;
+    });
+    return it != nodes.end() ? &*it : nullptr;
+}
+
 std::size_t SotConfig::totalPrefixCount() const noexcept
 {
     std::size_t total = 0;

@@ -11,6 +11,11 @@ add_executable(
     src/routing.cpp
     src/switch_config.cpp
     src/sot_config.cpp
+    src/udp_table_server.cpp
+    src/vrf_udp_client.cpp
+    src/vrf_table.cpp
+    src/netlink_neigh.c
+    src/netlink_nexthop.c
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
     ${PROTO_SRCS}
     ${GRPC_SRCS}
@@ -23,6 +28,7 @@ target_include_directories(
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_SOURCE_DIR}/server/include"
+        "${CMAKE_SOURCE_DIR}/unix_domain"
         "${PROTO_GEN_DIR}"
         "${BUILD_INFO_GEN_DIR}"
 )
@@ -31,6 +37,7 @@ target_link_libraries(
     sra
     PRIVATE
         common_lib
+        unix_domain_lib
         Threads::Threads
         protobuf::libprotobuf
         gRPC::grpc++
@@ -108,6 +115,41 @@ target_link_libraries(
 )
 
 # No install rule – development / debug tool only.
+
+# ---------------------------------------------------------------------------
+# udp_table_server_example – demonstrates UdpTableServer on ports 9001/9002/9003
+# ---------------------------------------------------------------------------
+
+add_executable(
+    udp_table_server_example
+    src/udp_table_server_example.cpp
+    src/udp_table_server.cpp
+)
+
+add_dependencies(udp_table_server_example generate_proto)
+
+target_include_directories(
+    udp_table_server_example
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${PROTO_GEN_DIR}"
+        "${BUILD_INFO_GEN_DIR}"
+)
+
+target_link_libraries(
+    udp_table_server_example
+    PRIVATE
+        common_lib
+        Threads::Threads
+)
+
+target_compile_definitions(
+    udp_table_server_example
+    PRIVATE
+        BOOST_ALL_DYN_LINK
+)
+
+# No install rule – example / development tool only.
 
 # ---------------------------------------------------------------------------
 # Post-build: create versioned snapshot

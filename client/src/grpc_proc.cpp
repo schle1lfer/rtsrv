@@ -237,6 +237,16 @@ ResponsePayload GrpcProc::dispatch(const GrpcRequest& req)
                 return ResponsePayload(std::in_place_index<7>,
                                        client_.getLoopback());
             }
+            else if constexpr (std::is_same_v<T, RequestLoopbackParams>)
+            {
+                return ResponsePayload(std::in_place_index<9>,
+                                       client_.requestLoopback());
+            }
+            else if constexpr (std::is_same_v<T, GetAllRoutesParams>)
+            {
+                return ResponsePayload(std::in_place_index<10>,
+                                       client_.getAllRoutes());
+            }
         },
         req.payload);
 }

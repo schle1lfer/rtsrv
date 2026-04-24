@@ -42,6 +42,20 @@
 
 # CMake build directory
 build/
-install/
-local/
+server-build/
+target-build/
 
+# CMake instalations
+server-install/
+server-local/
+target-install/
+target-local/
+unix_domain/
+bin/
+sbin/
+etc/
+lib/
+
+# Allow unix_domain source library (source files, not compiled artifacts)
+!unix_domain/lib/
+!unix_domain/lib/**

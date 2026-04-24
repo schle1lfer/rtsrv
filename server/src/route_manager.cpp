@@ -12,6 +12,7 @@
 #include <format>
 #include <fstream>
 #include <ranges>
+#include <mutex>
 
 namespace srmd
 {

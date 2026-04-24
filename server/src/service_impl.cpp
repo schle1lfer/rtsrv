@@ -444,4 +444,115 @@ SwitchRouteManagerImpl::GetLoopbacks(grpc::ServerContext* ctx,
     return grpc::Status::OK;
 }
 
+// ---------------------------------------------------------------------------
+// RequestLoopback
+// ---------------------------------------------------------------------------
+
+grpc::Status
+SwitchRouteManagerImpl::RequestLoopback(grpc::ServerContext* ctx,
+                                        const srmd::v1::RequestLoopbackRequest* /*req*/,
+                                        srmd::v1::RequestLoopbackResponse* resp)
+{
+    const std::string clientIp = extractClientIp(ctx->peer());
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "[RequestLoopback] peer='{}' clientIp='{}'", ctx->peer(), clientIp);
+
+    const SotNode* node = sotConfig_.findByManagementIp(clientIp);
+    if (!node)
+    {
+        BOOST_LOG_TRIVIAL(warning) << std::format(
+            "[RequestLoopback] clientIp='{}' not found in SOT — "
+            "closing connection", clientIp);
+        resp->set_code(srmd::v1::STATUS_CODE_PERMISSION_DENIED);
+        resp->set_message(std::format(
+            "Client IP '{}' is not registered in the SOT — connection rejected",
+            clientIp));
+        return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                            std::format("SRA IP '{}' not in SOT nodes_by_loopback",
+                                        clientIp));
+    }
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "[RequestLoopback] node='{}' clientIp='{}' loopback='{}'",
+        node->hostname, clientIp, node->loopbacks.ipv4);
+
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message(std::format(
+        "OK: node '{}' ({})", node->hostname, clientIp));
+    resp->set_loopback(node->loopbacks.ipv4);
+    return grpc::Status::OK;
+}
+
+// ---------------------------------------------------------------------------
+// GetAllRoutes
+// ---------------------------------------------------------------------------
+
+grpc::Status
+SwitchRouteManagerImpl::GetAllRoutes(grpc::ServerContext* ctx,
+                                     const srmd::v1::GetAllRoutesRequest* /*req*/,
+                                     srmd::v1::GetAllRoutesResponse* resp)
+{
+    const std::string clientIp = extractClientIp(ctx->peer());
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "[GetAllRoutes] peer='{}' clientIp='{}'", ctx->peer(), clientIp);
+
+    // Authorise: client IP must be registered as a management IP in the SOT.
+    // Using the same lookup as RequestLoopback so that the SRA can call both
+    // RPCs on the same gRPC channel (same source IP).
+    const SotNode* node = sotConfig_.findByManagementIp(clientIp);
+    if (!node)
+    {
+        BOOST_LOG_TRIVIAL(warning) << std::format(
+            "[GetAllRoutes] clientIp='{}' not found in SOT", clientIp);
+        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
+        resp->set_message(std::format(
+            "Client IP '{}' is not registered in the SOT", clientIp));
+        return grpc::Status::OK;
+    }
+
+    resp->set_hostname(node->hostname);
+    resp->set_loopback_ipv4(node->loopbacks.ipv4);
+
+    // Walk every VRF → every IPv4 interface → every prefix.
+    std::size_t routeCount = 0;
+    for (const auto& vrf : node->vrfs)
+    {
+        for (const auto& iface : vrf.ipv4.interfaces)
+        {
+            auto* pbRoute = resp->add_routes();
+            pbRoute->set_vrf_name(vrf.name);
+            pbRoute->set_interface_name(iface.name);
+            pbRoute->set_interface_type(iface.type);
+            pbRoute->set_local_address(iface.local_address);
+            pbRoute->set_nexthop(iface.nexthop);
+            pbRoute->set_weight(iface.weight);
+            pbRoute->set_description(iface.description);
+
+            for (const auto& pfx : iface.prefixes)
+            {
+                auto* pbPfx = pbRoute->add_prefixes();
+                pbPfx->set_prefix(pfx.prefix);
+                pbPfx->set_weight(pfx.weight);
+                pbPfx->set_role(pfx.role);
+                pbPfx->set_description(pfx.description);
+            }
+            ++routeCount;
+        }
+    }
+
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message(std::format(
+        "OK: node '{}' loopback '{}' — {} VRF interface(s)",
+        node->hostname, node->loopbacks.ipv4, routeCount));
+
+    BOOST_LOG_TRIVIAL(info) << std::format(
+        "[GetAllRoutes] node='{}' loopback='{}' → {} VRF interface(s) across"
+        " {} VRF(s)",
+        node->hostname, node->loopbacks.ipv4, routeCount, node->vrfs.size());
+
+    return grpc::Status::OK;
+}
+
 } // namespace srmd

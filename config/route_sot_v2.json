@@ -1,7 +1,7 @@
 {
   "nodes_by_loopback": {
-    "10.124.224.60": {
-      "hostname": "ST82-LEAF-60",
+    "10.27.192.87": {
+      "hostname": "Leaf1",
       "loopbacks": {
         "ipv4": "1.1.1.1",
         "ipv6": "fd00:100::1"
@@ -24,13 +24,13 @@
                     "description": "VM_pool#1"
                   },
                   {
-                    "prefix": "10.0.2.0/24",
+                    "prefix": "10.0.1.0/24",
                     "weight": 100,
                     "role": "server_network",
                     "description": "VM_pool#2"
                   },
                   {
-                    "prefix": "10.0.3.0/24",
+                    "prefix": "10.0.2.0/24",
                     "weight": 100,
                     "role": "server_network",
                     "description": "VM_pool#3"
@@ -43,8 +43,8 @@
         }
       }
     },
-    "10.124.224.61": {
-      "hostname": "ST83-LEAF-61",
+    "10.27.192.115": {
+      "hostname": "Leaf2",
       "loopbacks": {
         "ipv4": "2.2.2.2",
         "ipv6": "fd00:100::2"
@@ -67,8 +67,8 @@
         }
       }
     },
-    "10.124.224.62": {
-      "hostname": "ST84-LEAF-62",
+    "10.27.192.77": {
+      "hostname": "Leaf3",
       "loopbacks": {
         "ipv4": "3.3.3.3",
         "ipv6": "fd00:100::3"
@@ -110,8 +110,8 @@
         }
       }
     },
-    "10.124.224.63": {
-      "hostname": "ST85-SPINE-63",
+    "10.27.192.26": {
+      "hostname": "Spine1",
       "loopbacks": {
         "ipv4": "4.4.4.4",
         "ipv6": "fd00:100::4"
@@ -125,8 +125,8 @@
         }
       }
     },
-    "10.124.224.64": {
-      "hostname": "ST86-SPINE-64",
+    "10.27.192.84": {
+      "hostname": "Spine2",
       "loopbacks": {
         "ipv4": "5.5.5.5",
         "ipv6": "fd00:100::5"
@@ -135,6 +135,49 @@
         "default": {
           "ipv4": {
             "interfaces": {},
+            "ipv6": {}
+          }
+        }
+      }
+    },
+    "10.124.224.60": {
+      "hostname": "Leaf4",
+      "loopbacks": {
+        "ipv4": "6.6.6.6",
+        "ipv6": "fd00:100::6"
+      },
+      "vrfs": {
+        "default": {
+          "ipv4": {
+            "interfaces": {
+              "Ethernet0": {
+                "type": "nni",
+                "local_address": "192.168.1.10/30",
+                "nexthop": "192.168.1.1",
+                "weight": 100,
+                "description": "Server#4",
+                "prefixes": [
+                  {
+                    "prefix": "10.0.1.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#7"
+                  },
+                  {
+                    "prefix": "10.0.2.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#8"
+                  },
+                  {
+                    "prefix": "10.0.3.0/24",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#9"
+                  }
+                ]
+              }
+            },
             "ipv6": {}
           }
         }

@@ -106,6 +106,7 @@ struct ClientConfig
     bool tls_enabled{false};              ///< Enable TLS on the channel.
     std::string ca_cert;                  ///< Path to PEM CA cert (TLS only).
     int timeout_seconds{10};              ///< Default per-RPC deadline (s).
+    std::string loopback;                 ///< Node's own loopback IP for GetLoopbacks calls (e.g. "1.1.1.1").
 
     /**
      * @brief Returns the gRPC-compatible channel target string.

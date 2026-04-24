@@ -1,0 +1,6 @@
+#!/bin/bash
+
+./server-local/sbin/srmd \
+  --sot ./server-local/etc/srmd/route_sot_v3_hwasic.json \
+  --config ./server-local/etc/srmd/srmd.json \
+  --f
