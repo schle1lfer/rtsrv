@@ -209,6 +209,7 @@ add_subdirectory(common)
 add_subdirectory(unix_domain)
 add_subdirectory(server)
 add_subdirectory(client)
+add_subdirectory(test)
 
 # ---------------------------------------------------------------------------
 # Installation
