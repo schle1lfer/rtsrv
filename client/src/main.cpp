@@ -3756,7 +3756,7 @@ int main(int argc, char* argv[])
         // error (ENOTCONN / EBADF), which causes return -1 → thread exits.
         // Setting the globals to -1 prevents the StartupGuard destructor from
         // double-closing them.
-        auto stopNetlinkFd = [](int& fd, void (*closeFn)(int)) noexcept {
+        auto stopNetlinkFd = [](volatile int& fd, void (*closeFn)(int)) noexcept {
             if (fd >= 0) {
                 ::shutdown(fd, SHUT_RD);
                 closeFn(fd);
