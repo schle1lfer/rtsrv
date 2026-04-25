@@ -104,6 +104,7 @@
 #include <print>
 #include <shared_mutex>
 #include <queue>
+#include <pthread.h>
 #include <signal.h>
 #include <sstream>
 #include <unistd.h>
@@ -1137,6 +1138,40 @@ static volatile int g_watch_fd = -1;
 /** @brief Stop flag for the 'run' daemon command (set by signal handler). */
 static volatile sig_atomic_t g_run_stop = 0;
 
+/* Thread handles for the three background netlink monitors.
+ * Set after thread creation; zeroed by StartupGuard before join().
+ * Used by signal handlers to pthread_kill() sleeping threads so their
+ * blocking recv() returns EINTR, after which the fd is already closed
+ * (EBADF on retry) and netlink_*_run() exits. */
+static volatile pthread_t g_startup_route_tid   = 0;
+static volatile pthread_t g_startup_neigh_tid   = 0;
+static volatile pthread_t g_startup_nexthop_tid = 0;
+
+/* One-shot flag: prevents cascading pthread_kill loops when the signal
+ * handler is re-entered on a background thread. */
+static volatile sig_atomic_t g_bg_threads_interrupted = 0;
+
+/** @brief Sends SIGINT to each background netlink thread (once).
+ *
+ *  shutdown(SHUT_RD) on AF_NETLINK sockets returns EOPNOTSUPP on Linux,
+ *  and close() alone does not unblock a blocking recv() in another thread.
+ *  pthread_kill() is the only async-signal-safe way to deliver EINTR to the
+ *  target thread so that the netlink_*_run() loop retries recv() on the
+ *  now-closed fd and gets EBADF, causing a clean exit. */
+static void interruptBackgroundThreads() noexcept
+{
+    if (g_bg_threads_interrupted)
+        return;
+    g_bg_threads_interrupted = 1;
+    const pthread_t self = ::pthread_self();
+    if (g_startup_route_tid   && g_startup_route_tid   != self)
+        ::pthread_kill(static_cast<pthread_t>(g_startup_route_tid),   SIGINT);
+    if (g_startup_neigh_tid   && g_startup_neigh_tid   != self)
+        ::pthread_kill(static_cast<pthread_t>(g_startup_neigh_tid),   SIGINT);
+    if (g_startup_nexthop_tid && g_startup_nexthop_tid != self)
+        ::pthread_kill(static_cast<pthread_t>(g_startup_nexthop_tid), SIGINT);
+}
+
 /** @brief SIGINT/SIGTERM handler for the 'run' daemon command.
  *
  *  Sets g_run_stop and closes startup netlink fds so all background
@@ -1162,6 +1197,7 @@ static void runSigHandler(int /*signo*/)
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
+    interruptBackgroundThreads();
 }
 
 /** @brief SIGINT/SIGTERM handler for the watch command.
@@ -1188,6 +1224,7 @@ static void watchSigHandler(int /*signo*/)
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
+    interruptBackgroundThreads();
 }
 
 /** @brief Stop flag for the grpc-proc-demo command (set by signal handler). */
@@ -1758,6 +1795,7 @@ static void neighSigHandler(int /*signo*/)
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
+    interruptBackgroundThreads();
 }
 
 /**
@@ -2202,6 +2240,7 @@ static void nexthopSigHandler(int /*signo*/)
         netlink_neigh_close(g_startup_neigh_fd);
         g_startup_neigh_fd = -1;
     }
+    interruptBackgroundThreads();
 }
 
 /**
@@ -2752,6 +2791,7 @@ static void startupSigHandler(int /*signo*/)
         netlink_nexthop_close(g_startup_nexthop_fd);
         g_startup_nexthop_fd = -1;
     }
+    interruptBackgroundThreads();
 }
 
 // ---------------------------------------------------------------------------
@@ -3145,6 +3185,7 @@ int main(int argc, char* argv[])
             {
                 netlink_run(rfd, startupRouteLiveCb, rctx);
             });
+        g_startup_route_tid = startupRouteThread.native_handle();
     }
     if (g_startup_neigh_fd >= 0)
     {
@@ -3154,6 +3195,7 @@ int main(int argc, char* argv[])
             {
                 netlink_neigh_run(nfd, startupNeighLiveCb, nctx);
             });
+        g_startup_neigh_tid = startupNeighThread.native_handle();
     }
     if (g_startup_nexthop_fd >= 0)
     {
@@ -3163,6 +3205,7 @@ int main(int argc, char* argv[])
             {
                 netlink_nexthop_run(nhfd, startupNexthopLiveCb, nhctx);
             });
+        g_startup_nexthop_tid = startupNhThread.native_handle();
     }
 
     // ── RAII cleanup guard ─────────────────────────────────────────────────
@@ -3195,6 +3238,11 @@ int main(int argc, char* argv[])
                 netlink_nexthop_close(g_startup_nexthop_fd);
                 g_startup_nexthop_fd = -1;
             }
+            // Zero thread IDs before joining so a late signal delivery
+            // cannot pthread_kill() an already-joined (invalid) thread.
+            g_startup_route_tid   = 0;
+            g_startup_neigh_tid   = 0;
+            g_startup_nexthop_tid = 0;
             if (routeThread.joinable()) routeThread.join();
             if (neighThread.joinable()) neighThread.join();
             if (nhThread.joinable())    nhThread.join();
@@ -3225,6 +3273,7 @@ int main(int argc, char* argv[])
             netlink_neigh_close(g_startup_neigh_fd);
             g_startup_neigh_fd = -1;
         }
+        g_startup_neigh_tid = 0;
         if (startupNeighThread.joinable())
             startupNeighThread.join();
         return cmdWatchNeighbors(startupUdpServer);
@@ -3239,6 +3288,7 @@ int main(int argc, char* argv[])
             netlink_nexthop_close(g_startup_nexthop_fd);
             g_startup_nexthop_fd = -1;
         }
+        g_startup_nexthop_tid = 0;
         if (startupNhThread.joinable())
             startupNhThread.join();
         return cmdWatchNexthops(startupUdpServer);
@@ -3394,6 +3444,7 @@ int main(int argc, char* argv[])
             netlink_close(g_startup_route_fd);
             g_startup_route_fd = -1;
         }
+        g_startup_route_tid = 0;
         if (startupRouteThread.joinable())
             startupRouteThread.join();
         return cmdNetlinkWatch(client, activeLoopback, startupUdpServer);
@@ -3756,15 +3807,20 @@ int main(int argc, char* argv[])
 
         std::println("[run] Shutdown signal received — stopping");
 
-        // shutdown(SHUT_RD) is the POSIX-guaranteed way to unblock a blocking
-        // recv() in another thread on a socket fd.  close() alone does NOT
-        // unblock recv() on Linux.  pthread_kill(SIGINT) only delivers EINTR,
-        // but all three *_run loops treat EINTR as "continue" — so the thread
-        // never exits that way.
-        // After shutdown the *_run loop's next recv() returns with a non-EINTR
-        // error (ENOTCONN / EBADF), which causes return -1 → thread exits.
-        // Setting the globals to -1 prevents the StartupGuard destructor from
-        // double-closing them.
+        // runSigHandler() already closed the fds and called
+        // interruptBackgroundThreads().  The stopNetlinkFd calls below are
+        // no-ops when the fds are already -1, but they handle the edge case
+        // where the signal arrived before this shutdown path ran.
+        //
+        // Shutdown sequence for each background thread:
+        //  1. close(fd) in signal handler — marks the fd as invalid.
+        //  2. pthread_kill(tid, SIGINT)   — interrupts blocking recv() with EINTR.
+        //  3. netlink_*_run EINTR path    — retries recv() on now-closed fd.
+        //  4. recv() returns EBADF        — netlink_*_run returns -1, thread exits.
+        //  5. StartupGuard::~StartupGuard() joins the thread successfully.
+        //
+        // Note: shutdown(SHUT_RD) on AF_NETLINK returns EOPNOTSUPP on Linux;
+        // it is kept as a best-effort attempt for other socket types.
         auto stopNetlinkFd = [](volatile int& fd, void (*closeFn)(int)) noexcept {
             if (fd >= 0) {
                 ::shutdown(fd, SHUT_RD);
