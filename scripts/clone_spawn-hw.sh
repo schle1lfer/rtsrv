@@ -58,6 +58,13 @@ for ip in "${IPS[@]}"; do
         fi
     done
 
+    # ud_server
+    sshpass -p "$REMOTE_PASS" rsync -avz \
+    -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
+    "${SRC_DIRS}/sbin/ud_server" "$REMOTE_USER@$ip:/$DEST_PATH/bin/ud_server"
+
+
+
 #    # run-sra.sh
 #    sshpass -p "$REMOTE_PASS" rsync -avz \
 #    -e "ssh -o StrictHostKeyChecking=no" --out-format='%n' \
