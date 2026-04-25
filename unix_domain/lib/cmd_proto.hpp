@@ -46,9 +46,13 @@
 
 #pragma once
 
+#include "routing.hpp"
+
 #include <array>
 #include <cstdint>
 #include <expected>
+#include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <system_error>
@@ -396,6 +400,64 @@ encode_route_list_response(const std::vector<RouteEntry>& routes);
  */
 [[nodiscard]] std::expected<std::vector<RouteEntry>, std::error_code>
 decode_route_list_response(std::span<const std::uint8_t> raw);
+
+// ---------------------------------------------------------------------------
+// Callback mechanism
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Map of handler callbacks for route operations.
+ *
+ * Assign a callable to each field to override the default netlink
+ * implementation.  A null (default-constructed) function means the handler
+ * falls back to the direct netlink call.  Data is transferred to each
+ * callback via std::shared_ptr.
+ *
+ * Example — wire the default netlink back-end:
+ * @code
+ *   cmdproto::HandlerCallbacks cbs;
+ *   cbs.route_add  = [](std::shared_ptr<netlink::RouteAddParams> p)
+ *       { return netlink::add_route(*p); };
+ *   cbs.route_del  = [](std::shared_ptr<netlink::RouteDelParams> p)
+ *       { return netlink::delete_route(*p); };
+ *   cbs.route_list = [](std::shared_ptr<netlink::RouteTable> t)
+ *       { return netlink::list_routes(*t); };
+ *   cmdproto::init_callbacks(std::move(cbs));
+ * @endcode
+ */
+struct HandlerCallbacks
+{
+    /// Signature for route-add callbacks.
+    using AddRouteFn = std::function<
+        std::expected<void, std::error_code>(
+            std::shared_ptr<netlink::RouteAddParams>)>;
+
+    /// Signature for route-delete callbacks.
+    using DelRouteFn = std::function<
+        std::expected<void, std::error_code>(
+            std::shared_ptr<netlink::RouteDelParams>)>;
+
+    /// Signature for route-list callbacks.
+    using ListRoutesFn = std::function<
+        std::expected<std::vector<netlink::RouteEntry>, std::error_code>(
+            std::shared_ptr<netlink::RouteTable>)>;
+
+    AddRouteFn   route_add;  ///< Called by handle_route_add()
+    DelRouteFn   route_del;  ///< Called by handle_route_del()
+    ListRoutesFn route_list; ///< Called by handle_route_list()
+};
+
+/**
+ * @brief Registers the handler callbacks used by handle_route_add(),
+ *        handle_route_del(), and handle_route_list().
+ *
+ * Must be called before any handler function is invoked.  Each null entry
+ * in @p callbacks causes the corresponding handler to fall back to the
+ * direct netlink call.
+ *
+ * @param callbacks  Callback map to install.
+ */
+void init_callbacks(HandlerCallbacks callbacks);
 
 // ---------------------------------------------------------------------------
 // Stub command handlers

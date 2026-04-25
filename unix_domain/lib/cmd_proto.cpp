@@ -91,6 +91,25 @@ std::error_code make_error_code(CmdError e) noexcept
 }
 
 // ---------------------------------------------------------------------------
+// Callback storage
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+HandlerCallbacks g_callbacks;
+
+} // anonymous namespace
+
+/**
+ * @brief @copybrief cmdproto::init_callbacks
+ */
+void init_callbacks(HandlerCallbacks callbacks)
+{
+    g_callbacks = std::move(callbacks);
+}
+
+// ---------------------------------------------------------------------------
 // Big-endian helpers
 // ---------------------------------------------------------------------------
 
@@ -710,6 +729,9 @@ std::expected<void, std::error_code> handle_route_add(const RouteAddParams& p)
         np.scope = netlink::RouteScope::Link;
     }
 
+    if (g_callbacks.route_add)
+        return g_callbacks.route_add(std::make_shared<netlink::RouteAddParams>(np));
+
     return netlink::add_route(np);
 }
 
@@ -742,13 +764,27 @@ std::expected<void, std::error_code> handle_route_del(const RouteDelParams& p)
         np.has_gateway = true;
     }
 
+    if (g_callbacks.route_del)
+        return g_callbacks.route_del(std::make_shared<netlink::RouteDelParams>(np));
+
     return netlink::delete_route(np);
 }
 
 /// @brief @copybrief cmdproto::handle_route_list
 std::expected<std::vector<RouteEntry>, std::error_code> handle_route_list()
 {
-    auto nl_routes = netlink::list_routes(netlink::RouteTable::Main);
+    std::expected<std::vector<netlink::RouteEntry>, std::error_code> nl_routes;
+
+    if (g_callbacks.route_list)
+    {
+        auto table = std::make_shared<netlink::RouteTable>(netlink::RouteTable::Main);
+        nl_routes = g_callbacks.route_list(std::move(table));
+    }
+    else
+    {
+        nl_routes = netlink::list_routes(netlink::RouteTable::Main);
+    }
+
     if (!nl_routes)
         return std::unexpected(nl_routes.error());
 
