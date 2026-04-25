@@ -12,7 +12,7 @@ add_executable(
     src/switch_config.cpp
     src/sot_config.cpp
     src/udp_table_server.cpp
-    src/vrf_udp_client.cpp
+    src/sra_udp_client.cpp
     src/vrf_table.cpp
     src/netlink_neigh.c
     src/netlink_nexthop.c
