@@ -29,6 +29,7 @@
 #include "lib/logger.hpp"
 #include "lib/net.hpp"
 #include "lib/route_proto.hpp"
+#include "lib/routing.hpp"
 #include "lib/ud_proto.hpp"
 
 #include <array>
@@ -348,6 +349,15 @@ int main(int argc, char* argv[])
     if (logstream.empty())
         logstream = "stderr";
     logger::init(logstream, loglevel);
+
+    cmdproto::HandlerCallbacks cbs;
+    cbs.route_add  = [](std::shared_ptr<netlink::RouteAddParams> p)
+        { return netlink::add_route(*p); };
+    cbs.route_del  = [](std::shared_ptr<netlink::RouteDelParams> p)
+        { return netlink::delete_route(*p); };
+    cbs.route_list = [](std::shared_ptr<netlink::RouteTable> t)
+        { return netlink::list_routes(*t); };
+    cmdproto::init_callbacks(std::move(cbs));
 
     const std::string sock_path =
         (remaining.size() > 1) ? remaining[1] : "/tmp/ud_server.sock";
