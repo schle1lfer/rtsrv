@@ -40,6 +40,8 @@ add_executable(
     ud_server.cpp
 )
 
+add_dependencies(ud_server increment_build_number)
+
 target_include_directories(
     ud_server
     PRIVATE
@@ -56,4 +58,24 @@ target_link_libraries(
 
 target_compile_features(ud_server PRIVATE cxx_std_23)
 
-# No install rule – testing / development tool only.
+target_compile_options(
+    ud_server
+    PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wcast-align
+        -Wnon-virtual-dtor -Wold-style-cast -Woverloaded-virtual
+)
+
+# ---------------------------------------------------------------------------
+# Post-build: create versioned snapshot
+add_custom_command(
+    TARGET ud_server
+    POST_BUILD
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DTARGET_FILE=$<TARGET_FILE:ud_server>"
+        "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DBINARY_NAME=ud_server"
+        -P "${CMAKE_SOURCE_DIR}/cmake/CreateVersionedBinary.cmake"
+    COMMENT "Creating versioned ud_server binary snapshot"
+    VERBATIM
+)
