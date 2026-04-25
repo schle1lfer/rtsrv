@@ -228,7 +228,7 @@ void SraUdpClient::threadFunc()
 {
     std::println("[SraUdpClient] thread started, socket='{}'", socketPath_);
 
-    while (!stopRequested_.load())
+    while (true)
     {
         Request req;
 
