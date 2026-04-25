@@ -53,8 +53,13 @@
  *     set-loopback <address>  Store a loopback address on the server
  *     get-loopback            Retrieve the stored loopback address
  *     get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)
- *     vrf-route-add [socket]  Query srmd via gRPC, build a SingleRouteRequest from
- *                             nni routes, and deliver it to ud_server once (one-shot).
+ *     vrf-route-add [socket]  Read loopback from srmd, fetch NNI prefixes via
+ *                             GetLoopbacks, then deliver to ud_server (one-shot):
+ *                               1. RequestLoopback  → identify this SRA node
+ *                               2. GetLoopbacks     → NNI interface + prefix list
+ *                               3. SingleRoute ADD  → install prefixes in ud_server
+ *                               4. ROUTE_DEL        → delete each prefix
+ *                               5. ROUTE_LIST       → dump resulting route table
  *                             Default socket: /tmp/ud_server.sock
  *     run [socket]            Full SRA daemon mode — runs until SIGINT/SIGTERM:
  *                               1. RequestLoopback → SOT auth check via srmd
@@ -2930,8 +2935,12 @@ int main(int argc, char* argv[])
         std::println("  get-loopback            Retrieve the stored loopback address");
         std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
         std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
-        std::println("  vrf-route-add [socket]  Query srmd via gRPC then send a SingleRouteRequest");
-        std::println("                          to the ud_server Unix-domain socket (one-shot)");
+        std::println("  vrf-route-add [socket]  Read loopback → GetLoopbacks → ADD → DEL → LIST");
+        std::println("                          1. RequestLoopback  identify this SRA node in SOT");
+        std::println("                          2. GetLoopbacks     fetch NNI interface + prefix list");
+        std::println("                          3. SingleRoute ADD  install prefixes in ud_server");
+        std::println("                          4. ROUTE_DEL        delete each prefix");
+        std::println("                          5. ROUTE_LIST       dump resulting route table");
         std::println("                          (default socket: /tmp/ud_server.sock)");
         std::println("  run [socket]            Full SRA daemon mode (continuous):");
         std::println("                            1. RequestLoopback → SOT auth check via srmd");
@@ -3842,12 +3851,14 @@ int main(int argc, char* argv[])
         const std::string socketPath =
             args.empty() ? "/tmp/ud_server.sock" : args[0];
 
-        std::println("[vrf-route-add] socket={} — starting VRF thread", socketPath);
+        std::println("[vrf-route-add] socket={} — starting", socketPath);
 
         sra::SraUdpClient vrfClient(socketPath);
         vrfClient.start();
 
-        // RequestLoopback to identify this node in the SOT.
+        // ── Step 1: RequestLoopback ──────────────────────────────────────────
+        // Identifies this SRA node in the SOT by matching the client's source
+        // IP against nodes_by_loopback on the server.
         std::println("[vrf-route-add] requesting loopback from srmd…");
         auto lbResult = client.requestLoopback();
         if (lbResult)
@@ -3861,37 +3872,49 @@ int main(int argc, char* argv[])
                          lbResult.error(), activeLoopback);
         }
 
-        // GetAllRoutes then build and submit a SingleRouteRequest (nni only).
-        std::println("[vrf-route-add] GetAllRoutes…");
-        auto arResult = client.getAllRoutes();
-        if (arResult)
+        if (activeLoopback.empty())
         {
-            printAllRoutes(*arResult);
+            std::println(std::cerr,
+                         "[vrf-route-add] no loopback available — cannot fetch prefixes");
+            vrfClient.stop();
+            return EXIT_FAILURE;
+        }
 
+        // ── Step 2: GetLoopbacks ─────────────────────────────────────────────
+        // Uses the loopback address obtained above to retrieve the NNI
+        // interface list (with per-interface prefix sets) from the SOT.
+        std::println("[vrf-route-add] GetLoopbacks('{}')…", activeLoopback);
+        auto glResult = client.getLoopbacks(activeLoopback);
+        if (glResult)
+        {
+            std::println("[vrf-route-add] GetLoopbacks: {} — {} interface(s)",
+                         glResult->message(), glResult->interfaces_size());
+
+            // ── Step 3: Build SingleRouteRequest (nni interfaces only) ───────
             cmdproto::SingleRouteRequest singleReq;
-            for (const auto& route : arResult->routes())
+            for (const auto& li : glResult->interfaces())
             {
-                if (route.interface_type() != "nni")
+                if (li.type() != "nni")
                     continue;
-                if (route.nexthop().empty())
+                if (li.nexthop().empty())
                     continue;
 
                 struct in_addr nhAddr{};
-                if (::inet_pton(AF_INET, route.nexthop().c_str(), &nhAddr) != 1)
+                if (::inet_pton(AF_INET, li.nexthop().c_str(), &nhAddr) != 1)
                     continue;
                 const auto* nhBytes =
                     reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
-                cmdproto::Interface iface{};
-                const std::string& ifn = route.interface_name();
+                cmdproto::Interface entry{};
+                const std::string& ifn = li.name();
                 for (std::size_t k = 0;
                      k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
-                    iface.iface_name[k] = ifn[k];
-                iface.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
+                    entry.iface_name[k] = ifn[k];
+                entry.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
                                            nhBytes[2], nhBytes[3]};
-                iface.nexthop_id_ipv4   = 0; // no kernel nexthop table in this mode
+                entry.nexthop_id_ipv4   = 0;
 
-                for (const auto& pfx : route.prefixes())
+                for (const auto& pfx : li.prefixes())
                 {
                     const std::string& pfxStr = pfx.prefix();
                     const auto slash = pfxStr.rfind('/');
@@ -3905,53 +3928,53 @@ int main(int argc, char* argv[])
                         reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
                     const auto maskLen = static_cast<std::uint8_t>(
                         std::stoul(pfxStr.substr(slash + 1)));
-                    iface.prefixes.push_back(cmdproto::PrefixIpv4{
+                    entry.prefixes.push_back(cmdproto::PrefixIpv4{
                         {pb[0], pb[1], pb[2], pb[3]}, maskLen});
                 }
 
-                singleReq.interfaces.push_back(std::move(iface));
+                std::println("[vrf-route-add]   iface='{}' nexthop='{}' prefixes={}",
+                             ifn, li.nexthop(), entry.prefixes.size());
+
+                singleReq.interfaces.push_back(std::move(entry));
             }
 
             if (!singleReq.interfaces.empty())
             {
-                std::println("[vrf-route-add] submitting {} nni interface(s) to "
-                             "Unix socket…",
-                             singleReq.interfaces.size());
+                // ── Step 4: ROUTE_ADD ────────────────────────────────────────
+                std::println("[vrf-route-add] [ADD] submitting {} nni interface(s) "
+                             "to ud_server…", singleReq.interfaces.size());
 
-                // Save interfaces before the move for follow-up delete commands.
                 auto savedInterfaces = singleReq.interfaces;
-
                 vrfClient.submitAdd(std::move(singleReq));
 
-                // After adding, delete each installed prefix via ROUTE_DEL.
-                std::println("[vrf-route-add] submitting ROUTE_DEL for each "
-                             "added prefix…");
+                // ── Step 5: ROUTE_DEL (one per prefix) ───────────────────────
+                std::println("[vrf-route-add] [DEL] deleting each added prefix…");
                 for (const auto& iface : savedInterfaces)
                 {
                     for (const auto& pfx : iface.prefixes)
                     {
                         cmdproto::RouteDelParams delParams;
-                        delParams.dst_addr  = pfx.addr;
+                        delParams.dst_addr   = pfx.addr;
                         delParams.prefix_len = pfx.mask_len;
-                        delParams.gateway   = iface.nexthop_addr_ipv4;
+                        delParams.gateway    = iface.nexthop_addr_ipv4;
                         vrfClient.submitDelete(delParams);
                     }
                 }
 
-                // Finally, list the routing table to confirm the current state.
-                std::println("[vrf-route-add] submitting ROUTE_LIST…");
+                // ── Step 6: ROUTE_LIST ───────────────────────────────────────
+                std::println("[vrf-route-add] [LIST] requesting route table…");
                 vrfClient.submitList();
             }
             else
             {
-                std::println("[vrf-route-add] no nni interfaces found — "
-                             "no request sent");
+                std::println("[vrf-route-add] no nni interfaces found in "
+                             "GetLoopbacks response — no request sent");
             }
         }
         else
         {
-            std::println("[vrf-route-add] GetAllRoutes failed: {}",
-                         arResult.error());
+            std::println(std::cerr, "[vrf-route-add] GetLoopbacks failed: {}",
+                         glResult.error());
         }
 
         vrfClient.stop();
