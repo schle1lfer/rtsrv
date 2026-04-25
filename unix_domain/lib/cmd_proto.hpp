@@ -216,8 +216,7 @@ inline constexpr std::size_t ROUTE_ENTRY_MIN_SIZE = 12;
 ///        ROUTE_ADD payload.
 enum class RouteAddPayloadType : std::uint8_t
 {
-    SINGLE_ROUTE    = 1, ///< VRF route-add: type + vrfs_request[]
-    INTERFACE_ROUTE = 2, ///< Interface route-add: type + iface_count + interface[]
+    SINGLE_ROUTE = 1, ///< Interface route-add: type + iface_count + interface[]
 };
 
 /// @brief Wire size in bytes of one prefix_ipv4 entry (4-byte address +
@@ -262,12 +261,12 @@ struct Interface
 };
 
 /**
- * @brief Decoded ROUTE_ADD binary request payload (type == INTERFACE_ROUTE).
+ * @brief Decoded ROUTE_ADD binary request payload (type == SINGLE_ROUTE).
  *
  * ## Wire layout (big-endian, no padding)
  * | Field             | Size    | Notes                                  |
  * |-------------------|---------|-----------------------------------------|
- * | type              | 1 byte  | RouteAddPayloadType::INTERFACE_ROUTE    |
+ * | type              | 1 byte  | RouteAddPayloadType::SINGLE_ROUTE       |
  * | iface_count       | 2 bytes | Number of interface entries (big-endian)|
  * | interface[]       | N × var | N interface entries                     |
  *
@@ -305,93 +304,6 @@ struct RouteAddBinaryResponse
 {
     std::uint8_t status_code{};      ///< Overall status (0x00 = all ok)
     std::vector<bool> prefix_status; ///< Per-prefix result (true = installed)
-};
-
-// ---------------------------------------------------------------------------
-// VRF-based ROUTE_ADD payload — request structures
-// ---------------------------------------------------------------------------
-
-/// @brief Fixed-length VRF name field: 16 bytes, null-terminated.
-using VrfsName = std::array<char, 16>;
-
-/// @brief Wire size of the VRF name field.
-inline constexpr std::size_t VRFS_NAME_SIZE = 16;
-
-/// @brief Fixed-size portion of one vrfs_request wire entry:
-///        vrfs_name(16) + iface_name(32) + nexthop_addr(4) + nexthop_id(4) + prefix_count(2).
-inline constexpr std::size_t VRFS_REQUEST_FIXED_SIZE = 58;
-
-/// @brief Wire size of one vrfs_answer entry: vrfs_name(16) + prefix_status(1).
-inline constexpr std::size_t VRFS_ANSWER_WIRE_SIZE = 17;
-
-/**
- * @brief One VRF route entry in a VRF route-add request.
- *
- * ## Wire layout (big-endian, no padding)
- * | Field             | Size    | Notes                              |
- * |-------------------|---------|------------------------------------|
- * | vrfs_name         | 16      | NUL-terminated VRF name            |
- * | iface_name        | 32      | NUL-terminated egress interface    |
- * | nexthop_addr_ipv4 | 4       | Next-hop gateway (network order)   |
- * | nexthop_id_ipv4   | 4       | Next-hop identifier (big-endian)   |
- * | prefix_count      | 2       | Number of following prefix entries |
- * | prefix_ipv4[]     | N × 5   | N prefix entries (addr+mask each)  |
- */
-struct VrfsRequest
-{
-    VrfsName      vrfs_name{};          ///< VRF name (16 bytes, null-padded)
-    IfaceName     iface_name{};         ///< Interface name (32 bytes, null-padded)
-    Ipv4Addr      nexthop_addr_ipv4{};  ///< Next-hop gateway address
-    std::uint32_t nexthop_id_ipv4{};    ///< Next-hop identifier
-    std::vector<PrefixIpv4> prefixes;   ///< Prefix list for this VRF
-};
-
-/**
- * @brief Full VRF ROUTE_ADD request payload (type == SINGLE_ROUTE).
- *
- * ## Wire layout
- * | Field           | Size | Notes                                  |
- * |-----------------|------|----------------------------------------|
- * | type            | 1    | RouteAddPayloadType::SINGLE_ROUTE (=1) |
- * | vrfs_request[]  | var  | Zero or more VrfsRequest entries       |
- */
-struct VrfsRouteRequest
-{
-    std::vector<VrfsRequest> vrfs_requests; ///< Per-VRF route requests
-};
-
-// ---------------------------------------------------------------------------
-// VRF-based ROUTE_ADD payload — response structures
-// ---------------------------------------------------------------------------
-
-/**
- * @brief One VRF entry in the route-add response.
- *
- * ## Wire layout
- * | Field         | Size | Notes                           |
- * |---------------|------|---------------------------------|
- * | vrfs_name     | 16   | NUL-terminated VRF name         |
- * | prefix_status | 1    | Bit 0: 1 = ok, 0 = failure      |
- */
-struct VrfsAnswer
-{
-    VrfsName vrfs_name{};  ///< VRF name (16 bytes, null-padded)
-    bool prefix_status{};  ///< True when all prefixes for this VRF installed ok
-};
-
-/**
- * @brief Full VRF route-add response payload.
- *
- * ## Wire layout
- * | Field         | Size    | Notes                     |
- * |---------------|---------|---------------------------|
- * | status_code   | 1       | 0x00 = all VRFs ok        |
- * | vrfs_answer[] | N × 17  | One per VRF in request    |
- */
-struct VrfsRouteResponse
-{
-    std::uint8_t           status_code{}; ///< Overall status (0x00 = all ok)
-    std::vector<VrfsAnswer> answers;      ///< Per-VRF result
 };
 
 // ---------------------------------------------------------------------------
@@ -533,7 +445,7 @@ handle_route_list();
 /**
  * @brief Serialises a SingleRouteRequest to its binary wire bytes.
  *
- * Produces: type(1) + nexthop(4) + N × [addr(4) + mask(1)] bytes.
+ * Produces: type(1=SINGLE_ROUTE) + iface_count(2) + N × interface entries.
  *
  * @param req  Request to encode.
  * @return Encoded bytes on success, or an error code.
@@ -544,8 +456,8 @@ encode_route_add_payload(const SingleRouteRequest& req);
 /**
  * @brief Deserialises a SingleRouteRequest from raw binary payload bytes.
  *
- * Validates the type byte, total size (must equal 5 + N × 5 for some N ≥ 0),
- * and each mask_len (must be 0–32).
+ * Validates the type byte (must be SINGLE_ROUTE = 1), iface_count, and each
+ * interface entry including mask_len values (0–32).
  *
  * @param raw  Payload bytes starting at the type byte.
  * @return Decoded SingleRouteRequest on success, or an error code.
@@ -587,64 +499,5 @@ decode_route_add_binary_response(std::span<const std::uint8_t> raw);
  */
 [[nodiscard]] std::expected<RouteAddBinaryResponse, std::error_code>
 handle_route_add_payload(const SingleRouteRequest& req);
-
-// ---------------------------------------------------------------------------
-// VRF-based ROUTE_ADD payload — command builder, encode / decode / handle
-// ---------------------------------------------------------------------------
-
-/// @brief Builds a ROUTE_ADD Command using the VRF binary payload format.
-[[nodiscard]] Command make_route_add_vrfs(const VrfsRouteRequest& req);
-
-/**
- * @brief Serialises a VrfsRouteRequest to its binary wire bytes.
- *
- * Layout: type(1) + N × [vrfs_name(16) + nexthop_addr(4) + nexthop_id(4)
- *         + prefix_count(2) + prefix_ipv4[](prefix_count × 5)].
- *
- * @param req  Request to encode.
- * @return Encoded bytes on success, or an error code.
- */
-[[nodiscard]] std::expected<std::vector<std::uint8_t>, std::error_code>
-encode_vrfs_route_request(const VrfsRouteRequest& req);
-
-/**
- * @brief Deserialises a VrfsRouteRequest from raw binary payload bytes.
- *
- * @param raw  Payload bytes starting at the type byte.
- * @return Decoded VrfsRouteRequest on success, or an error code.
- */
-[[nodiscard]] std::expected<VrfsRouteRequest, std::error_code>
-decode_vrfs_route_request(std::span<const std::uint8_t> raw);
-
-/**
- * @brief Serialises a VrfsRouteResponse to its wire bytes.
- *
- * Layout: status_code(1) + N × [vrfs_name(16) + prefix_status(1)].
- *
- * @param resp  Response to encode.
- * @return Encoded bytes on success, or an error code.
- */
-[[nodiscard]] std::expected<std::vector<std::uint8_t>, std::error_code>
-encode_vrfs_route_response(const VrfsRouteResponse& resp);
-
-/**
- * @brief Deserialises a VrfsRouteResponse from its wire bytes.
- *
- * @param raw  Response bytes starting at status_code.
- * @return Decoded VrfsRouteResponse on success, or an error code.
- */
-[[nodiscard]] std::expected<VrfsRouteResponse, std::error_code>
-decode_vrfs_route_response(std::span<const std::uint8_t> raw);
-
-/**
- * @brief Handles a VRF ROUTE_ADD request.
- *
- * Installs each VRF's prefixes via netlink and returns per-VRF status.
- *
- * @param req  Decoded VRF request payload.
- * @return VrfsRouteResponse on success, or an error code.
- */
-[[nodiscard]] std::expected<VrfsRouteResponse, std::error_code>
-handle_vrfs_route_request(const VrfsRouteRequest& req);
 
 } // namespace cmdproto
