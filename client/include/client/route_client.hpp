@@ -169,7 +169,8 @@ public:
     getLoopbacks(const std::string& loopback);
 
     /**
-     * @brief Calls RequestLoopback to retrieve this node's loopback from the SOT.
+     * @brief Calls RequestLoopback to retrieve this node's loopback from the
+     * SOT.
      *
      * The server extracts the caller's IP from the gRPC peer address and
      * looks it up in the SOT nodes_by_loopback map.  Returns the node's

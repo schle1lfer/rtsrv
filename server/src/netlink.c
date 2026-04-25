@@ -66,9 +66,9 @@
  *
  * @param nlh  Pointer to the netlink message header.
  */
-static void nl_log_ospf(const struct nlmsghdr *nlh)
+static void nl_log_ospf(const struct nlmsghdr* nlh)
 {
-    const struct rtmsg *rtm = NLMSG_DATA(nlh);
+    const struct rtmsg* rtm = NLMSG_DATA(nlh);
 
     if (rtm->rtm_protocol != RTPROT_OSPF)
     {
@@ -76,18 +76,28 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
     }
 
     /* Message type name */
-    const char *tn = (nlh->nlmsg_type == RTM_NEWROUTE) ? "RTM_NEWROUTE"
-                                                        : "RTM_DELROUTE";
+    const char* tn =
+        (nlh->nlmsg_type == RTM_NEWROUTE) ? "RTM_NEWROUTE" : "RTM_DELROUTE";
 
     /* Route type name */
-    const char *rtype;
+    const char* rtype;
     switch (rtm->rtm_type)
     {
-    case RTN_UNICAST:     rtype = "UNICAST";     break;
-    case RTN_BLACKHOLE:   rtype = "BLACKHOLE";   break;
-    case RTN_UNREACHABLE: rtype = "UNREACHABLE"; break;
-    case RTN_PROHIBIT:    rtype = "PROHIBIT";    break;
-    default:              rtype = "?";           break;
+    case RTN_UNICAST:
+        rtype = "UNICAST";
+        break;
+    case RTN_BLACKHOLE:
+        rtype = "BLACKHOLE";
+        break;
+    case RTN_UNREACHABLE:
+        rtype = "UNREACHABLE";
+        break;
+    case RTN_PROHIBIT:
+        rtype = "PROHIBIT";
+        break;
+    default:
+        rtype = "?";
+        break;
     }
 
     printf("--------------------------------------------------------------\n");
@@ -102,16 +112,16 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
            (unsigned)rtm->rtm_table,
            (unsigned)rtm->rtm_protocol,
            (unsigned)rtm->rtm_scope,
-           (unsigned)rtm->rtm_type, rtype,
+           (unsigned)rtm->rtm_type,
+           rtype,
            (unsigned)rtm->rtm_flags);
 
     /* Attributes – printed in the order they appear in the message */
-    char         addr_buf[INET_ADDRSTRLEN];
-    uint32_t     u32;
+    char addr_buf[INET_ADDRSTRLEN];
+    uint32_t u32;
     unsigned int attrlen = (unsigned int)RTM_PAYLOAD(nlh);
 
-    for (const struct rtattr *rta = RTM_RTA(rtm);
-         RTA_OK(rta, attrlen);
+    for (const struct rtattr* rta = RTM_RTA(rtm); RTA_OK(rta, attrlen);
          rta = RTA_NEXT(rta, attrlen))
     {
         switch (rta->rta_type)
@@ -121,7 +131,9 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
             {
                 memcpy(&u32, RTA_DATA(rta), sizeof(u32));
                 printf("NETLINK > %s: \"RTA_TABLE\"    : %u (%08X)\n",
-                       tn, u32, u32);
+                       tn,
+                       u32,
+                       u32);
             }
             break;
 
@@ -138,7 +150,9 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
             {
                 memcpy(&u32, RTA_DATA(rta), sizeof(u32));
                 printf("NETLINK > %s: \"RTA_PRIORITY\" : %u (%08X)\n",
-                       tn, u32, u32);
+                       tn,
+                       u32,
+                       u32);
             }
             break;
 
@@ -147,7 +161,9 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
             {
                 memcpy(&u32, RTA_DATA(rta), sizeof(u32));
                 printf("NETLINK > %s: \"RTA_NH_ID\"    : %u (%08X)\n",
-                       tn, u32, u32);
+                       tn,
+                       u32,
+                       u32);
             }
             break;
 
@@ -166,46 +182,48 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
                 memcpy(&u32, RTA_DATA(rta), sizeof(u32));
                 if_indextoname(u32, ifname);
                 printf("NETLINK > %s: \"RTA_OIF\"      : %s (%u)\n",
-                       tn, ifname[0] ? ifname : "?", u32);
+                       tn,
+                       ifname[0] ? ifname : "?",
+                       u32);
             }
             break;
 
-        case RTA_MULTIPATH:
-        {
+        case RTA_MULTIPATH: {
             /* Log each nexthop entry in the multipath list. */
-            const struct rtnexthop *rtnh =
-                (const struct rtnexthop *)RTA_DATA(rta);
+            const struct rtnexthop* rtnh =
+                (const struct rtnexthop*)RTA_DATA(rta);
             int nhrem = (int)RTA_PAYLOAD(rta);
             int nhidx = 0;
 
             while (RTNH_OK(rtnh, nhrem))
             {
                 char gw_buf[INET_ADDRSTRLEN] = "(none)";
-                char ifname[IF_NAMESIZE]      = {0};
+                char ifname[IF_NAMESIZE] = {0};
 
                 if_indextoname((unsigned)rtnh->rtnh_ifindex, ifname);
 
-                int ilen = (int)rtnh->rtnh_len -
-                           (int)sizeof(struct rtnexthop);
-                const struct rtattr *inner =
-                    (const struct rtattr *)RTNH_DATA(rtnh);
+                int ilen = (int)rtnh->rtnh_len - (int)sizeof(struct rtnexthop);
+                const struct rtattr* inner =
+                    (const struct rtattr*)RTNH_DATA(rtnh);
                 for (; RTA_OK(inner, ilen); inner = RTA_NEXT(inner, ilen))
                 {
                     if (inner->rta_type == RTA_GATEWAY &&
                         RTA_PAYLOAD(inner) >= sizeof(struct in_addr))
                     {
-                        inet_ntop(AF_INET, RTA_DATA(inner),
-                                  gw_buf, sizeof(gw_buf));
+                        inet_ntop(
+                            AF_INET, RTA_DATA(inner), gw_buf, sizeof(gw_buf));
                         break;
                     }
                 }
 
                 printf("NETLINK > %s: \"RTA_MULTIPATH\"[%d]: via %s dev %s\n",
-                       tn, nhidx,
-                       gw_buf, ifname[0] ? ifname : "?");
+                       tn,
+                       nhidx,
+                       gw_buf,
+                       ifname[0] ? ifname : "?");
 
                 nhrem -= (int)NLMSG_ALIGN(rtnh->rtnh_len);
-                rtnh   = RTNH_NEXT(rtnh);
+                rtnh = RTNH_NEXT(rtnh);
                 ++nhidx;
             }
             break;
@@ -237,11 +255,10 @@ static void nl_log_ospf(const struct nlmsghdr *nlh)
  * @param cb        Caller-supplied event callback.
  * @param user_data Forwarded to @p cb.
  */
-static void nl_dispatch(const struct nlmsghdr *nlh,
-                        netlink_route_cb_t     cb,
-                        void                  *user_data)
+static void
+nl_dispatch(const struct nlmsghdr* nlh, netlink_route_cb_t cb, void* user_data)
 {
-    const struct rtmsg *rtm = NLMSG_DATA(nlh);
+    const struct rtmsg* rtm = NLMSG_DATA(nlh);
 
     /* --- Mandatory filters ------------------------------------------------ */
 
@@ -274,9 +291,8 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
          * and "ip route change" set this flag, as does FRR zebra when it
          * updates a nexthop or metric for a previously announced prefix.
          */
-        event = (nlh->nlmsg_flags & NLM_F_REPLACE)
-                    ? NETLINK_ROUTE_CHANGED
-                    : NETLINK_ROUTE_ADDED;
+        event = (nlh->nlmsg_flags & NLM_F_REPLACE) ? NETLINK_ROUTE_CHANGED
+                                                   : NETLINK_ROUTE_ADDED;
     }
     else if (nlh->nlmsg_type == RTM_DELROUTE)
     {
@@ -293,18 +309,17 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
     memset(&route, 0, sizeof(route));
 
     /* rtmsg header fields */
-    route.family   = rtm->rtm_family;
-    route.dst_len  = rtm->rtm_dst_len;
-    route.tos      = rtm->rtm_tos;
-    route.scope    = rtm->rtm_scope;
-    route.type     = rtm->rtm_type;
-    route.flags    = rtm->rtm_flags;
+    route.family = rtm->rtm_family;
+    route.dst_len = rtm->rtm_dst_len;
+    route.tos = rtm->rtm_tos;
+    route.scope = rtm->rtm_scope;
+    route.type = rtm->rtm_type;
+    route.flags = rtm->rtm_flags;
     route.protocol = rtm->rtm_protocol;
-    route.table    = rtm->rtm_table; /* May be overridden by RTA_TABLE below */
+    route.table = rtm->rtm_table; /* May be overridden by RTA_TABLE below */
 
     unsigned int attrlen = (unsigned int)RTM_PAYLOAD(nlh);
-    for (const struct rtattr *rta = RTM_RTA(rtm);
-         RTA_OK(rta, attrlen);
+    for (const struct rtattr* rta = RTM_RTA(rtm); RTA_OK(rta, attrlen);
          rta = RTA_NEXT(rta, attrlen))
     {
         switch (rta->rta_type)
@@ -327,7 +342,8 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
             if (RTA_PAYLOAD(rta) >= sizeof(route.ifindex))
             {
                 memcpy(&route.ifindex, RTA_DATA(rta), sizeof(route.ifindex));
-                /* Resolve the interface name; ignore failure (name stays ""). */
+                /* Resolve the interface name; ignore failure (name stays "").
+                 */
                 if_indextoname(route.ifindex, route.ifname);
             }
             break;
@@ -372,14 +388,14 @@ static void nl_dispatch(const struct nlmsghdr *nlh,
  * @return Number of qualifying route events dispatched, or -1 if a
  *         NLMSG_ERROR record is encountered.
  */
-static int nl_process_buf(const char        *buf,
-                          ssize_t            n,
+static int nl_process_buf(const char* buf,
+                          ssize_t n,
                           netlink_route_cb_t cb,
-                          void              *user_data)
+                          void* user_data)
 {
     int count = 0;
 
-    for (const struct nlmsghdr *nlh = (const struct nlmsghdr *)buf;
+    for (const struct nlmsghdr* nlh = (const struct nlmsghdr*)buf;
          NLMSG_OK(nlh, (unsigned int)n);
          nlh = NLMSG_NEXT(nlh, n))
     {
@@ -392,8 +408,7 @@ static int nl_process_buf(const char        *buf,
             return -1;
         }
 
-        if (nlh->nlmsg_type == RTM_NEWROUTE ||
-            nlh->nlmsg_type == RTM_DELROUTE)
+        if (nlh->nlmsg_type == RTM_NEWROUTE || nlh->nlmsg_type == RTM_DELROUTE)
         {
             nl_dispatch(nlh, cb, user_data);
             ++count;
@@ -409,9 +424,7 @@ static int nl_process_buf(const char        *buf,
 
 int netlink_init(void)
 {
-    int fd = socket(AF_NETLINK,
-                    SOCK_RAW | SOCK_CLOEXEC,
-                    NETLINK_ROUTE);
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
     if (fd < 0)
     {
         return -1;
@@ -422,7 +435,7 @@ int netlink_init(void)
     addr.nl_family = AF_NETLINK;
     addr.nl_groups = RTMGRP_IPV4_ROUTE;
 
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
         int saved = errno;
         close(fd);
@@ -433,10 +446,10 @@ int netlink_init(void)
     return fd;
 }
 
-int netlink_process(int fd, netlink_route_cb_t cb, void *user_data)
+int netlink_process(int fd, netlink_route_cb_t cb, void* user_data)
 {
-    char    buf[NL_BUF_SIZE];
-    int     total = 0;
+    char buf[NL_BUF_SIZE];
+    int total = 0;
 
     for (;;)
     {
@@ -461,7 +474,7 @@ int netlink_process(int fd, netlink_route_cb_t cb, void *user_data)
     return total;
 }
 
-int netlink_run(int fd, netlink_route_cb_t cb, void *user_data)
+int netlink_run(int fd, netlink_route_cb_t cb, void* user_data)
 {
     char buf[NL_BUF_SIZE];
 

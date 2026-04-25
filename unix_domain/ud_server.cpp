@@ -105,14 +105,15 @@ recv_frame(int fd)
  * @param fd         Connected socket descriptor.
  * @param msg_id     Matches the inbound request msg_id.
  * @param pkt_num    Matches the inbound udproto pkt_num.
- * @param ack_status 0x00 = all commands processed ok, 0x01 = one or more errors.
+ * @param ack_status 0x00 = all commands processed ok, 0x01 = one or more
+ * errors.
  * @param resp_bytes Command-specific response payload (may be empty).
  */
 static std::expected<void, std::error_code>
 send_response(int fd,
               std::uint16_t msg_id,
               std::uint16_t pkt_num,
-              std::uint8_t  ack_status,
+              std::uint8_t ack_status,
               const std::vector<std::uint8_t>& resp_bytes)
 {
     // Build DATA_ACK payload: [ack_status][response_bytes...]
@@ -123,9 +124,9 @@ send_response(int fd,
 
     routeproto::Message ack_msg{
         .msg_type = routeproto::MsgType::DATA_ACK,
-        .flags    = routeproto::FLAG_NONE,
-        .msg_id   = msg_id,
-        .payload  = std::move(payload),
+        .flags = routeproto::FLAG_NONE,
+        .msg_id = msg_id,
+        .payload = std::move(payload),
     };
 
     auto ack_bytes = routeproto::encode_message(ack_msg);
@@ -133,10 +134,10 @@ send_response(int fd,
         return std::unexpected(ack_bytes.error());
 
     udproto::Packet rsp_pkt{
-        .pkt_num    = pkt_num,
+        .pkt_num = pkt_num,
         .total_pkts = 1,
-        .ctrl       = 0x0000,
-        .data       = std::move(*ack_bytes),
+        .ctrl = 0x0000,
+        .data = std::move(*ack_bytes),
     };
 
     auto rsp_frame = udproto::encode_packet(rsp_pkt);
@@ -263,9 +264,11 @@ static void handle_connection(net::Socket conn)
         {
             if (frame_data.error() ==
                 net::make_error_code(net::NetError::ConnectionClosed))
-                std::println("[ud_server] client disconnected fd={}", conn.fd());
+                std::println("[ud_server] client disconnected fd={}",
+                             conn.fd());
             else
-                std::println(stderr, "[ud_server] recv error: {}",
+                std::println(stderr,
+                             "[ud_server] recv error: {}",
                              frame_data.error().message());
             return;
         }
@@ -275,8 +278,8 @@ static void handle_connection(net::Socket conn)
         auto pkt = udproto::decode_packet(*frame_data);
         if (!pkt)
         {
-            std::println(stderr, "[ud_server] decode_packet: {}",
-                         pkt.error().message());
+            std::println(
+                stderr, "[ud_server] decode_packet: {}", pkt.error().message());
             return;
         }
 
@@ -284,7 +287,8 @@ static void handle_connection(net::Socket conn)
         auto msg = routeproto::decode_message(pkt->data);
         if (!msg)
         {
-            std::println(stderr, "[ud_server] decode_message: {}",
+            std::println(stderr,
+                         "[ud_server] decode_message: {}",
                          msg.error().message());
             return;
         }
@@ -297,16 +301,16 @@ static void handle_connection(net::Socket conn)
         // ── [4] Handle PING ─────────────────────────────────────────────────
         if (msg->msg_type == routeproto::MsgType::PING)
         {
-            auto pong     = routeproto::make_pong(msg->msg_id);
+            auto pong = routeproto::make_pong(msg->msg_id);
             auto pong_enc = routeproto::encode_message(pong);
             if (!pong_enc)
                 return;
 
             udproto::Packet rsp{
-                .pkt_num    = pkt->pkt_num,
+                .pkt_num = pkt->pkt_num,
                 .total_pkts = 1,
-                .ctrl       = 0x0000,
-                .data       = std::move(*pong_enc),
+                .ctrl = 0x0000,
+                .data = std::move(*pong_enc),
             };
             auto rsp_frame = udproto::encode_packet(rsp);
             if (!rsp_frame)
@@ -327,7 +331,8 @@ static void handle_connection(net::Socket conn)
         auto ed = routeproto::decode_exchange(msg->payload);
         if (!ed)
         {
-            std::println(stderr, "[ud_server] decode_exchange: {}",
+            std::println(stderr,
+                         "[ud_server] decode_exchange: {}",
                          ed.error().message());
             send_response(conn.fd(), msg->msg_id, pkt->pkt_num, 0x01, {});
             continue;
@@ -336,7 +341,8 @@ static void handle_connection(net::Socket conn)
         auto cmds = cmdproto::decode_commands(ed->commands);
         if (!cmds)
         {
-            std::println(stderr, "[ud_server] decode_commands: {}",
+            std::println(stderr,
+                         "[ud_server] decode_commands: {}",
                          cmds.error().message());
             send_response(conn.fd(), msg->msg_id, pkt->pkt_num, 0x01, {});
             continue;
@@ -345,7 +351,7 @@ static void handle_connection(net::Socket conn)
         std::println("[ud_server] {} command(s) in exchange", cmds->size());
 
         // Process commands and build the response payload.
-        std::uint8_t              ack_status = 0x00;
+        std::uint8_t ack_status = 0x00;
         std::vector<std::uint8_t> resp_bytes;
 
         for (const auto& cmd : *cmds)
@@ -372,28 +378,30 @@ static void handle_connection(net::Socket conn)
 
             if (!result)
             {
-                std::println(stderr, "[ud_server] dispatch cmd_id=0x{:02x}: {}",
+                std::println(stderr,
+                             "[ud_server] dispatch cmd_id=0x{:02x}: {}",
                              static_cast<unsigned>(cmd.cmd_id),
                              result.error().message());
                 ack_status = 0x01;
                 continue;
             }
 
-            resp_bytes.insert(resp_bytes.end(),
-                              result->begin(), result->end());
+            resp_bytes.insert(resp_bytes.end(), result->begin(), result->end());
         }
 
-        if (auto r = send_response(conn.fd(), msg->msg_id, pkt->pkt_num,
-                                   ack_status, resp_bytes); !r)
+        if (auto r = send_response(
+                conn.fd(), msg->msg_id, pkt->pkt_num, ack_status, resp_bytes);
+            !r)
         {
-            std::println(stderr, "[ud_server] send_response: {}",
-                         r.error().message());
+            std::println(
+                stderr, "[ud_server] send_response: {}", r.error().message());
             return;
         }
 
-        std::println("[ud_server] response sent: ack=0x{:02x} payload={} byte(s)",
-                     static_cast<unsigned>(ack_status),
-                     1 + resp_bytes.size());
+        std::println(
+            "[ud_server] response sent: ack=0x{:02x} payload={} byte(s)",
+            static_cast<unsigned>(ack_status),
+            1 + resp_bytes.size());
     }
 }
 
@@ -408,7 +416,8 @@ static void handle_connection(net::Socket conn)
 static std::expected<void, std::error_code>
 log_route_add(std::shared_ptr<netlink::RouteAddParams> p)
 {
-    logger::log(logger::INFO, "cmdproto: ADD CB",
+    logger::log(logger::INFO,
+                "cmdproto: ADD CB",
                 std::format("log_route_add: dst={}/{} gw={} dev='{}'"
                             " metric={} scope={} proto={} table={}",
                             netlink::format_ipv4(p->dst),
@@ -427,14 +436,15 @@ log_route_add(std::shared_ptr<netlink::RouteAddParams> p)
 static std::expected<void, std::error_code>
 log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
 {
-    logger::log(logger::INFO, "cmdproto: DEL CB",
-                std::format("log_route_del: dst={}/{} gw={} dev='{}' table={}",
-                            netlink::format_ipv4(p->dst),
-                            static_cast<unsigned>(p->prefix_len),
-                            p->has_gateway ? netlink::format_ipv4(p->gateway)
-                                           : "(any)",
-                            p->if_name.empty() ? "(any)" : p->if_name,
-                            static_cast<unsigned>(p->table)));
+    logger::log(
+        logger::INFO,
+        "cmdproto: DEL CB",
+        std::format("log_route_del: dst={}/{} gw={} dev='{}' table={}",
+                    netlink::format_ipv4(p->dst),
+                    static_cast<unsigned>(p->prefix_len),
+                    p->has_gateway ? netlink::format_ipv4(p->gateway) : "(any)",
+                    p->if_name.empty() ? "(any)" : p->if_name,
+                    static_cast<unsigned>(p->table)));
     // p goes out of scope — RouteDelParams is freed here.
     return {};
 }
@@ -442,9 +452,10 @@ log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
 static std::expected<std::vector<netlink::RouteEntry>, std::error_code>
 log_route_list(std::shared_ptr<netlink::RouteTable> t)
 {
-    logger::log(logger::INFO, "cmdproto: LIST CB",
-                std::format("log_route_list: table={}",
-                            static_cast<unsigned>(*t)));
+    logger::log(
+        logger::INFO,
+        "cmdproto: LIST CB",
+        std::format("log_route_list: table={}", static_cast<unsigned>(*t)));
     // t goes out of scope — RouteTable is freed here.
     return std::vector<netlink::RouteEntry>{};
 }
@@ -463,31 +474,33 @@ int main(int argc, char* argv[])
 
     cmdproto::HandlerCallbacks cbs;
     // for hw ASIC
-    cbs.route_add  = log_route_add;
-    cbs.route_del  = log_route_del;
+    cbs.route_add = log_route_add;
+    cbs.route_del = log_route_del;
     cbs.route_list = log_route_list;
 
     // for virt ASIC
-    //cbs.route_add  = netlink::add_route;
-    //cbs.route_del  = netlink::delete_route;
-    //cbs.route_list = nullptr;
+    // cbs.route_add  = netlink::add_route;
+    // cbs.route_del  = netlink::delete_route;
+    // cbs.route_list = nullptr;
     cmdproto::init_callbacks(std::move(cbs));
 
     const std::string sock_path =
         (remaining.size() > 1) ? remaining[1] : "/tmp/ud_server.sock";
 
     // Install signal handlers for clean shutdown.
-    struct sigaction sa{};
+    struct sigaction sa
+    {};
     sa.sa_handler = sig_handler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
     // Create and bind the listening socket.
     auto srv_result = net::create_socket();
     if (!srv_result)
     {
-        std::println(stderr, "[ud_server] create_socket: {}",
+        std::println(stderr,
+                     "[ud_server] create_socket: {}",
                      srv_result.error().message());
         return EXIT_FAILURE;
     }
@@ -495,15 +508,17 @@ int main(int argc, char* argv[])
 
     if (auto r = net::set_reuse_addr(srv.fd()); !r)
     {
-        std::println(stderr, "[ud_server] set_reuse_addr: {}",
-                     r.error().message());
+        std::println(
+            stderr, "[ud_server] set_reuse_addr: {}", r.error().message());
         return EXIT_FAILURE;
     }
 
     if (auto r = net::bind_socket(srv.fd(), sock_path); !r)
     {
-        std::println(stderr, "[ud_server] bind('{}'): {}",
-                     sock_path, r.error().message());
+        std::println(stderr,
+                     "[ud_server] bind('{}'): {}",
+                     sock_path,
+                     r.error().message());
         return EXIT_FAILURE;
     }
 
@@ -523,7 +538,8 @@ int main(int argc, char* argv[])
         {
             if (g_stop)
                 break;
-            std::println(stderr, "[ud_server] accept: {}",
+            std::println(stderr,
+                         "[ud_server] accept: {}",
                          conn_result.error().message());
             continue;
         }

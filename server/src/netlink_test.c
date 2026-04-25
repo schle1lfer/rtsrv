@@ -60,14 +60,18 @@ static volatile int g_nl_fd = -1;
  * @param event  The event to label.
  * @return       A 7-character, NUL-terminated label string.
  */
-static const char *event_label(netlink_event_t event)
+static const char* event_label(netlink_event_t event)
 {
     switch (event)
     {
-    case NETLINK_ROUTE_ADDED:   return "ADDED  ";
-    case NETLINK_ROUTE_REMOVED: return "REMOVED";
-    case NETLINK_ROUTE_CHANGED: return "CHANGED";
-    default:                    return "UNKNOWN";
+    case NETLINK_ROUTE_ADDED:
+        return "ADDED  ";
+    case NETLINK_ROUTE_REMOVED:
+        return "REMOVED";
+    case NETLINK_ROUTE_CHANGED:
+        return "CHANGED";
+    default:
+        return "UNKNOWN";
     }
 }
 
@@ -84,31 +88,52 @@ static const char *event_label(netlink_event_t event)
  * @return          A NUL-terminated string; either a literal constant or
  *                  the decimal value rendered into @p buf.
  */
-static const char *protocol_name(uint8_t protocol, char *buf, size_t buflen)
+static const char* protocol_name(uint8_t protocol, char* buf, size_t buflen)
 {
     switch (protocol)
     {
-    case RTPROT_UNSPEC:    return "unspec";
-    case RTPROT_REDIRECT:  return "redirect";
-    case RTPROT_KERNEL:    return "kernel";
-    case RTPROT_BOOT:      return "boot";
-    case RTPROT_STATIC:    return "static";
-    case RTPROT_GATED:     return "gated";
-    case RTPROT_RA:        return "ra";
-    case RTPROT_MRT:       return "mrt";
-    case RTPROT_ZEBRA:     return "zebra";
-    case RTPROT_BIRD:      return "bird";
-    case RTPROT_DNROUTED:  return "dnrouted";
-    case RTPROT_XORP:      return "xorp";
-    case RTPROT_NTK:       return "ntk";
-    case RTPROT_DHCP:      return "dhcp";
-    case RTPROT_MROUTED:   return "mrouted";
-    case RTPROT_BABEL:     return "babel";
-    case RTPROT_BGP:       return "bgp";
-    case RTPROT_ISIS:      return "isis";
-    case RTPROT_OSPF:      return "ospf";
-    case RTPROT_RIP:       return "rip";
-    case RTPROT_EIGRP:     return "eigrp";
+    case RTPROT_UNSPEC:
+        return "unspec";
+    case RTPROT_REDIRECT:
+        return "redirect";
+    case RTPROT_KERNEL:
+        return "kernel";
+    case RTPROT_BOOT:
+        return "boot";
+    case RTPROT_STATIC:
+        return "static";
+    case RTPROT_GATED:
+        return "gated";
+    case RTPROT_RA:
+        return "ra";
+    case RTPROT_MRT:
+        return "mrt";
+    case RTPROT_ZEBRA:
+        return "zebra";
+    case RTPROT_BIRD:
+        return "bird";
+    case RTPROT_DNROUTED:
+        return "dnrouted";
+    case RTPROT_XORP:
+        return "xorp";
+    case RTPROT_NTK:
+        return "ntk";
+    case RTPROT_DHCP:
+        return "dhcp";
+    case RTPROT_MROUTED:
+        return "mrouted";
+    case RTPROT_BABEL:
+        return "babel";
+    case RTPROT_BGP:
+        return "bgp";
+    case RTPROT_ISIS:
+        return "isis";
+    case RTPROT_OSPF:
+        return "ospf";
+    case RTPROT_RIP:
+        return "rip";
+    case RTPROT_EIGRP:
+        return "eigrp";
     default:
         snprintf(buf, buflen, "%u", (unsigned)protocol);
         return buf;
@@ -122,7 +147,7 @@ static const char *protocol_name(uint8_t protocol, char *buf, size_t buflen)
  * @param buflen  Length of @p buf.
  * @return        @p buf, always NUL-terminated.
  */
-static const char *timestamp(char *buf, size_t buflen)
+static const char* timestamp(char* buf, size_t buflen)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -130,7 +155,9 @@ static const char *timestamp(char *buf, size_t buflen)
     struct tm tm_utc;
     gmtime_r(&ts.tv_sec, &tm_utc);
 
-    snprintf(buf, buflen, "%02d:%02d:%02d.%03d",
+    snprintf(buf,
+             buflen,
+             "%02d:%02d:%02d.%03d",
              tm_utc.tm_hour,
              tm_utc.tm_min,
              tm_utc.tm_sec,
@@ -147,10 +174,12 @@ static const char *timestamp(char *buf, size_t buflen)
  *
  * Output format (single line):
  * @code
- *   HH:MM:SS.mmm  ADDED    3.3.3.3/32  via 192.168.0.1  dev eth0  metric 0      table 254    proto static
- *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 0      table 254    proto static
- *   HH:MM:SS.mmm  CHANGED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 100    table 254    proto static
- *   HH:MM:SS.mmm  REMOVED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 100    table 254    proto static
+ *   HH:MM:SS.mmm  ADDED    3.3.3.3/32  via 192.168.0.1  dev eth0  metric 0
+ * table 254    proto static HH:MM:SS.mmm  CHANGED  3.3.3.3/32  via 192.168.0.2
+ * dev eth0  metric 0      table 254    proto static HH:MM:SS.mmm
+ * CHANGED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric 100    table 254 proto
+ * static HH:MM:SS.mmm  REMOVED  3.3.3.3/32  via 192.168.0.2  dev eth0  metric
+ * 100    table 254    proto static
  * @endcode
  *
  * Only /32 host routes are reported; all other prefix lengths are
@@ -162,9 +191,9 @@ static const char *timestamp(char *buf, size_t buflen)
  *                   the duration of this call.
  * @param user_data  Unused; pass NULL.
  */
-static void on_route_event(netlink_event_t          event,
-                           const netlink_route32_t *route,
-                           void                    *user_data)
+static void on_route_event(netlink_event_t event,
+                           const netlink_route32_t* route,
+                           void* user_data)
 {
     (void)user_data;
 
@@ -197,9 +226,8 @@ static void on_route_event(netlink_event_t          event,
 
     /* Protocol */
     char proto_num_buf[8];
-    const char *proto = protocol_name(route->protocol,
-                                       proto_num_buf,
-                                       sizeof(proto_num_buf));
+    const char* proto =
+        protocol_name(route->protocol, proto_num_buf, sizeof(proto_num_buf));
 
     printf("%s  %s  %s/32  %s%smetric %-5u  table %-5u  proto %s\n",
            ts_buf,
@@ -245,7 +273,7 @@ int main(void)
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sig_handler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
     /* Open netlink socket. */

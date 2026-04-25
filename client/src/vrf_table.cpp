@@ -27,13 +27,16 @@ void VrfTable::load(const srmd::v1::GetAllRoutesResponse& resp)
 
     std::println("[VrfTable] loaded {} route(s) from GetAllRoutes response "
                  "({} unique nexthop(s))",
-                 routes_.size(), byNexthop_.size());
+                 routes_.size(),
+                 byNexthop_.size());
 
     for (const auto& r : routes_)
     {
         std::println("[VrfTable]   vrf='{}' iface='{}' type={} nexthop={} "
                      "prefixes={}",
-                     r.vrf_name(), r.interface_name(), r.interface_type(),
+                     r.vrf_name(),
+                     r.interface_name(),
+                     r.interface_type(),
                      r.nexthop().empty() ? "(none)" : r.nexthop(),
                      r.prefixes_size());
     }

@@ -6,96 +6,72 @@
  * It connects to one or more running srmd instances via gRPC and exposes
  * route management commands.
  *
- * Usage:
- * @code
- *   sra [options] <command> [command-args]
+ * @verbatim
+ * Usage: sra [options] <command> [command-args]
  *
- *   Global options:
- *     -c, --config   <path>   Path to client config.json [default: config/config.json]
- *     -s, --server   <addr>   Single srmd address  (overrides config file)
- *     -w, --switches <path>   Path to switch_config.json (multi-server mode)
- *         --sot      <path>   Path to Source-of-Truth JSON file
- *         --node-ip  <ip>     Management IP of the node to look up in the SOT
- *                             (required for single-server sync mode)
- *     -t, --timeout  <sec>    RPC deadline (overrides config file)
- *         --tls               Use TLS channel (overrides config file)
- *         --ca-cert  <path>   CA certificate for TLS verification
- *         --logstream <dest>  unix_domain layer log destination: "stderr"
- *                             (default), "stdout", or an absolute file path.
- *                             Pass "" to silence all protocol-layer logging.
- *         --loglevel  <n>     Minimum log level (name or number):
- *                             DEBUG|1 (raw socket bytes + hex dumps),
- *                             INFO|2 (decoded summaries), NOTICE|3,
- *                             WARNING|4, ERR|5  [default: 1]
- *     -v, --version           Print version and exit
- *     -h, --help              Print this help and exit
+ * Global options:
+ *   -c, --config <path>   client config.json [default: config/config.json]
+ *   -s, --server <addr>   single srmd address (overrides config file)
+ *   -w, --switches <path> switch_config.json (multi-server mode)
+ *       --sot <path>      Source-of-Truth JSON file
+ *       --node-ip <ip>    mgmt IP in SOT (required for sync)
+ *   -t, --timeout <sec>   RPC deadline in seconds (overrides config)
+ *       --tls             use TLS channel (overrides config file)
+ *       --ca-cert <path>  CA certificate for TLS verification
+ *       --logstream <d>   log dest: stderr (default), stdout, or file path
+ *       --loglevel <n>    min level: DEBUG|1 INFO|2 NOTICE|3 ERR|5
+ *   -v, --version         print version and exit
+ *   -h, --help            print this help and exit
  *
- *   Commands:
- *     test                    Run a full Echo + CRUD round-trip test sequence
- *                             (single server, or all servers when --switches)
- *     sync                    Parse SOT (--sot required), then push all
- *                             prefix routes to matching servers via gRPC.
- *                             Use --switches for multi-server mode, or
- *                             --server + --node-ip for single-node mode.
- *     echo  <message>         Send an Echo RPC and print the response
- *     add   <dest> [gw] [iface] [metric]   Add a route
- *     remove <id>             Remove a route by ID
- *     get    <id>             Retrieve a route by ID
- *     list  [--active]        List all routes (--active filters to active only)
- *     watch                   Subscribe to kernel netlink events for IPv4 /32
- *                             routes and forward each ADDED/CHANGED/REMOVED
- *                             event to srmd via AddRoute / RemoveRoute.
- *                             Runs until Ctrl-C.
- *     neighbors               Dump and watch kernel neighbor (ARP/NDP) table.
- *                             No gRPC connection required.  Runs until Ctrl-C.
- *     nexthops                Dump and watch kernel nexthop objects (Linux 5.3+).
- *                             No gRPC connection required.  Runs until Ctrl-C.
- *     set-loopback <address>  Store a loopback address on the server
- *     get-loopback            Retrieve the stored loopback address
- *     get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)
- *     add-del-list [socket]   Read loopback from srmd, fetch NNI prefixes via
- *                             GetLoopbacks, then deliver to ud_server (one-shot):
- *                               1. RequestLoopback  → identify this SRA node
- *                               2. GetLoopbacks     → NNI interface + prefix list
- *                               3. ROUTE_ADD        → install prefixes in ud_server
- *                               4. ROUTE_DEL        → delete each prefix from ud_server
- *                               5. ROUTE_LIST       → read list resulting route table from ud_server
- *                             Default socket: /tmp/ud_server.sock
- *     run [socket]            Full SRA daemon mode — runs until SIGINT/SIGTERM:
- *                               1. RequestLoopback → SOT auth check via srmd
- *                               2. GetLoopbacks / GetAllRoutes via srmd
- *                               3. Build SingleRouteRequest (nni interfaces only)
- *                               4. Deliver to ud_server via Unix-domain socket
- *                               5. Monitor kernel nexthop events continuously
- *                             Default socket: /tmp/ud_server.sock
- *     grpc-proc-demo          Run async GrpcProc background thread demo
- * @endcode
+ * Commands:
+ *   test               full Echo + CRUD round-trip test sequence
+ *   sync               push SOT prefix routes to servers (--sot required)
+ *   echo <msg>         send Echo RPC and print response
+ *   add <dst> [gw] [iface] [metric]   add a route
+ *   remove <id>        remove a route by ID
+ *   get <id>           retrieve a route by ID
+ *   list [--active]    list all (or active-only) routes
+ *   watch              forward kernel /32 netlink events to srmd
+ *   neighbors          dump/watch kernel ARP/NDP neighbor table
+ *   nexthops           dump/watch kernel nexthop objects (Linux 5.3+)
+ *   set-loopback <a>   store loopback address on server
+ *   get-loopback       retrieve loopback address from server
+ *   get-loopbacks <lb> query SOT interface list for a loopback
+ *   add-del-list [s]   one-shot: RequestLoopback, GetLoopbacks,
+ *                      ROUTE_ADD, ROUTE_DEL, ROUTE_LIST via ud_server
+ *   run [sock]         daemon: sync SOT routes, monitor nexthop events
+ *   grpc-proc-demo     run async GrpcProc background thread demo
+ * @endverbatim
  *
  * @version 1.0
  */
 
 #include "build_info.hpp"
 #include "client/grpc_proc.hpp"
-#include "client/route_client.hpp"
-#include "client/sot_config.hpp"
-#include "client/switch_config.hpp"
-#include "client/routing.hpp"
-#include "client/udp_table_server.hpp"
-#include "client/vrf_table.hpp"
-#include "client/sra_udp_client.hpp"
-#include "common/config.hpp"
-#include "server/netlink.h"
 #include "client/netlink_neigh.h"
 #include "client/netlink_nexthop.h"
-
+#include "client/route_client.hpp"
+#include "client/routing.hpp"
+#include "client/sot_config.hpp"
+#include "client/sra_udp_client.hpp"
+#include "client/switch_config.hpp"
+#include "client/udp_table_server.hpp"
+#include "client/vrf_table.hpp"
+#include "common/config.hpp"
 #include "lib/cmd_proto.hpp"
 #include "lib/logger.hpp"
+#include "server/netlink.h"
 
 #include <arpa/inet.h>
 #include <linux/neighbour.h>
+#include <linux/rtnetlink.h>
 #include <netinet/ip_icmp.h>
 #include <poll.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sys/socket.h>
+#include <unistd.h>
+
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -103,16 +79,12 @@
 #include <cstring>
 #include <format>
 #include <iostream>
-#include <linux/rtnetlink.h>
 #include <map>
 #include <mutex>
 #include <print>
-#include <shared_mutex>
 #include <queue>
-#include <pthread.h>
-#include <signal.h>
+#include <shared_mutex>
 #include <sstream>
-#include <unistd.h>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -184,7 +156,10 @@ static void printAllRoutes(const srmd::v1::GetAllRoutesResponse& resp)
         for (const auto& p : r.prefixes())
         {
             std::println("       prefix={} weight={} role={} desc={}",
-                         p.prefix(), p.weight(), p.role(), p.description());
+                         p.prefix(),
+                         p.weight(),
+                         p.role(),
+                         p.description());
         }
     }
 }
@@ -646,7 +621,8 @@ static int cmdMultiTest(const std::vector<sra::SwitchEntry>& switches,
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Maps a Linux rtnetlink protocol byte to the closest srmd RouteProtocol.
+ * @brief Maps a Linux rtnetlink protocol byte to the closest srmd
+ * RouteProtocol.
  *
  * FRR zebra redistributes routes with protocol codes that predate the srmd
  * enumeration (RTPROT_ZEBRA, RTPROT_OSPF, etc.).  This helper maps them to
@@ -659,12 +635,18 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
 {
     switch (rtProto)
     {
-    case RTPROT_OSPF:   return srmd::v1::ROUTE_PROTOCOL_OSPF;
-    case RTPROT_BGP:    return srmd::v1::ROUTE_PROTOCOL_BGP;
-    case RTPROT_RIP:    return srmd::v1::ROUTE_PROTOCOL_RIP;
-    case RTPROT_KERNEL: return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
-    case RTPROT_BOOT:   return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
-    default:            return srmd::v1::ROUTE_PROTOCOL_STATIC;
+    case RTPROT_OSPF:
+        return srmd::v1::ROUTE_PROTOCOL_OSPF;
+    case RTPROT_BGP:
+        return srmd::v1::ROUTE_PROTOCOL_BGP;
+    case RTPROT_RIP:
+        return srmd::v1::ROUTE_PROTOCOL_RIP;
+    case RTPROT_KERNEL:
+        return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
+    case RTPROT_BOOT:
+        return srmd::v1::ROUTE_PROTOCOL_CONNECTED;
+    default:
+        return srmd::v1::ROUTE_PROTOCOL_STATIC;
     }
 }
 
@@ -678,23 +660,23 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
 struct WatchRoute
 {
     /* ── RTA_* attributes ──────────────────────────────────────────────── */
-    std::string dest;        ///< Destination prefix (e.g. "10.0.0.1/32").
-    std::string gateway;     ///< Next-hop gateway (empty if none / 0.0.0.0).
-    std::string iface;       ///< Outgoing interface name (ifname).
-    uint32_t    ifindex{0};  ///< RTA_OIF: outgoing interface index.
-    uint32_t    metric{0};   ///< RTA_PRIORITY: route metric / preference.
-    uint32_t    table{0};    ///< RTA_TABLE / rtm_table: routing table ID.
+    std::string dest;    ///< Destination prefix (e.g. "10.0.0.1/32").
+    std::string gateway; ///< Next-hop gateway (empty if none / 0.0.0.0).
+    std::string iface;   ///< Outgoing interface name (ifname).
+    uint32_t ifindex{0}; ///< RTA_OIF: outgoing interface index.
+    uint32_t metric{0};  ///< RTA_PRIORITY: route metric / preference.
+    uint32_t table{0};   ///< RTA_TABLE / rtm_table: routing table ID.
     /* ── From struct rtmsg ─────────────────────────────────────────────── */
-    uint8_t     protocol{0}; ///< rtm_protocol: RTPROT_OSPF, RTPROT_ZEBRA, …
+    uint8_t protocol{0}; ///< rtm_protocol: RTPROT_OSPF, RTPROT_ZEBRA, …
     /* ── gRPC tracking ─────────────────────────────────────────────────── */
-    std::string srmdId;      ///< Server-assigned ID (empty when push failed).
+    std::string srmdId; ///< Server-assigned ID (empty when push failed).
     /* ── Remaining struct rtmsg fields ──────────────────────────────────── */
-    uint8_t     family{0};   ///< rtm_family: AF_INET = 2.
-    uint8_t     dst_len{0};  ///< rtm_dst_len: prefix length (32 for host routes).
-    uint8_t     tos{0};      ///< rtm_tos: type-of-service filter value.
-    uint8_t     scope{0};    ///< rtm_scope: RT_SCOPE_* (universe/link/host/…).
-    uint8_t     type{0};     ///< rtm_type: RTN_UNICAST, RTN_BLACKHOLE, …
-    uint32_t    flags{0};    ///< rtm_flags: RTM_F_* bitmask.
+    uint8_t family{0};  ///< rtm_family: AF_INET = 2.
+    uint8_t dst_len{0}; ///< rtm_dst_len: prefix length (32 for host routes).
+    uint8_t tos{0};     ///< rtm_tos: type-of-service filter value.
+    uint8_t scope{0};   ///< rtm_scope: RT_SCOPE_* (universe/link/host/…).
+    uint8_t type{0};    ///< rtm_type: RTN_UNICAST, RTN_BLACKHOLE, …
+    uint32_t flags{0};  ///< rtm_flags: RTM_F_* bitmask.
 };
 
 /**
@@ -707,14 +689,22 @@ static std::string protoLabel(uint8_t proto)
 {
     switch (proto)
     {
-    case RTPROT_KERNEL:  return "kernel";
-    case RTPROT_BOOT:    return "boot";
-    case RTPROT_STATIC:  return "static";
-    case RTPROT_OSPF:    return "ospf";
-    case RTPROT_BGP:     return "bgp";
-    case RTPROT_RIP:     return "rip";
-    case RTPROT_ZEBRA:   return "zebra";
-    default:             return std::to_string(static_cast<int>(proto));
+    case RTPROT_KERNEL:
+        return "kernel";
+    case RTPROT_BOOT:
+        return "boot";
+    case RTPROT_STATIC:
+        return "static";
+    case RTPROT_OSPF:
+        return "ospf";
+    case RTPROT_BGP:
+        return "bgp";
+    case RTPROT_RIP:
+        return "rip";
+    case RTPROT_ZEBRA:
+        return "zebra";
+    default:
+        return std::to_string(static_cast<int>(proto));
     }
 }
 
@@ -723,7 +713,8 @@ static std::string familyLabel(uint8_t family);
 static std::string scopeLabel(uint8_t scope);
 
 /**
- * @brief Pretty-prints the dynamic /32 OSPF route table using box-drawing lines.
+ * @brief Pretty-prints the dynamic /32 OSPF route table using box-drawing
+ * lines.
  *
  * Columns mirror every field of @c netlink_route32_t so the operator can
  * inspect the complete netlink payload at a glance.  Column widths are fixed
@@ -732,7 +723,8 @@ static std::string scopeLabel(uint8_t scope);
  * separate rows.
  *
  * Columns displayed:
- *  Destination · Gateway · Interface · IfIdx · Metric · Table · Protocol · Server ID
+ *  Destination · Gateway · Interface · IfIdx · Metric · Table · Protocol ·
+ * Server ID
  *
  * @param routes  Ordered map of compound-key → WatchRoute entries.
  */
@@ -747,27 +739,27 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
     // Table       : up to 5 digits       →  5 (right-aligned)
     // Protocol    : "static" = 6 chars   →  8 (left-aligned)
     // Server ID   : "abcdefgh…" = 9 ch   →  9 (left-aligned)
-    constexpr int cD = 20, cG = 17, cI = 15, cX = 5, cM = 7, cT = 5,
-                  cP = 8,  cS = 9;
+    constexpr int cD = 20, cG = 17, cI = 15, cX = 5, cM = 7, cT = 5, cP = 8,
+                  cS = 9;
 
     // ── UTF-8 box-drawing helpers ─────────────────────────────────────────
     auto hbar = [](int n) {
         std::string s;
         s.reserve(static_cast<std::size_t>(n) * 3); // "─" = 3 UTF-8 bytes
-        for (int i = 0; i < n; ++i) s += "─";
+        for (int i = 0; i < n; ++i)
+            s += "─";
         return s;
     };
 
     // Build top / mid / bottom border rows with a cell for every column.
     auto mkBorder = [&](const char* l, const char* j, const char* r) {
-        return std::string(l)
-             + hbar(cD+2) + j + hbar(cG+2) + j + hbar(cI+2) + j
-             + hbar(cX+2) + j + hbar(cM+2) + j + hbar(cT+2) + j
-             + hbar(cP+2) + j + hbar(cS+2) + r;
+        return std::string(l) + hbar(cD + 2) + j + hbar(cG + 2) + j +
+               hbar(cI + 2) + j + hbar(cX + 2) + j + hbar(cM + 2) + j +
+               hbar(cT + 2) + j + hbar(cP + 2) + j + hbar(cS + 2) + r;
     };
 
-    const std::string top    = mkBorder("┌", "┬", "┐");
-    const std::string mid    = mkBorder("├", "┼", "┤");
+    const std::string top = mkBorder("┌", "┬", "┐");
+    const std::string mid = mkBorder("├", "┼", "┤");
     const std::string bottom = mkBorder("└", "┴", "┘");
 
     // ── Helper: one table row ─────────────────────────────────────────────
@@ -778,24 +770,38 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
                         const std::string& met,
                         const std::string& tbl,
                         const std::string& prot,
-                        const std::string& sid)
-    {
-        std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:<{}} │ {:<{}} │",
-                     dst,  cD,
-                     gw,   cG,
-                     ifc,  cI,
-                     ifx,  cX,
-                     met,  cM,
-                     tbl,  cT,
-                     prot, cP,
-                     sid,  cS);
+                        const std::string& sid) {
+        std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:>{}} │ {:>{}} │ "
+                     "{:<{}} │ {:<{}} │",
+                     dst,
+                     cD,
+                     gw,
+                     cG,
+                     ifc,
+                     cI,
+                     ifx,
+                     cX,
+                     met,
+                     cM,
+                     tbl,
+                     cT,
+                     prot,
+                     cP,
+                     sid,
+                     cS);
     };
 
     // ── Title ─────────────────────────────────────────────────────────────
     std::println("\n OSPF /32 Route Table  ({} route(s))", routes.size());
     std::println("{}", top);
-    printRow("Destination", "Gateway", "Interface", "IfIdx",
-             "Metric",      "Table",   "Protocol",  "Server ID");
+    printRow("Destination",
+             "Gateway",
+             "Interface",
+             "IfIdx",
+             "Metric",
+             "Table",
+             "Protocol",
+             "Server ID");
 
     if (routes.empty())
     {
@@ -807,19 +813,15 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 
     for (const auto& [key, r] : routes)
     {
-        const std::string gw   = r.gateway.empty() ? "(none)" : r.gateway;
-        const std::string ifc  = r.iface.empty()   ? "(none)" : r.iface;
-        const std::string ifx  = r.ifindex == 0
-                                    ? "-"
-                                    : std::to_string(r.ifindex);
-        const std::string met  = std::to_string(r.metric);
-        const std::string tbl  = r.table == 0
-                                    ? "-"
-                                    : std::to_string(r.table);
+        const std::string gw = r.gateway.empty() ? "(none)" : r.gateway;
+        const std::string ifc = r.iface.empty() ? "(none)" : r.iface;
+        const std::string ifx =
+            r.ifindex == 0 ? "-" : std::to_string(r.ifindex);
+        const std::string met = std::to_string(r.metric);
+        const std::string tbl = r.table == 0 ? "-" : std::to_string(r.table);
         const std::string prot = protoLabel(r.protocol);
-        const std::string sid  = r.srmdId.empty()
-                                    ? "(pending)"
-                                    : r.srmdId.substr(0, 8) + "…";
+        const std::string sid =
+            r.srmdId.empty() ? "(pending)" : r.srmdId.substr(0, 8) + "…";
 
         printRow(r.dest, gw, ifc, ifx, met, tbl, prot, sid);
     }
@@ -833,11 +835,12 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
  * Format (one entry per line after the header):
  * @code
  *   ROUTES <count>
- *   dest=<prefix> gw=<gw> iface=<if> ifidx=<n> metric=<m> table=<t> proto=<p> id=<srmd-id>
- *   …
+ *   dest=<prefix> gw=<gw> iface=<if> ifidx=<n> metric=<m> table=<t> proto=<p>
+ * id=<srmd-id> …
  * @endcode
  */
-static std::string serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
+static std::string
+serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
 {
     std::ostringstream os;
     os << "ROUTES " << routes.size() << '\n';
@@ -849,7 +852,7 @@ static std::string serializeRouteTable(const std::map<std::string, WatchRoute>& 
             " id={}\n",
             r.dest,
             r.gateway.empty() ? "(none)" : r.gateway,
-            r.iface.empty()   ? "(none)" : r.iface,
+            r.iface.empty() ? "(none)" : r.iface,
             r.ifindex,
             r.metric,
             r.table,
@@ -866,17 +869,19 @@ static std::string serializeRouteTable(const std::map<std::string, WatchRoute>& 
 }
 
 /**
- * @brief Context forwarded via the @c user_data pointer to the netlink callback.
+ * @brief Context forwarded via the @c user_data pointer to the netlink
+ * callback.
  *
  * Carries the live gRPC client and the dynamic route table that tracks every
  * /32 OSPF route event together with its srmd server ID.
  */
 struct WatchCtx
 {
-    sra::RouteClient*                 client;
-    std::map<std::string, WatchRoute> routes;     ///< "dest|gw|iface" → WatchRoute
-    std::string                       loopback;   ///< Node's own loopback IP for GetLoopbacks
-    sra::UdpTableServer*              udpServer;  ///< UDP publisher (port 9003); may be nullptr
+    sra::RouteClient* client;
+    std::map<std::string, WatchRoute> routes; ///< "dest|gw|iface" → WatchRoute
+    std::string loopback; ///< Node's own loopback IP for GetLoopbacks
+    sra::UdpTableServer*
+        udpServer; ///< UDP publisher (port 9003); may be nullptr
 };
 
 /**
@@ -887,7 +892,8 @@ struct WatchCtx
  *
  * - NETLINK_ROUTE_ADDED   → AddRoute RPC; stores the returned server ID.
  * - NETLINK_ROUTE_CHANGED → RemoveRoute (if we hold an ID for that dest) then
- *                           AddRoute with the new attributes; updates stored ID.
+ *                           AddRoute with the new attributes; updates stored
+ * ID.
  * - NETLINK_ROUTE_REMOVED → RemoveRoute for the stored ID (if any); erases
  *                           the entry from the local map.
  *
@@ -898,20 +904,20 @@ struct WatchCtx
  * @param route      Parsed /32 route descriptor; valid for this call only.
  * @param user_data  Pointer to a @c WatchCtx.
  */
-static void nlWatchCb(netlink_event_t          event,
+static void nlWatchCb(netlink_event_t event,
                       const netlink_route32_t* route,
-                      void*                    user_data)
+                      void* user_data)
 {
     auto* ctx = static_cast<WatchCtx*>(user_data);
 
     /* UTC timestamp */
     const auto now = std::chrono::system_clock::now();
-    const auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
-                         now.time_since_epoch())
-                         .count();
+    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch())
+                        .count();
     const std::time_t sec = static_cast<std::time_t>(us / 1'000'000);
-    const int         ms  = static_cast<int>((us % 1'000'000) / 1000);
-    std::tm           tm_utc{};
+    const int ms = static_cast<int>((us % 1'000'000) / 1000);
+    std::tm tm_utc{};
     gmtime_r(&sec, &tm_utc);
     const std::string ts = std::format("{:02d}:{:02d}:{:02d}.{:03d}",
                                        tm_utc.tm_hour,
@@ -922,8 +928,9 @@ static void nlWatchCb(netlink_event_t          event,
     /* Destination string "x.x.x.x/<len>" */
     char dst_buf[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &route->dst, dst_buf, sizeof(dst_buf));
-    const std::string dest = std::string(dst_buf) + "/"
-                           + std::to_string(static_cast<unsigned>(route->dst_len));
+    const std::string dest =
+        std::string(dst_buf) + "/" +
+        std::to_string(static_cast<unsigned>(route->dst_len));
 
     /* Gateway string (empty when nexthop is 0.0.0.0) */
     char gw_buf[INET_ADDRSTRLEN] = {};
@@ -931,7 +938,7 @@ static void nlWatchCb(netlink_event_t          event,
     {
         inet_ntop(AF_INET, &route->gateway, gw_buf, sizeof(gw_buf));
     }
-    const std::string gw    = gw_buf;
+    const std::string gw = gw_buf;
     const std::string iface = route->ifname;
 
     const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
@@ -943,25 +950,40 @@ static void nlWatchCb(netlink_event_t          event,
          * same destination (ECMP) to coexist as separate table rows. */
         const std::string key = dest + "|" + gw + "|" + iface;
 
-        /* ---- ADDED ---------------------------------------------------------- */
+        /* ---- ADDED ----------------------------------------------------------
+         */
         if (event == NETLINK_ROUTE_ADDED)
         {
-            auto result = ctx->client->addRoute(
-                dest, gw, iface, route->metric,
-                srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+            auto result = ctx->client->addRoute(dest,
+                                                gw,
+                                                iface,
+                                                route->metric,
+                                                srmd::v1::ADDRESS_FAMILY_IPV4,
+                                                proto);
 
             if (result)
             {
-                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                ctx->routes[key] = WatchRoute{dest,
+                                              gw,
+                                              iface,
                                               route->ifindex,
-                                              route->metric, route->table,
-                                              route->protocol, result->id(),
-                                              route->family, route->dst_len,
-                                              route->tos, route->scope,
-                                              route->type, route->flags};
+                                              route->metric,
+                                              route->table,
+                                              route->protocol,
+                                              result->id(),
+                                              route->family,
+                                              route->dst_len,
+                                              route->tos,
+                                              route->scope,
+                                              route->type,
+                                              route->flags};
                 std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
-                            ts, dest, gw, iface, route->metric,
-                            result->id().substr(0, 8) + "…");
+                             ts,
+                             dest,
+                             gw,
+                             iface,
+                             route->metric,
+                             result->id().substr(0, 8) + "…");
 
                 /* If we know our own loopback, ask the server for the full
                  * interface+prefix list and print the entry matching this
@@ -981,54 +1003,72 @@ static void nlWatchCb(netlink_event_t          event,
                             found = true;
                             std::println("{}   SOT nexthop {} → iface \"{}\" "
                                          "(type={} local={} weight={} desc={})",
-                                         ts, gw,
-                                         intf.name(), intf.type(),
-                                         intf.local_address(), intf.weight(),
+                                         ts,
+                                         gw,
+                                         intf.name(),
+                                         intf.type(),
+                                         intf.local_address(),
+                                         intf.weight(),
                                          intf.description());
                             for (const auto& pfx : intf.prefixes())
                             {
                                 std::println("{}     prefix {} weight={} "
                                              "role={} desc={}",
                                              ts,
-                                             pfx.prefix(), pfx.weight(),
-                                             pfx.role(), pfx.description());
+                                             pfx.prefix(),
+                                             pfx.weight(),
+                                             pfx.role(),
+                                             pfx.description());
                             }
                         }
                         if (!found)
                         {
                             std::println("{} [ADDED]   SOT: no interface with "
                                          "nexthop {} found for loopback {}",
-                                         ts, gw, ctx->loopback);
+                                         ts,
+                                         gw,
+                                         ctx->loopback);
                         }
                     }
                     else
                     {
                         std::println("{} [ADDED]   GetLoopbacks FAILED: {}",
-                                    ts, lbResult.error());
+                                     ts,
+                                     lbResult.error());
                     }
                 }
             }
             else
             {
                 /* Track with empty srmdId so REMOVED events still clean up. */
-                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                ctx->routes[key] = WatchRoute{dest,
+                                              gw,
+                                              iface,
                                               route->ifindex,
-                                              route->metric, route->table,
-                                              route->protocol, {},
-                                              route->family, route->dst_len,
-                                              route->tos, route->scope,
-                                              route->type, route->flags};
+                                              route->metric,
+                                              route->table,
+                                              route->protocol,
+                                              {},
+                                              route->family,
+                                              route->dst_len,
+                                              route->tos,
+                                              route->scope,
+                                              route->type,
+                                              route->flags};
                 std::println("{} [ADDED]   {} → gRPC FAILED: {}",
-                            ts, dest, result.error());
+                             ts,
+                             dest,
+                             result.error());
             }
         }
-        /* ---- CHANGED -------------------------------------------------------- */
+        /* ---- CHANGED --------------------------------------------------------
+         */
         else if (event == NETLINK_ROUTE_CHANGED)
         {
             /* Remove ALL existing entries for this destination (the kernel
              * replaces the route, so old nexthops are superseded regardless
              * of gateway/iface).  Each entry is removed from srmd first. */
-            for (auto it = ctx->routes.begin(); it != ctx->routes.end(); )
+            for (auto it = ctx->routes.begin(); it != ctx->routes.end();)
             {
                 if (it->second.dest == dest)
                 {
@@ -1040,7 +1080,9 @@ static void nlWatchCb(netlink_event_t          event,
                         {
                             std::println(
                                 "{} [CHANGED] {} stale-remove failed: {}",
-                                ts, dest, rmResult.error());
+                                ts,
+                                dest,
+                                rmResult.error());
                         }
                     }
                     it = ctx->routes.erase(it);
@@ -1051,37 +1093,61 @@ static void nlWatchCb(netlink_event_t          event,
                 }
             }
 
-            auto result = ctx->client->addRoute(
-                dest, gw, iface, route->metric,
-                srmd::v1::ADDRESS_FAMILY_IPV4, proto);
+            auto result = ctx->client->addRoute(dest,
+                                                gw,
+                                                iface,
+                                                route->metric,
+                                                srmd::v1::ADDRESS_FAMILY_IPV4,
+                                                proto);
 
             if (result)
             {
-                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                ctx->routes[key] = WatchRoute{dest,
+                                              gw,
+                                              iface,
                                               route->ifindex,
-                                              route->metric, route->table,
-                                              route->protocol, result->id(),
-                                              route->family, route->dst_len,
-                                              route->tos, route->scope,
-                                              route->type, route->flags};
+                                              route->metric,
+                                              route->table,
+                                              route->protocol,
+                                              result->id(),
+                                              route->family,
+                                              route->dst_len,
+                                              route->tos,
+                                              route->scope,
+                                              route->type,
+                                              route->flags};
                 std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
-                            ts, dest, gw, iface, route->metric,
-                            result->id().substr(0, 8) + "…");
+                             ts,
+                             dest,
+                             gw,
+                             iface,
+                             route->metric,
+                             result->id().substr(0, 8) + "…");
             }
             else
             {
-                ctx->routes[key] = WatchRoute{dest, gw, iface,
+                ctx->routes[key] = WatchRoute{dest,
+                                              gw,
+                                              iface,
                                               route->ifindex,
-                                              route->metric, route->table,
-                                              route->protocol, {},
-                                              route->family, route->dst_len,
-                                              route->tos, route->scope,
-                                              route->type, route->flags};
+                                              route->metric,
+                                              route->table,
+                                              route->protocol,
+                                              {},
+                                              route->family,
+                                              route->dst_len,
+                                              route->tos,
+                                              route->scope,
+                                              route->type,
+                                              route->flags};
                 std::println("{} [CHANGED] {} → gRPC FAILED: {}",
-                            ts, dest, result.error());
+                             ts,
+                             dest,
+                             result.error());
             }
         }
-        /* ---- REMOVED -------------------------------------------------------- */
+        /* ---- REMOVED --------------------------------------------------------
+         */
         else
         {
             auto it = ctx->routes.find(key);
@@ -1089,7 +1155,10 @@ static void nlWatchCb(netlink_event_t          event,
             {
                 std::println("{} [REMOVED] {} via {} dev {} (not tracked – "
                              "no gRPC call)",
-                            ts, dest, gw, iface);
+                             ts,
+                             dest,
+                             gw,
+                             iface);
                 std::cout.flush();
                 return;
             }
@@ -1101,7 +1170,10 @@ static void nlWatchCb(netlink_event_t          event,
             {
                 std::println("{} [REMOVED] {} via {} dev {} "
                              "(no server ID – no gRPC call)",
-                            ts, dest, gw, iface);
+                             ts,
+                             dest,
+                             gw,
+                             iface);
             }
             else
             {
@@ -1109,13 +1181,21 @@ static void nlWatchCb(netlink_event_t          event,
                 if (result)
                 {
                     std::println("{} [REMOVED] {} via {} dev {} id={}",
-                                ts, dest, gw, iface, id.substr(0, 8) + "…");
+                                 ts,
+                                 dest,
+                                 gw,
+                                 iface,
+                                 id.substr(0, 8) + "…");
                 }
                 else
                 {
                     std::println("{} [REMOVED] {} via {} dev {} → "
                                  "gRPC FAILED: {}",
-                                ts, dest, gw, iface, result.error());
+                                 ts,
+                                 dest,
+                                 gw,
+                                 iface,
+                                 result.error());
                 }
             }
         }
@@ -1133,8 +1213,8 @@ static void nlWatchCb(netlink_event_t          event,
  * Initialised by main() before any command runs; closed by signal handlers
  * or on normal exit to unblock the background threads.
  * ------------------------------------------------------------------------- */
-static volatile int g_startup_route_fd   = -1;
-static volatile int g_startup_neigh_fd   = -1;
+static volatile int g_startup_route_fd = -1;
+static volatile int g_startup_neigh_fd = -1;
 static volatile int g_startup_nexthop_fd = -1;
 
 /* File-scope fd used by the signal handler to unblock netlink_run(). */
@@ -1148,8 +1228,8 @@ static volatile sig_atomic_t g_run_stop = 0;
  * Used by signal handlers to pthread_kill() sleeping threads so their
  * blocking recv() returns EINTR, after which the fd is already closed
  * (EBADF on retry) and netlink_*_run() exits. */
-static volatile pthread_t g_startup_route_tid   = 0;
-static volatile pthread_t g_startup_neigh_tid   = 0;
+static volatile pthread_t g_startup_route_tid = 0;
+static volatile pthread_t g_startup_neigh_tid = 0;
 static volatile pthread_t g_startup_nexthop_tid = 0;
 
 /* One-shot flag: prevents cascading pthread_kill loops when the signal
@@ -1169,10 +1249,10 @@ static void interruptBackgroundThreads() noexcept
         return;
     g_bg_threads_interrupted = 1;
     const pthread_t self = ::pthread_self();
-    if (g_startup_route_tid   && g_startup_route_tid   != self)
-        ::pthread_kill(static_cast<pthread_t>(g_startup_route_tid),   SIGINT);
-    if (g_startup_neigh_tid   && g_startup_neigh_tid   != self)
-        ::pthread_kill(static_cast<pthread_t>(g_startup_neigh_tid),   SIGINT);
+    if (g_startup_route_tid && g_startup_route_tid != self)
+        ::pthread_kill(static_cast<pthread_t>(g_startup_route_tid), SIGINT);
+    if (g_startup_neigh_tid && g_startup_neigh_tid != self)
+        ::pthread_kill(static_cast<pthread_t>(g_startup_neigh_tid), SIGINT);
     if (g_startup_nexthop_tid && g_startup_nexthop_tid != self)
         ::pthread_kill(static_cast<pthread_t>(g_startup_nexthop_tid), SIGINT);
 }
@@ -1284,24 +1364,35 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
             int found = 0;
             for (const auto& kr : *routesResult)
             {
-                if (kr.prefixLen != 32
-                    || kr.protocol != RTPROT_OSPF
-                    || kr.type     != RTN_UNICAST)
+                if (kr.prefixLen != 32 || kr.protocol != RTPROT_OSPF ||
+                    kr.type != RTN_UNICAST)
                 {
                     continue;
                 }
 
-                /* Push to srmd so it is reflected in the server's route table. */
-                auto result = client.addRoute(
-                    kr.destination, kr.gateway, kr.interfaceName, kr.metric,
-                    srmd::v1::ADDRESS_FAMILY_IPV4,
-                    srmd::v1::ROUTE_PROTOCOL_OSPF);
+                /* Push to srmd so it is reflected in the server's route table.
+                 */
+                auto result = client.addRoute(kr.destination,
+                                              kr.gateway,
+                                              kr.interfaceName,
+                                              kr.metric,
+                                              srmd::v1::ADDRESS_FAMILY_IPV4,
+                                              srmd::v1::ROUTE_PROTOCOL_OSPF);
 
-                WatchRoute wr{kr.destination, kr.gateway,
-                              kr.interfaceName, kr.interfaceIndex,
-                              kr.metric, kr.table, kr.protocol, {},
-                              static_cast<uint8_t>(kr.family), kr.prefixLen,
-                              0u, kr.scope, kr.type, 0u};
+                WatchRoute wr{kr.destination,
+                              kr.gateway,
+                              kr.interfaceName,
+                              kr.interfaceIndex,
+                              kr.metric,
+                              kr.table,
+                              kr.protocol,
+                              {},
+                              static_cast<uint8_t>(kr.family),
+                              kr.prefixLen,
+                              0u,
+                              kr.scope,
+                              kr.type,
+                              0u};
                 if (result)
                 {
                     wr.srmdId = result->id();
@@ -1310,14 +1401,16 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                 {
                     std::println(std::cerr,
                                  "[Startup]   AddRoute {} failed: {}",
-                                 kr.destination, result.error());
+                                 kr.destination,
+                                 result.error());
                 }
                 const std::string key =
                     kr.destination + "|" + kr.gateway + "|" + kr.interfaceName;
                 ctx.routes[key] = wr;
                 ++found;
             }
-            std::println("[Startup] Found {} /32 OSPF route(s) in kernel.", found);
+            std::println("[Startup] Found {} /32 OSPF route(s) in kernel.",
+                         found);
         }
         else
         {
@@ -1348,7 +1441,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     {
         std::println("[Startup] No loopback from server ({}); "
                      "using config loopback: '{}'",
-                     lbResult.error(), ctx.loopback);
+                     lbResult.error(),
+                     ctx.loopback);
     }
 
     // ── Step 3b: GetLoopbacks then GetAllRoutes ───────────────────────────
@@ -1359,7 +1453,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
         if (glResult)
         {
             std::println("[Startup] GetLoopbacks: {} — {} interface(s)",
-                         glResult->message(), glResult->interfaces_size());
+                         glResult->message(),
+                         glResult->interfaces_size());
         }
         else
         {
@@ -1380,16 +1475,18 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
 
     // ── Step 4: Start monitoring ──────────────────────────────────────────
     /* Install signal handlers. */
-    struct sigaction sa{};
+    struct sigaction sa
+    {};
     sa.sa_handler = watchSigHandler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
     int fd = netlink_init();
     if (fd < 0)
     {
-        std::println(std::cerr, "[Monitor] Error: netlink_init failed: {}",
+        std::println(std::cerr,
+                     "[Monitor] Error: netlink_init failed: {}",
                      std::strerror(errno));
         return EXIT_FAILURE;
     }
@@ -1400,7 +1497,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     if (!ctx.loopback.empty())
     {
         std::println("[Monitor] Loopback {} → GetLoopbacks on each OSPF ADDED"
-                     " event", ctx.loopback);
+                     " event",
+                     ctx.loopback);
     }
     std::println("[Monitor] (Ctrl-C to stop)\n");
     std::cout.flush();
@@ -1424,10 +1522,14 @@ static std::string familyLabel(uint8_t family)
 {
     switch (family)
     {
-    case AF_INET:   return "inet";
-    case AF_INET6:  return "inet6";
-    case AF_BRIDGE: return "bridge";
-    default:        return std::to_string(static_cast<int>(family));
+    case AF_INET:
+        return "inet";
+    case AF_INET6:
+        return "inet6";
+    case AF_BRIDGE:
+        return "bridge";
+    default:
+        return std::to_string(static_cast<int>(family));
     }
 }
 
@@ -1438,16 +1540,26 @@ static std::string nudStateLabel(uint16_t state)
 {
     switch (state)
     {
-    case NUD_INCOMPLETE: return "incomplete";
-    case NUD_REACHABLE:  return "reachable";
-    case NUD_STALE:      return "stale";
-    case NUD_DELAY:      return "delay";
-    case NUD_PROBE:      return "probe";
-    case NUD_FAILED:     return "failed";
-    case NUD_NOARP:      return "noarp";
-    case NUD_PERMANENT:  return "permanent";
-    case NUD_NONE:       return "none";
-    default:             return std::format("0x{:02x}", state);
+    case NUD_INCOMPLETE:
+        return "incomplete";
+    case NUD_REACHABLE:
+        return "reachable";
+    case NUD_STALE:
+        return "stale";
+    case NUD_DELAY:
+        return "delay";
+    case NUD_PROBE:
+        return "probe";
+    case NUD_FAILED:
+        return "failed";
+    case NUD_NOARP:
+        return "noarp";
+    case NUD_PERMANENT:
+        return "permanent";
+    case NUD_NONE:
+        return "none";
+    default:
+        return std::format("0x{:02x}", state);
     }
 }
 
@@ -1462,18 +1574,26 @@ static std::string ntfFlagsLabel(uint8_t flags)
     if (flags == 0)
         return "-";
     std::string s;
-    if (flags & NTF_USE)         s += 'U';
-    if (flags & NTF_SELF)        s += 'S';
-    if (flags & NTF_MASTER)      s += 'M';
-    if (flags & NTF_PROXY)       s += 'P';
-    if (flags & NTF_EXT_LEARNED) s += 'X';
+    if (flags & NTF_USE)
+        s += 'U';
+    if (flags & NTF_SELF)
+        s += 'S';
+    if (flags & NTF_MASTER)
+        s += 'M';
+    if (flags & NTF_PROXY)
+        s += 'P';
+    if (flags & NTF_EXT_LEARNED)
+        s += 'X';
 #ifdef NTF_OFFLOADED
-    if (flags & NTF_OFFLOADED)   s += 'O';
+    if (flags & NTF_OFFLOADED)
+        s += 'O';
 #endif
 #ifdef NTF_STICKY
-    if (flags & NTF_STICKY)      s += 'K';
+    if (flags & NTF_STICKY)
+        s += 'K';
 #endif
-    if (flags & NTF_ROUTER)      s += 'R';
+    if (flags & NTF_ROUTER)
+        s += 'R';
     return s.empty() ? std::format("0x{:02x}", flags) : s;
 }
 
@@ -1482,7 +1602,7 @@ static std::string ntfFlagsLabel(uint8_t flags)
  *
  * Returns "(none)" when lladdr_len == 0.
  */
-static std::string formatMac(const uint8_t *addr, uint8_t len)
+static std::string formatMac(const uint8_t* addr, uint8_t len)
 {
     if (len == 0)
         return "(none)";
@@ -1506,32 +1626,32 @@ static std::string formatMac(const uint8_t *addr, uint8_t len)
 struct NeighEntry
 {
     /* ── From struct ndmsg ─────────────────────────────────────────────── */
-    uint8_t  family{0};          ///< ndm_family: AF_INET/AF_INET6/AF_BRIDGE
-    int      ifindex{0};         ///< ndm_ifindex: outgoing interface index
-    std::string ifname;          ///< Resolved interface name
-    uint16_t state{0};           ///< ndm_state: NUD_* bitmask
-    uint8_t  flags{0};           ///< ndm_flags: NTF_* bitmask
-    uint8_t  type{0};            ///< ndm_type: RTN_*
+    uint8_t family{0};  ///< ndm_family: AF_INET/AF_INET6/AF_BRIDGE
+    int ifindex{0};     ///< ndm_ifindex: outgoing interface index
+    std::string ifname; ///< Resolved interface name
+    uint16_t state{0};  ///< ndm_state: NUD_* bitmask
+    uint8_t flags{0};   ///< ndm_flags: NTF_* bitmask
+    uint8_t type{0};    ///< ndm_type: RTN_*
     /* ── NDA_DST ───────────────────────────────────────────────────────── */
-    std::string dst;             ///< Destination IP string
+    std::string dst; ///< Destination IP string
     /* ── NDA_LLADDR ────────────────────────────────────────────────────── */
-    std::string mac;             ///< Formatted link-layer address (xx:xx:…)
+    std::string mac; ///< Formatted link-layer address (xx:xx:…)
     /* ── NDA_CACHEINFO ─────────────────────────────────────────────────── */
-    uint32_t confirmed_ms{0};    ///< ndm_confirmed: ms since last confirmation
-    uint32_t used_ms{0};         ///< ndm_used: ms since last use
-    uint32_t updated_ms{0};      ///< ndm_updated: ms since last update
-    uint32_t refcnt{0};          ///< ndm_refcnt: reference count
+    uint32_t confirmed_ms{0}; ///< ndm_confirmed: ms since last confirmation
+    uint32_t used_ms{0};      ///< ndm_used: ms since last use
+    uint32_t updated_ms{0};   ///< ndm_updated: ms since last update
+    uint32_t refcnt{0};       ///< ndm_refcnt: reference count
     /* ── NDA_PROBES ────────────────────────────────────────────────────── */
-    uint32_t probes{0};          ///< ARP/NDP probe count
+    uint32_t probes{0}; ///< ARP/NDP probe count
     /* ── NDA_VLAN ──────────────────────────────────────────────────────── */
-    uint16_t vlan{0};            ///< VLAN ID (bridge; 0 = absent)
+    uint16_t vlan{0}; ///< VLAN ID (bridge; 0 = absent)
     /* ── NDA_MASTER ────────────────────────────────────────────────────── */
-    uint32_t master{0};          ///< Master interface index (0 = absent)
-    std::string master_name;     ///< Resolved master interface name
+    uint32_t master{0};      ///< Master interface index (0 = absent)
+    std::string master_name; ///< Resolved master interface name
     /* ── NDA_IFINDEX ───────────────────────────────────────────────────── */
-    uint32_t nh_ifindex{0};      ///< NDA_IFINDEX: nexthop interface override
+    uint32_t nh_ifindex{0}; ///< NDA_IFINDEX: nexthop interface override
     /* ── NDA_PROTOCOL ──────────────────────────────────────────────────── */
-    uint8_t  protocol{0};        ///< Routing protocol that installed entry
+    uint8_t protocol{0}; ///< Routing protocol that installed entry
 };
 
 /**
@@ -1540,8 +1660,8 @@ struct NeighEntry
  * Columns mirror every field of netlink_neigh_t so the operator can inspect
  * the complete netlink payload.  The table is keyed by family|ifindex|dst.
  */
-static void printNeighborTable(
-    const std::map<std::string, NeighEntry>& neighbors)
+static void
+printNeighborTable(const std::map<std::string, NeighEntry>& neighbors)
 {
     // ── Column content widths ─────────────────────────────────────────────
     // Family  : "bridge"   = 6   → 6
@@ -1556,26 +1676,27 @@ static void printNeighborTable(
     // Upd(ms) : 10 digits  → 9
     // Ref     : 6 digits   →  5
     // Probes  : 6 digits   →  6
-    constexpr int cF = 6, cD = 39, cL = 17, cI = 13, cX = 5, cS = 10,
-                  cG = 6, cC = 10, cU = 9,  cP = 9,  cR = 5, cQ = 6;
+    constexpr int cF = 6, cD = 39, cL = 17, cI = 13, cX = 5, cS = 10, cG = 6,
+                  cC = 10, cU = 9, cP = 9, cR = 5, cQ = 6;
 
     auto hbar = [](int n) {
         std::string s;
         s.reserve(static_cast<std::size_t>(n) * 3);
-        for (int i = 0; i < n; ++i) s += "─";
+        for (int i = 0; i < n; ++i)
+            s += "─";
         return s;
     };
 
     auto mkBorder = [&](const char* l, const char* j, const char* r) {
-        return std::string(l)
-             + hbar(cF+2) + j + hbar(cD+2) + j + hbar(cL+2) + j
-             + hbar(cI+2) + j + hbar(cX+2) + j + hbar(cS+2) + j
-             + hbar(cG+2) + j + hbar(cC+2) + j + hbar(cU+2) + j
-             + hbar(cP+2) + j + hbar(cR+2) + j + hbar(cQ+2) + r;
+        return std::string(l) + hbar(cF + 2) + j + hbar(cD + 2) + j +
+               hbar(cL + 2) + j + hbar(cI + 2) + j + hbar(cX + 2) + j +
+               hbar(cS + 2) + j + hbar(cG + 2) + j + hbar(cC + 2) + j +
+               hbar(cU + 2) + j + hbar(cP + 2) + j + hbar(cR + 2) + j +
+               hbar(cQ + 2) + r;
     };
 
-    const std::string top    = mkBorder("┌", "┬", "┐");
-    const std::string mid    = mkBorder("├", "┼", "┤");
+    const std::string top = mkBorder("┌", "┬", "┐");
+    const std::string mid = mkBorder("├", "┼", "┤");
     const std::string bottom = mkBorder("└", "┴", "┘");
 
     auto printRow = [&](const std::string& fam,
@@ -1589,21 +1710,49 @@ static void printNeighborTable(
                         const std::string& usd,
                         const std::string& upd,
                         const std::string& ref,
-                        const std::string& prb)
-    {
-        std::println(
-            "│ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:>{}} │",
-            fam, cF, dst, cD, mac, cL, ifc, cI,
-            idx, cX, sta, cS, flg, cG,
-            cfm, cC, usd, cU, upd, cP,
-            ref, cR, prb, cQ);
+                        const std::string& prb) {
+        std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:<{}} │ "
+                     "{:<{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:>{}} │ {:>{}} │",
+                     fam,
+                     cF,
+                     dst,
+                     cD,
+                     mac,
+                     cL,
+                     ifc,
+                     cI,
+                     idx,
+                     cX,
+                     sta,
+                     cS,
+                     flg,
+                     cG,
+                     cfm,
+                     cC,
+                     usd,
+                     cU,
+                     upd,
+                     cP,
+                     ref,
+                     cR,
+                     prb,
+                     cQ);
     };
 
     std::println("\n Neighbor Table  ({} entry/entries)", neighbors.size());
     std::println("{}", top);
-    printRow("Family", "Destination", "MAC", "Interface",
-             "Idx",    "State",       "Flags",
-             "Cfm(ms)", "Used(ms)", "Upd(ms)", "Ref", "Probes");
+    printRow("Family",
+             "Destination",
+             "MAC",
+             "Interface",
+             "Idx",
+             "State",
+             "Flags",
+             "Cfm(ms)",
+             "Used(ms)",
+             "Upd(ms)",
+             "Ref",
+             "Probes");
 
     if (neighbors.empty())
     {
@@ -1615,19 +1764,18 @@ static void printNeighborTable(
 
     for (const auto& [key, n] : neighbors)
     {
-        printRow(
-            familyLabel(n.family),
-            n.dst.empty() ? "(none)" : n.dst,
-            n.mac.empty() ? "(none)" : n.mac,
-            n.ifname.empty() ? std::to_string(n.ifindex) : n.ifname,
-            std::to_string(n.ifindex),
-            nudStateLabel(n.state),
-            ntfFlagsLabel(n.flags),
-            std::to_string(n.confirmed_ms),
-            std::to_string(n.used_ms),
-            std::to_string(n.updated_ms),
-            std::to_string(n.refcnt),
-            std::to_string(n.probes));
+        printRow(familyLabel(n.family),
+                 n.dst.empty() ? "(none)" : n.dst,
+                 n.mac.empty() ? "(none)" : n.mac,
+                 n.ifname.empty() ? std::to_string(n.ifindex) : n.ifname,
+                 std::to_string(n.ifindex),
+                 nudStateLabel(n.state),
+                 ntfFlagsLabel(n.flags),
+                 std::to_string(n.confirmed_ms),
+                 std::to_string(n.used_ms),
+                 std::to_string(n.updated_ms),
+                 std::to_string(n.refcnt),
+                 std::to_string(n.probes));
     }
 
     std::println("{}", bottom);
@@ -1643,8 +1791,8 @@ static void printNeighborTable(
  *   …
  * @endcode
  */
-static std::string serializeNeighborTable(
-    const std::map<std::string, NeighEntry>& neighbors)
+static std::string
+serializeNeighborTable(const std::map<std::string, NeighEntry>& neighbors)
 {
     std::ostringstream os;
     os << "NEIGHBORS " << neighbors.size() << '\n';
@@ -1656,8 +1804,8 @@ static std::string serializeNeighborTable(
             " probes={} vlan={} master={} master_name={} nh_ifindex={}"
             " proto={}\n",
             familyLabel(n.family),
-            n.dst.empty()    ? "(none)" : n.dst,
-            n.mac.empty()    ? "(none)" : n.mac,
+            n.dst.empty() ? "(none)" : n.dst,
+            n.mac.empty() ? "(none)" : n.mac,
             n.ifname.empty() ? std::to_string(n.ifindex) : n.ifname,
             n.ifindex,
             nudStateLabel(n.state),
@@ -1682,9 +1830,10 @@ static std::string serializeNeighborTable(
  */
 struct NeighCtx
 {
-    mutable std::shared_mutex         mtx;       ///< Guards neighbors
+    mutable std::shared_mutex mtx;               ///< Guards neighbors
     std::map<std::string, NeighEntry> neighbors; ///< "family|ifidx|dst" → entry
-    sra::UdpTableServer*              udpServer; ///< UDP publisher (port 9001); may be nullptr
+    sra::UdpTableServer*
+        udpServer; ///< UDP publisher (port 9001); may be nullptr
 };
 
 /**
@@ -1693,13 +1842,13 @@ struct NeighCtx
  * Shared by both the silent populate callback (used during the initial dump)
  * and the display callback (used during the live-event loop).
  */
-static void nlNeighUpdate(netlink_neigh_event_t  event,
-                          const netlink_neigh_t *n,
-                          NeighCtx              *ctx)
+static void nlNeighUpdate(netlink_neigh_event_t event,
+                          const netlink_neigh_t* n,
+                          NeighCtx* ctx)
 {
-    const std::string key = familyLabel(n->family)
-                          + "|" + std::to_string(n->ifindex)
-                          + "|" + (n->dst[0] ? n->dst : "(none)");
+    const std::string key = familyLabel(n->family) + "|" +
+                            std::to_string(n->ifindex) + "|" +
+                            (n->dst[0] ? n->dst : "(none)");
 
     if (event == NETLINK_NEIGH_REMOVED)
     {
@@ -1708,24 +1857,24 @@ static void nlNeighUpdate(netlink_neigh_event_t  event,
     }
 
     NeighEntry e;
-    e.family       = n->family;
-    e.ifindex      = n->ifindex;
-    e.ifname       = n->ifname;
-    e.state        = n->state;
-    e.flags        = n->flags;
-    e.type         = n->type;
-    e.dst          = n->dst;
-    e.mac          = formatMac(n->lladdr, n->lladdr_len);
+    e.family = n->family;
+    e.ifindex = n->ifindex;
+    e.ifname = n->ifname;
+    e.state = n->state;
+    e.flags = n->flags;
+    e.type = n->type;
+    e.dst = n->dst;
+    e.mac = formatMac(n->lladdr, n->lladdr_len);
     e.confirmed_ms = n->confirmed_ms;
-    e.used_ms      = n->used_ms;
-    e.updated_ms   = n->updated_ms;
-    e.refcnt       = n->refcnt;
-    e.probes       = n->probes;
-    e.vlan         = n->vlan;
-    e.master       = n->master;
-    e.master_name  = n->master_name;
-    e.nh_ifindex   = n->nh_ifindex;
-    e.protocol     = n->protocol;
+    e.used_ms = n->used_ms;
+    e.updated_ms = n->updated_ms;
+    e.refcnt = n->refcnt;
+    e.probes = n->probes;
+    e.vlan = n->vlan;
+    e.master = n->master;
+    e.master_name = n->master_name;
+    e.nh_ifindex = n->nh_ifindex;
+    e.protocol = n->protocol;
     ctx->neighbors[key] = e;
 }
 
@@ -1735,29 +1884,30 @@ static void nlNeighUpdate(netlink_neigh_event_t  event,
  * Used during the initial RTM_GETNEIGH dump so the table is not redrawn
  * once per entry.  After the dump completes the caller prints the table once.
  */
-static void nlNeighPopulateCb(netlink_neigh_event_t  event,
-                               const netlink_neigh_t *n,
-                               void                  *user_data)
+static void nlNeighPopulateCb(netlink_neigh_event_t event,
+                              const netlink_neigh_t* n,
+                              void* user_data)
 {
     nlNeighUpdate(event, n, static_cast<NeighCtx*>(user_data));
 }
 
 /**
- * @brief Live-event callback — updates the in-memory table and publishes via UDP.
+ * @brief Live-event callback — updates the in-memory table and publishes via
+ * UDP.
  *
  * Used after the initial dump, for ongoing RTM_NEWNEIGH / RTM_DELNEIGH events.
  * The neighbor table is NOT redrawn on screen; only the NetLink event itself is
  * logged.  The updated snapshot is pushed to all UDP subscribers on port 9001.
  */
-static void nlNeighCb(netlink_neigh_event_t     event,
-                      const netlink_neigh_t    *n,
-                      void                     *user_data)
+static void nlNeighCb(netlink_neigh_event_t event,
+                      const netlink_neigh_t* n,
+                      void* user_data)
 {
     auto* ctx = static_cast<NeighCtx*>(user_data);
 
-    const char* evLabel = (event == NETLINK_NEIGH_ADDED)   ? "ADDED"
-                        : (event == NETLINK_NEIGH_REMOVED) ? "REMOVED"
-                                                           : "CHANGED";
+    const char* evLabel = (event == NETLINK_NEIGH_ADDED)     ? "ADDED"
+                          : (event == NETLINK_NEIGH_REMOVED) ? "REMOVED"
+                                                             : "CHANGED";
     std::println("[Neighbors] {} {} on {} (state={})",
                  evLabel,
                  n->dst[0] ? n->dst : "(no dst)",
@@ -1830,10 +1980,11 @@ static int cmdWatchNeighbors(sra::UdpTableServer& udpServer)
     }
     g_neigh_fd = fd;
 
-    struct sigaction sa{};
+    struct sigaction sa
+    {};
     sa.sa_handler = neighSigHandler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
     // ── Step 1: Read the current neighbor table from the kernel ──────────
@@ -1879,12 +2030,18 @@ static std::string scopeLabel(uint8_t scope)
 {
     switch (scope)
     {
-    case RT_SCOPE_UNIVERSE: return "global";
-    case RT_SCOPE_SITE:     return "site";
-    case RT_SCOPE_LINK:     return "link";
-    case RT_SCOPE_HOST:     return "host";
-    case RT_SCOPE_NOWHERE:  return "nowhere";
-    default:                return std::to_string(static_cast<int>(scope));
+    case RT_SCOPE_UNIVERSE:
+        return "global";
+    case RT_SCOPE_SITE:
+        return "site";
+    case RT_SCOPE_LINK:
+        return "link";
+    case RT_SCOPE_HOST:
+        return "host";
+    case RT_SCOPE_NOWHERE:
+        return "nowhere";
+    default:
+        return std::to_string(static_cast<int>(scope));
     }
 }
 
@@ -1896,18 +2053,25 @@ static std::string rtnhFlagsLabel(uint32_t flags)
     if (flags == 0)
         return "-";
     std::vector<std::string> parts;
-    if (flags & RTNH_F_DEAD)        parts.emplace_back("dead");
-    if (flags & RTNH_F_PERVASIVE)   parts.emplace_back("perv");
-    if (flags & RTNH_F_ONLINK)      parts.emplace_back("onlink");
-    if (flags & RTNH_F_OFFLOAD)     parts.emplace_back("offload");
-    if (flags & RTNH_F_LINKDOWN)    parts.emplace_back("down");
-    if (flags & RTNH_F_UNRESOLVED)  parts.emplace_back("unresolved");
+    if (flags & RTNH_F_DEAD)
+        parts.emplace_back("dead");
+    if (flags & RTNH_F_PERVASIVE)
+        parts.emplace_back("perv");
+    if (flags & RTNH_F_ONLINK)
+        parts.emplace_back("onlink");
+    if (flags & RTNH_F_OFFLOAD)
+        parts.emplace_back("offload");
+    if (flags & RTNH_F_LINKDOWN)
+        parts.emplace_back("down");
+    if (flags & RTNH_F_UNRESOLVED)
+        parts.emplace_back("unresolved");
     if (parts.empty())
         return std::format("0x{:08x}", flags);
     std::string s;
     for (std::size_t i = 0; i < parts.size(); ++i)
     {
-        if (i > 0) s += '|';
+        if (i > 0)
+            s += '|';
         s += parts[i];
     }
     return s;
@@ -1916,20 +2080,18 @@ static std::string rtnhFlagsLabel(uint32_t flags)
 /**
  * @brief Formats a nexthop group as "id(w+1),id(w+1),…" (truncated to fit).
  */
-static std::string formatNhGroup(const netlink_nexthop_grp_t *grp,
-                                 uint32_t                     count,
-                                 int                          maxlen)
+static std::string
+formatNhGroup(const netlink_nexthop_grp_t* grp, uint32_t count, int maxlen)
 {
     if (count == 0)
         return "-";
     std::string s;
     for (uint32_t i = 0; i < count; ++i)
     {
-        if (i > 0) s += ',';
-        s += std::to_string(grp[i].id)
-           + '('
-           + std::to_string(static_cast<int>(grp[i].weight) + 1)
-           + ')';
+        if (i > 0)
+            s += ',';
+        s += std::to_string(grp[i].id) + '(' +
+             std::to_string(static_cast<int>(grp[i].weight) + 1) + ')';
     }
     if (static_cast<int>(s.size()) > maxlen)
         s = s.substr(0, static_cast<std::size_t>(maxlen - 1)) + "…";
@@ -1945,30 +2107,30 @@ static std::string formatNhGroup(const netlink_nexthop_grp_t *grp,
 struct NexthopEntry
 {
     /* ── From struct nhmsg ─────────────────────────────────────────────── */
-    uint32_t id{0};           ///< NHA_ID: unique nexthop identifier
-    uint8_t  family{0};       ///< nh_family: AF_INET/AF_INET6/AF_UNSPEC
-    uint8_t  scope{0};        ///< nh_scope: RT_SCOPE_*
-    uint8_t  protocol{0};     ///< nh_protocol: RTPROT_*
-    uint32_t flags{0};        ///< nh_flags: RTNH_F_* bitmask
+    uint32_t id{0};      ///< NHA_ID: unique nexthop identifier
+    uint8_t family{0};   ///< nh_family: AF_INET/AF_INET6/AF_UNSPEC
+    uint8_t scope{0};    ///< nh_scope: RT_SCOPE_*
+    uint8_t protocol{0}; ///< nh_protocol: RTPROT_*
+    uint32_t flags{0};   ///< nh_flags: RTNH_F_* bitmask
     /* ── NHA_OIF ───────────────────────────────────────────────────────── */
-    uint32_t oif{0};          ///< Output interface index (0 = absent)
-    std::string oif_name;     ///< Resolved interface name
+    uint32_t oif{0};      ///< Output interface index (0 = absent)
+    std::string oif_name; ///< Resolved interface name
     /* ── NHA_GATEWAY ───────────────────────────────────────────────────── */
-    std::string gateway;      ///< Gateway address string ("" = absent)
+    std::string gateway; ///< Gateway address string ("" = absent)
     /* ── NHA_BLACKHOLE ─────────────────────────────────────────────────── */
-    uint8_t  blackhole{0};    ///< 1 if this is a blackhole nexthop
+    uint8_t blackhole{0}; ///< 1 if this is a blackhole nexthop
     /* ── NHA_FDB ───────────────────────────────────────────────────────── */
-    uint8_t  fdb{0};          ///< 1 if nexthop is offloaded to FDB
+    uint8_t fdb{0}; ///< 1 if nexthop is offloaded to FDB
     /* ── NHA_MASTER ────────────────────────────────────────────────────── */
-    uint32_t master{0};       ///< Master device index (0 = absent)
-    std::string master_name;  ///< Resolved master device name
+    uint32_t master{0};      ///< Master device index (0 = absent)
+    std::string master_name; ///< Resolved master device name
     /* ── NHA_GROUP ─────────────────────────────────────────────────────── */
-    std::string group_str;    ///< Pre-formatted group member list
-    uint32_t group_count{0};  ///< Number of members in the nexthop group
+    std::string group_str;   ///< Pre-formatted group member list
+    uint32_t group_count{0}; ///< Number of members in the nexthop group
     /* ── NHA_GROUP_TYPE ────────────────────────────────────────────────── */
-    uint16_t group_type{0};   ///< 0=mpath (ECMP), 1=resilient
+    uint16_t group_type{0}; ///< 0=mpath (ECMP), 1=resilient
     /* ── NHA_ENCAP_TYPE ────────────────────────────────────────────────── */
-    uint16_t encap_type{0};   ///< Encapsulation type (LWTUNNEL_ENCAP_*)
+    uint16_t encap_type{0}; ///< Encapsulation type (LWTUNNEL_ENCAP_*)
 };
 
 /**
@@ -1976,8 +2138,7 @@ struct NexthopEntry
  *
  * Columns mirror every field of netlink_nexthop_t.
  */
-static void printNexthopTable(
-    const std::map<uint32_t, NexthopEntry>& nexthops)
+static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
 {
     // ── Column widths ─────────────────────────────────────────────────────
     // ID       : 6 digits      →  6
@@ -1992,26 +2153,27 @@ static void printNexthopTable(
     // BH       : "yes/no"=3    →  3
     // FDB      : "yes/no"=3    →  3
     // Master   : IFNAMSIZ-1    → 12
-    constexpr int cI = 6, cF = 6, cO = 7, cP = 8, cL = 12, cN = 13,
-                  cG = 25, cR = 28, cT = 9, cB = 3, cD = 3, cM = 12;
+    constexpr int cI = 6, cF = 6, cO = 7, cP = 8, cL = 12, cN = 13, cG = 25,
+                  cR = 28, cT = 9, cB = 3, cD = 3, cM = 12;
 
     auto hbar = [](int n) {
         std::string s;
         s.reserve(static_cast<std::size_t>(n) * 3);
-        for (int i = 0; i < n; ++i) s += "─";
+        for (int i = 0; i < n; ++i)
+            s += "─";
         return s;
     };
 
     auto mkBorder = [&](const char* l, const char* j, const char* r) {
-        return std::string(l)
-             + hbar(cI+2) + j + hbar(cF+2) + j + hbar(cO+2) + j
-             + hbar(cP+2) + j + hbar(cL+2) + j + hbar(cN+2) + j
-             + hbar(cG+2) + j + hbar(cR+2) + j + hbar(cT+2) + j
-             + hbar(cB+2) + j + hbar(cD+2) + j + hbar(cM+2) + r;
+        return std::string(l) + hbar(cI + 2) + j + hbar(cF + 2) + j +
+               hbar(cO + 2) + j + hbar(cP + 2) + j + hbar(cL + 2) + j +
+               hbar(cN + 2) + j + hbar(cG + 2) + j + hbar(cR + 2) + j +
+               hbar(cT + 2) + j + hbar(cB + 2) + j + hbar(cD + 2) + j +
+               hbar(cM + 2) + r;
     };
 
-    const std::string top    = mkBorder("┌", "┬", "┐");
-    const std::string mid    = mkBorder("├", "┼", "┤");
+    const std::string top = mkBorder("┌", "┬", "┐");
+    const std::string mid = mkBorder("├", "┼", "┤");
     const std::string bottom = mkBorder("└", "┴", "┘");
 
     auto printRow = [&](const std::string& id,
@@ -2025,20 +2187,49 @@ static void printNexthopTable(
                         const std::string& gtp,
                         const std::string& bh,
                         const std::string& fdb,
-                        const std::string& mst)
-    {
-        std::println(
-            "│ {:>{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │",
-            id,  cI, fam, cF, scp, cO, pro, cP,
-            flg, cL, oif, cN, gw,  cG,
-            grp, cR, gtp, cT, bh,  cB, fdb, cD, mst, cM);
+                        const std::string& mst) {
+        std::println("│ {:>{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ "
+                     "{:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │",
+                     id,
+                     cI,
+                     fam,
+                     cF,
+                     scp,
+                     cO,
+                     pro,
+                     cP,
+                     flg,
+                     cL,
+                     oif,
+                     cN,
+                     gw,
+                     cG,
+                     grp,
+                     cR,
+                     gtp,
+                     cT,
+                     bh,
+                     cB,
+                     fdb,
+                     cD,
+                     mst,
+                     cM);
     };
 
     std::println("\n Nexthop Table  ({} entry/entries)", nexthops.size());
     std::println("{}", top);
-    printRow("ID", "Family", "Scope", "Protocol",
-             "Flags", "OIF", "Gateway",
-             "Group", "GrpType", "BH", "FDB", "Master");
+    printRow("ID",
+             "Family",
+             "Scope",
+             "Protocol",
+             "Flags",
+             "OIF",
+             "Gateway",
+             "Group",
+             "GrpType",
+             "BH",
+             "FDB",
+             "Master");
 
     if (nexthops.empty())
     {
@@ -2053,25 +2244,25 @@ static void printNexthopTable(
         const std::string oif = nh.oif_name.empty()
                                     ? (nh.oif ? std::to_string(nh.oif) : "-")
                                     : nh.oif_name;
-        const std::string mst = nh.master_name.empty()
-                                    ? (nh.master ? std::to_string(nh.master) : "-")
-                                    : nh.master_name;
+        const std::string mst =
+            nh.master_name.empty()
+                ? (nh.master ? std::to_string(nh.master) : "-")
+                : nh.master_name;
         const std::string gtp = nh.group_type == 0
                                     ? (nh.group_str == "-" ? "-" : "mpath")
                                     : "resilient";
-        printRow(
-            std::to_string(nh.id),
-            familyLabel(nh.family),
-            scopeLabel(nh.scope),
-            protoLabel(nh.protocol),
-            rtnhFlagsLabel(nh.flags),
-            oif,
-            nh.gateway.empty() ? "-" : nh.gateway,
-            nh.group_str,
-            gtp,
-            nh.blackhole ? "yes" : "no",
-            nh.fdb       ? "yes" : "no",
-            mst);
+        printRow(std::to_string(nh.id),
+                 familyLabel(nh.family),
+                 scopeLabel(nh.scope),
+                 protoLabel(nh.protocol),
+                 rtnhFlagsLabel(nh.flags),
+                 oif,
+                 nh.gateway.empty() ? "-" : nh.gateway,
+                 nh.group_str,
+                 gtp,
+                 nh.blackhole ? "yes" : "no",
+                 nh.fdb ? "yes" : "no",
+                 mst);
     }
 
     std::println("{}", bottom);
@@ -2083,26 +2274,27 @@ static void printNexthopTable(
  * Format (one entry per line after the header):
  * @code
  *   NEXTHOPS <count>
- *   id=<n> family=<f> scope=<s> proto=<p> flags=<fl> oif=<if> gw=<gw> group=<g> bh=<b> fdb=<f> master=<m>
- *   …
+ *   id=<n> family=<f> scope=<s> proto=<p> flags=<fl> oif=<if> gw=<gw> group=<g>
+ * bh=<b> fdb=<f> master=<m> …
  * @endcode
  */
-static std::string serializeNexthopTable(
-    const std::map<uint32_t, NexthopEntry>& nexthops)
+static std::string
+serializeNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
 {
     std::ostringstream os;
     os << "NEXTHOPS " << nexthops.size() << '\n';
     for (const auto& [id, nh] : nexthops)
     {
         const std::string oif = nh.oif_name.empty()
-            ? (nh.oif ? std::to_string(nh.oif) : "-")
-            : nh.oif_name;
-        const std::string mst = nh.master_name.empty()
-            ? (nh.master ? std::to_string(nh.master) : "-")
-            : nh.master_name;
+                                    ? (nh.oif ? std::to_string(nh.oif) : "-")
+                                    : nh.oif_name;
+        const std::string mst =
+            nh.master_name.empty()
+                ? (nh.master ? std::to_string(nh.master) : "-")
+                : nh.master_name;
         const std::string gtp = nh.group_type == 0
-            ? (nh.group_str == "-" ? "-" : "mpath")
-            : "resilient";
+                                    ? (nh.group_str == "-" ? "-" : "mpath")
+                                    : "resilient";
         os << std::format(
             "id={} family={} scope={} proto={} flags={} oif={} gw={}"
             " group={} group_count={} group_type={} encap_type={}"
@@ -2119,7 +2311,7 @@ static std::string serializeNexthopTable(
             gtp,
             nh.encap_type,
             nh.blackhole ? "yes" : "no",
-            nh.fdb       ? "yes" : "no",
+            nh.fdb ? "yes" : "no",
             mst);
     }
     return os.str();
@@ -2130,11 +2322,11 @@ static std::string serializeNexthopTable(
  */
 struct NexthopCtx
 {
-    std::map<uint32_t, NexthopEntry> nexthops;             ///< nexthop ID → entry
-    sra::UdpTableServer*             udpServer{nullptr};   ///< UDP publisher (port 9002)
-    sra::VrfTable*                   vrfTable{nullptr};    ///< VRF table from GetAllRoutes
-    sra::SraUdpClient*               vrfClient{nullptr};   ///< Unix-domain client to ud_server
-    NeighCtx*                        neighCtx{nullptr};    ///< adjacency table (shared with neigh thread)
+    std::map<uint32_t, NexthopEntry> nexthops; ///< nexthop ID → entry
+    sra::UdpTableServer* udpServer{nullptr};   ///< UDP publisher (port 9002)
+    sra::VrfTable* vrfTable{nullptr};          ///< VRF table from GetAllRoutes
+    sra::SraUdpClient* vrfClient{nullptr}; ///< Unix-domain client to ud_server
+    NeighCtx* neighCtx{nullptr}; ///< adjacency table (shared with neigh thread)
 };
 
 /**
@@ -2143,9 +2335,9 @@ struct NexthopCtx
  * Shared by both the silent populate callback (initial dump) and the
  * display callback (live-event loop).
  */
-static void nlNexthopUpdate(netlink_nexthop_event_t  event,
-                             const netlink_nexthop_t *nh,
-                             NexthopCtx              *ctx)
+static void nlNexthopUpdate(netlink_nexthop_event_t event,
+                            const netlink_nexthop_t* nh,
+                            NexthopCtx* ctx)
 {
     if (event == NETLINK_NEXTHOP_REMOVED)
     {
@@ -2154,22 +2346,22 @@ static void nlNexthopUpdate(netlink_nexthop_event_t  event,
     }
 
     NexthopEntry e;
-    e.id          = nh->id;
-    e.family      = nh->family;
-    e.scope       = nh->scope;
-    e.protocol    = nh->protocol;
-    e.flags       = nh->flags;
-    e.oif         = nh->oif;
-    e.oif_name    = nh->oif_name;
-    e.gateway     = nh->gateway;
-    e.blackhole   = nh->blackhole;
-    e.fdb         = nh->fdb;
-    e.master      = nh->master;
+    e.id = nh->id;
+    e.family = nh->family;
+    e.scope = nh->scope;
+    e.protocol = nh->protocol;
+    e.flags = nh->flags;
+    e.oif = nh->oif;
+    e.oif_name = nh->oif_name;
+    e.gateway = nh->gateway;
+    e.blackhole = nh->blackhole;
+    e.fdb = nh->fdb;
+    e.master = nh->master;
     e.master_name = nh->master_name;
-    e.group_str   = formatNhGroup(nh->group, nh->group_count, 28);
+    e.group_str = formatNhGroup(nh->group, nh->group_count, 28);
     e.group_count = nh->group_count;
-    e.group_type  = nh->group_type;
-    e.encap_type  = nh->encap_type;
+    e.group_type = nh->group_type;
+    e.encap_type = nh->encap_type;
     ctx->nexthops[nh->id] = e;
 }
 
@@ -2179,35 +2371,37 @@ static void nlNexthopUpdate(netlink_nexthop_event_t  event,
  * Used during the initial RTM_GETNEXTHOP dump so the table is not redrawn
  * once per object.  After the dump completes the caller prints the table once.
  */
-static void nlNexthopPopulateCb(netlink_nexthop_event_t  event,
-                                 const netlink_nexthop_t *nh,
-                                 void                    *user_data)
+static void nlNexthopPopulateCb(netlink_nexthop_event_t event,
+                                const netlink_nexthop_t* nh,
+                                void* user_data)
 {
     nlNexthopUpdate(event, nh, static_cast<NexthopCtx*>(user_data));
 }
 
 /**
- * @brief Live-event callback — updates the in-memory table and publishes via UDP.
+ * @brief Live-event callback — updates the in-memory table and publishes via
+ * UDP.
  *
  * Used after the initial dump, for ongoing RTM_NEWNEXTHOP / RTM_DELNEXTHOP
  * events.  The nexthop table is NOT redrawn on screen; only the NetLink event
  * itself is logged.  The updated snapshot is pushed to UDP subscribers on
  * port 9002.
  */
-static void nlNexthopCb(netlink_nexthop_event_t   event,
-                        const netlink_nexthop_t  *nh,
-                        void                     *user_data)
+static void nlNexthopCb(netlink_nexthop_event_t event,
+                        const netlink_nexthop_t* nh,
+                        void* user_data)
 {
     auto* ctx = static_cast<NexthopCtx*>(user_data);
 
-    const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)   ? "ADDED"
-                        : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
-                                                             : "CHANGED";
+    const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)     ? "ADDED"
+                          : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
+                                                               : "CHANGED";
     std::println("[Nexthops] {} id={} gw={} oif={}",
                  evLabel,
                  nh->id,
                  nh->gateway[0] ? nh->gateway : "-",
-                 nh->oif_name[0] ? nh->oif_name : std::to_string(nh->oif).c_str());
+                 nh->oif_name[0] ? nh->oif_name
+                                 : std::to_string(nh->oif).c_str());
 
     nlNexthopUpdate(event, nh, ctx);
 
@@ -2275,10 +2469,11 @@ static int cmdWatchNexthops(sra::UdpTableServer& udpServer)
     }
     g_nexthop_fd = fd;
 
-    struct sigaction sa{};
+    struct sigaction sa
+    {};
     sa.sa_handler = nexthopSigHandler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
     // ── Step 1: Read all nexthop objects from the kernel ─────────────────
@@ -2324,9 +2519,9 @@ static int cmdWatchNexthops(sra::UdpTableServer& udpServer)
  */
 struct DemoRequestQueue
 {
-    std::queue<sra::RequestPayload> items;   ///< Pending payloads.
-    std::mutex                      mutex;   ///< Guards @c items.
-    std::condition_variable         cv;      ///< Notified when an item is pushed.
+    std::queue<sra::RequestPayload> items; ///< Pending payloads.
+    std::mutex mutex;                      ///< Guards @c items.
+    std::condition_variable cv;            ///< Notified when an item is pushed.
 };
 
 /**
@@ -2349,10 +2544,11 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
     using namespace std::chrono_literals;
 
     /* Install signal handlers. */
-    struct sigaction sa{};
+    struct sigaction sa
+    {};
     sa.sa_handler = demoSigHandler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
     std::println("grpc-proc-demo: running (Ctrl-C to stop)");
@@ -2363,8 +2559,7 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
     // ── Producer thread ───────────────────────────────────────────────────
     // Creates a new GetLoopback request every 5 seconds and places it in
     // the queue.  The main loop drains the queue and forwards to GrpcProc.
-    std::thread producer([&demoQueue]
-    {
+    std::thread producer([&demoQueue] {
         uint64_t seq = 0;
         while (!g_demo_stop)
         {
@@ -2372,7 +2567,8 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
                 std::lock_guard<std::mutex> lock(demoQueue.mutex);
                 demoQueue.items.push(sra::GetLoopbackParams{});
                 ++seq;
-                std::println("  [producer] Enqueued GetLoopback request #{}", seq);
+                std::println("  [producer] Enqueued GetLoopback request #{}",
+                             seq);
             }
             demoQueue.cv.notify_one();
 
@@ -2401,9 +2597,11 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
             std::unique_lock<std::mutex> lock(demoQueue.mutex);
             while (!demoQueue.items.empty())
             {
-                sra::RequestPayload payload = std::move(demoQueue.items.front());
+                sra::RequestPayload payload =
+                    std::move(demoQueue.items.front());
                 demoQueue.items.pop();
-                lock.unlock(); // release while submitting to avoid holding during RPC queue op
+                lock.unlock(); // release while submitting to avoid holding
+                               // during RPC queue op
 
                 const uint64_t id = proc.submit(std::move(payload));
                 inFlight.push_back(id);
@@ -2416,21 +2614,21 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
         // 2. Non-blocking poll for completed responses (mirrors
         //    exampleNonBlockingPoll).  Each completed response is printed
         //    and removed from the in-flight list.
-        for (auto it = inFlight.begin(); it != inFlight.end(); )
+        for (auto it = inFlight.begin(); it != inFlight.end();)
         {
             auto resp = proc.tryGetResponse(*it);
             if (resp)
             {
                 std::visit(
-                    [](const auto& result)
-                    {
+                    [](const auto& result) {
                         using T = std::decay_t<decltype(result)>;
                         if constexpr (std::is_same_v<T, sra::GetLoopbackResult>)
                         {
                             if (result)
                             {
-                                std::println("  [main] GetLoopback OK  → \"{}\"",
-                                             *result);
+                                std::println(
+                                    "  [main] GetLoopback OK  → \"{}\"",
+                                    *result);
                             }
                             else
                             {
@@ -2474,7 +2672,7 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
 struct StartupRouteCtx
 {
     std::map<std::string, WatchRoute> routes; ///< "dest|gw|iface" → WatchRoute
-    sra::UdpTableServer*              udpServer{nullptr};
+    sra::UdpTableServer* udpServer{nullptr};
 };
 
 /**
@@ -2483,23 +2681,24 @@ struct StartupRouteCtx
  * Updates the in-memory route table and publishes to UDP without any
  * console output (so it does not interfere with other command output).
  */
-static void startupRouteLiveCb(netlink_event_t          event,
-                                const netlink_route32_t *route,
-                                void                    *user_data)
+static void startupRouteLiveCb(netlink_event_t event,
+                               const netlink_route32_t* route,
+                               void* user_data)
 {
     auto* ctx = static_cast<StartupRouteCtx*>(user_data);
 
     char dst_buf[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &route->dst, dst_buf, sizeof(dst_buf));
-    const std::string dest = std::string(dst_buf) + "/"
-                           + std::to_string(static_cast<unsigned>(route->dst_len));
+    const std::string dest =
+        std::string(dst_buf) + "/" +
+        std::to_string(static_cast<unsigned>(route->dst_len));
 
     char gw_buf[INET_ADDRSTRLEN] = {};
     if (route->gateway.s_addr != 0)
         inet_ntop(AF_INET, &route->gateway, gw_buf, sizeof(gw_buf));
-    const std::string gw    = gw_buf;
+    const std::string gw = gw_buf;
     const std::string iface = route->ifname;
-    const std::string key   = dest + "|" + gw + "|" + iface;
+    const std::string key = dest + "|" + gw + "|" + iface;
 
     if (event == NETLINK_ROUTE_REMOVED)
     {
@@ -2507,13 +2706,20 @@ static void startupRouteLiveCb(netlink_event_t          event,
     }
     else
     {
-        ctx->routes[key] = WatchRoute{dest, gw, iface,
+        ctx->routes[key] = WatchRoute{dest,
+                                      gw,
+                                      iface,
                                       route->ifindex,
-                                      route->metric, route->table,
-                                      route->protocol, {},
-                                      route->family, route->dst_len,
-                                      route->tos, route->scope,
-                                      route->type, route->flags};
+                                      route->metric,
+                                      route->table,
+                                      route->protocol,
+                                      {},
+                                      route->family,
+                                      route->dst_len,
+                                      route->tos,
+                                      route->scope,
+                                      route->type,
+                                      route->flags};
     }
 
     if (ctx->udpServer)
@@ -2525,9 +2731,9 @@ static void startupRouteLiveCb(netlink_event_t          event,
  *
  * Updates the in-memory neighbor table and publishes to UDP without printing.
  */
-static void startupNeighLiveCb(netlink_neigh_event_t  event,
-                                const netlink_neigh_t *n,
-                                void                  *user_data)
+static void startupNeighLiveCb(netlink_neigh_event_t event,
+                               const netlink_neigh_t* n,
+                               void* user_data)
 {
     auto* ctx = static_cast<NeighCtx*>(user_data);
     std::string snapshot;
@@ -2561,9 +2767,14 @@ static uint16_t icmpChecksum(const void* data, std::size_t len)
 {
     const auto* p = static_cast<const uint16_t*>(data);
     uint32_t sum = 0;
-    while (len > 1) { sum += *p++; len -= 2; }
-    if (len) sum += *reinterpret_cast<const uint8_t*>(p);
-    sum  = (sum >> 16) + (sum & 0xffff);
+    while (len > 1)
+    {
+        sum += *p++;
+        len -= 2;
+    }
+    if (len)
+        sum += *reinterpret_cast<const uint8_t*>(p);
+    sum = (sum >> 16) + (sum & 0xffff);
     sum += (sum >> 16);
     return static_cast<uint16_t>(~sum);
 }
@@ -2579,31 +2790,42 @@ static void sendIcmpEchoRequest(const std::string& destIp)
     int sock = ::socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sock < 0)
     {
-        std::println(std::cerr, "[ICMP] socket() failed for {}: {}",
-                     destIp, ::strerror(errno));
+        std::println(std::cerr,
+                     "[ICMP] socket() failed for {}: {}",
+                     destIp,
+                     ::strerror(errno));
         return;
     }
 
-    struct icmphdr pkt{};
-    pkt.type             = ICMP_ECHO;
-    pkt.code             = 0;
-    pkt.un.echo.id       = ::htons(static_cast<uint16_t>(::getpid() & 0xffff));
+    struct icmphdr pkt
+    {};
+    pkt.type = ICMP_ECHO;
+    pkt.code = 0;
+    pkt.un.echo.id = ::htons(static_cast<uint16_t>(::getpid() & 0xffff));
     pkt.un.echo.sequence = ::htons(1);
-    pkt.checksum         = icmpChecksum(&pkt, sizeof(pkt));
+    pkt.checksum = icmpChecksum(&pkt, sizeof(pkt));
 
-    struct sockaddr_in dst{};
+    struct sockaddr_in dst
+    {};
     dst.sin_family = AF_INET;
     ::inet_pton(AF_INET, destIp.c_str(), &dst.sin_addr);
 
-    if (::sendto(sock, &pkt, sizeof(pkt), 0,
-                 reinterpret_cast<const sockaddr*>(&dst), sizeof(dst)) < 0)
+    if (::sendto(sock,
+                 &pkt,
+                 sizeof(pkt),
+                 0,
+                 reinterpret_cast<const sockaddr*>(&dst),
+                 sizeof(dst)) < 0)
     {
-        std::println(std::cerr, "[ICMP] sendto() to {} failed: {}",
-                     destIp, ::strerror(errno));
+        std::println(std::cerr,
+                     "[ICMP] sendto() to {} failed: {}",
+                     destIp,
+                     ::strerror(errno));
     }
     else
     {
-        std::println("[ICMP] sent echo request to {} to probe adjacency", destIp);
+        std::println("[ICMP] sent echo request to {} to probe adjacency",
+                     destIp);
     }
     ::close(sock);
 }
@@ -2619,13 +2841,15 @@ static void sendIcmpEchoRequest(const std::string& destIp)
  *
  * @param nh         Kernel nexthop descriptor from the netlink event.
  * @param vrfTable   Local VRF table populated from GetAllRoutes.  May be null.
- * @param vrfClient  Unix-domain client used to submit the request.  May be null.
- * @param neighCtx   Adjacency table shared with the neighbor monitor thread.  May be null.
+ * @param vrfClient  Unix-domain client used to submit the request.  May be
+ * null.
+ * @param neighCtx   Adjacency table shared with the neighbor monitor thread.
+ * May be null.
  */
 static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
-                                   sra::VrfTable*           vrfTable,
-                                   sra::SraUdpClient*       vrfClient,
-                                   NeighCtx*                neighCtx)
+                                   sra::VrfTable* vrfTable,
+                                   sra::SraUdpClient* vrfClient,
+                                   NeighCtx* neighCtx)
 {
     if (!vrfTable || !vrfClient)
         return;
@@ -2638,8 +2862,10 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
 
     if (!vrfTable->hasNexthop(gateway))
     {
-        std::println("[Nexthops] nexthop id={} gw={} not found in VRF table — skip",
-                     nh->id, gateway);
+        std::println(
+            "[Nexthops] nexthop id={} gw={} not found in VRF table — skip",
+            nh->id,
+            gateway);
         return;
     }
 
@@ -2647,26 +2873,32 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
     // request to trigger ARP/NDP resolution before the route is installed.
     if (neighCtx && !neighborHasIp(*neighCtx, gateway))
     {
-        std::println("[Nexthops] nexthop gw={} id={} absent from adjacency table — "
-                     "sending ICMP echo request", gateway, nh->id);
+        std::println(
+            "[Nexthops] nexthop gw={} id={} absent from adjacency table — "
+            "sending ICMP echo request",
+            gateway,
+            nh->id);
         sendIcmpEchoRequest(gateway);
     }
 
     const auto routes = vrfTable->findByNexthop(gateway);
     std::println("[Nexthops] nexthop id={} gw={} matched {} entry/entries; "
                  "generating SingleRouteRequest (SINGLE_ROUTE, type=1)",
-                 nh->id, gateway, routes.size());
+                 nh->id,
+                 gateway,
+                 routes.size());
 
     // Parse gateway to binary (network byte order).
-    struct in_addr nhAddr{};
+    struct in_addr nhAddr
+    {};
     if (::inet_pton(AF_INET, gateway.c_str(), &nhAddr) != 1)
     {
         std::println(std::cerr,
-                     "[Nexthops] invalid gateway address '{}' — skip", gateway);
+                     "[Nexthops] invalid gateway address '{}' — skip",
+                     gateway);
         return;
     }
-    const auto* nhBytes =
-        reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+    const auto* nhBytes = reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
     cmdproto::SingleRouteRequest req;
 
@@ -2682,15 +2914,15 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
 
         // Null-padded fixed-width interface name.
         const std::string& ifn = route.interface_name();
-        for (std::size_t k = 0;
-             k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
+        for (std::size_t k = 0; k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+             ++k)
         {
             iface.iface_name[k] = ifn[k];
         }
 
-        iface.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
-                                   nhBytes[2], nhBytes[3]};
-        iface.nexthop_id_ipv4   = nh->id;
+        iface.nexthop_addr_ipv4 = {
+            nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
+        iface.nexthop_id_ipv4 = nh->id;
 
         // Convert each prefix string "A.B.C.D/N" to binary PrefixIpv4.
         for (const auto& pfx : route.prefixes())
@@ -2700,23 +2932,25 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
             if (slash == std::string::npos)
                 continue;
             const std::string addrStr = pfxStr.substr(0, slash);
-            const auto maskLen = static_cast<std::uint8_t>(
-                std::stoul(pfxStr.substr(slash + 1)));
+            const auto maskLen =
+                static_cast<std::uint8_t>(std::stoul(pfxStr.substr(slash + 1)));
 
-            struct in_addr pfxAddr{};
+            struct in_addr pfxAddr
+            {};
             if (::inet_pton(AF_INET, addrStr.c_str(), &pfxAddr) != 1)
                 continue;
             const auto* pfxBytes =
                 reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
 
             iface.prefixes.push_back(cmdproto::PrefixIpv4{
-                {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]},
-                maskLen});
+                {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]}, maskLen});
         }
 
         std::println("[Nexthops]   iface='{}' nexthop='{}' "
                      "nexthop_id={} prefixes={}",
-                     route.interface_name(), gateway, nh->id,
+                     route.interface_name(),
+                     gateway,
+                     nh->id,
                      iface.prefixes.size());
 
         req.interfaces.push_back(std::move(iface));
@@ -2725,13 +2959,16 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
     if (req.interfaces.empty())
     {
         std::println("[Nexthops] no nni entries for nexthop gw={} id={} — skip",
-                     gateway, nh->id);
+                     gateway,
+                     nh->id);
         return;
     }
 
     std::println("[Nexthops] submitting SingleRouteRequest "
                  "({} interface(s)) to ud_server for nexthop gw={} id={}",
-                 req.interfaces.size(), gateway, nh->id);
+                 req.interfaces.size(),
+                 gateway,
+                 nh->id);
 
     vrfClient->submitAdd(std::move(req));
 }
@@ -2744,15 +2981,15 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
  * checks whether the changed nexthop appears in the VRF table and sends a
  * SingleRoute request to ud_server.
  */
-static void startupNexthopLiveCb(netlink_nexthop_event_t  event,
-                                  const netlink_nexthop_t *nh,
-                                  void                    *user_data)
+static void startupNexthopLiveCb(netlink_nexthop_event_t event,
+                                 const netlink_nexthop_t* nh,
+                                 void* user_data)
 {
     auto* ctx = static_cast<NexthopCtx*>(user_data);
 
-    const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)   ? "ADDED"
-                        : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
-                                                             : "CHANGED";
+    const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)     ? "ADDED"
+                          : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
+                                                               : "CHANGED";
     std::println("[Nexthops] {} id={} gw={} oif={} — checking VRF table",
                  evLabel,
                  nh->id,
@@ -2894,18 +3131,31 @@ int main(int argc, char* argv[])
     {
         const std::string& lvlStr = vm["loglevel"].as<std::string>();
         int lvl = logger::DEBUG;
-        if      (lvlStr == "DEBUG"   || lvlStr == "1") lvl = logger::DEBUG;
-        else if (lvlStr == "INFO"    || lvlStr == "2") lvl = logger::INFO;
-        else if (lvlStr == "NOTICE"  || lvlStr == "3") lvl = logger::NOTICE;
-        else if (lvlStr == "WARNING" || lvlStr == "4") lvl = logger::WARNING;
-        else if (lvlStr == "ERR"     || lvlStr == "5") lvl = logger::ERR;
-        else {
-            try { lvl = std::stoi(lvlStr); } catch (...) {}
+        if (lvlStr == "DEBUG" || lvlStr == "1")
+            lvl = logger::DEBUG;
+        else if (lvlStr == "INFO" || lvlStr == "2")
+            lvl = logger::INFO;
+        else if (lvlStr == "NOTICE" || lvlStr == "3")
+            lvl = logger::NOTICE;
+        else if (lvlStr == "WARNING" || lvlStr == "4")
+            lvl = logger::WARNING;
+        else if (lvlStr == "ERR" || lvlStr == "5")
+            lvl = logger::ERR;
+        else
+        {
+            try
+            {
+                lvl = std::stoi(lvlStr);
+            }
+            catch (...)
+            {}
         }
         const std::string& logstream = vm["logstream"].as<std::string>();
         logger::init(logstream, lvl);
-        logger::log(logger::DEBUG, "sra",
-                    std::format("logger active: stream='{}' level={}", logstream, lvl));
+        logger::log(
+            logger::DEBUG,
+            "sra",
+            std::format("logger active: stream='{}' level={}", logstream, lvl));
     }
 
     if (vm.count("help") || !vm.count("command"))
@@ -2931,26 +3181,46 @@ int main(int argc, char* argv[])
                      "(ARP/NDP) table — no gRPC required");
         std::println("  nexthops                Dump and watch kernel nexthop "
                      "objects (Linux 5.3+) — no gRPC required");
-        std::println("  set-loopback <address>  Store a loopback address on the server");
-        std::println("  get-loopback            Retrieve the stored loopback address");
-        std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
-        std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
-        std::println("  add-del-list  [socket]  Read loopback → GetLoopbacks → ADD → DEL → LIST");
-        std::println("                          1. RequestLoopback  identify this SRA node in SOT");
-        std::println("                          2. GetLoopbacks     fetch NNI interface + prefix list");
-        std::println("                          3. ROUTE_ADD        install prefixes in ud_server");
-        std::println("                          4. ROUTE_DEL        delete each prefix from ud_server");
-        std::println("                          5. ROUTE_LIST       get resulting route table from ud_server");
-        std::println("                          (default socket: /tmp/ud_server.sock)");
-        std::println("  run [socket]            Full SRA daemon mode (continuous):");
-        std::println("                            1. RequestLoopback → SOT auth check via srmd");
-        std::println("                            2. GetLoopbacks / GetAllRoutes via srmd");
-        std::println("                            3. Build SingleRouteRequest (nni interfaces only)");
-        std::println("                            4. Send to ud_server via Unix-domain socket");
-        std::println("                            5. Loop until SIGINT/SIGTERM");
-        std::println("                          ud_server socket default: /tmp/ud_server.sock");
-        std::println("                          NOTE: ud_server is a separate process; srmd has");
-        std::println("                                no Unix-domain socket — gRPC only.");
+        std::println(
+            "  set-loopback <address>  Store a loopback address on the server");
+        std::println(
+            "  get-loopback            Retrieve the stored loopback address");
+        std::println("  get-loopbacks <loopback>  Query SOT interface list for "
+                     "a loopback (IPv4 or IPv6)");
+        std::println("  grpc-proc-demo          Run async GrpcProc demo with "
+                     "periodic GetLoopback requests");
+        std::println("  add-del-list  [socket]  Read loopback → GetLoopbacks → "
+                     "ADD → DEL → LIST");
+        std::println("                          1. RequestLoopback  identify "
+                     "this SRA node in SOT");
+        std::println("                          2. GetLoopbacks     fetch NNI "
+                     "interface + prefix list");
+        std::println("                          3. ROUTE_ADD        install "
+                     "prefixes in ud_server");
+        std::println("                          4. ROUTE_DEL        delete "
+                     "each prefix from ud_server");
+        std::println("                          5. ROUTE_LIST       get "
+                     "resulting route table from ud_server");
+        std::println(
+            "                          (default socket: /tmp/ud_server.sock)");
+        std::println(
+            "  run [socket]            Full SRA daemon mode (continuous):");
+        std::println("                            1. RequestLoopback → SOT "
+                     "auth check via srmd");
+        std::println("                            2. GetLoopbacks / "
+                     "GetAllRoutes via srmd");
+        std::println("                            3. Build SingleRouteRequest "
+                     "(nni interfaces only)");
+        std::println("                            4. Send to ud_server via "
+                     "Unix-domain socket");
+        std::println(
+            "                            5. Loop until SIGINT/SIGTERM");
+        std::println("                          ud_server socket default: "
+                     "/tmp/ud_server.sock");
+        std::println("                          NOTE: ud_server is a separate "
+                     "process; srmd has");
+        std::println("                                no Unix-domain socket — "
+                     "gRPC only.");
         std::println("");
         std::cout << global << '\n';
         return vm.count("help") ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -3000,14 +3270,16 @@ int main(int argc, char* argv[])
 
     // CLI --timeout overrides config when non-zero
     const int timeoutCli = vm["timeout"].as<int>();
-    const int timeout = (timeoutCli > 0) ? timeoutCli : clientCfg.timeout_seconds;
+    const int timeout =
+        (timeoutCli > 0) ? timeoutCli : clientCfg.timeout_seconds;
 
     // CLI --tls overrides config
     const bool useTls = (vm.count("tls") > 0) || clientCfg.tls_enabled;
 
     // CLI --ca-cert overrides config
     const std::string caCertCli = vm["ca-cert"].as<std::string>();
-    const std::string caCert = caCertCli.empty() ? clientCfg.ca_cert : caCertCli;
+    const std::string caCert =
+        caCertCli.empty() ? clientCfg.ca_cert : caCertCli;
 
     const std::string command = vm["command"].as<std::string>();
 
@@ -3108,11 +3380,11 @@ int main(int argc, char* argv[])
 
     // Contexts (stack-allocated; threads hold raw pointers; RAII guard joins)
     StartupRouteCtx startupRouteCtx;
-    NeighCtx        startupNeighCtx;
-    NexthopCtx      startupNhCtx;
+    NeighCtx startupNeighCtx;
+    NexthopCtx startupNhCtx;
     startupRouteCtx.udpServer = &startupUdpServer;
     startupNeighCtx.udpServer = &startupUdpServer;
-    startupNhCtx.udpServer    = &startupUdpServer;
+    startupNhCtx.udpServer = &startupUdpServer;
 
     // ── Step 1: Populate route table (all IPv4 /32 unicast) ──────────────
     try
@@ -3125,15 +3397,23 @@ int main(int argc, char* argv[])
             {
                 if (kr.prefixLen != 32 || kr.type != RTN_UNICAST)
                     continue;
-                const std::string key = kr.destination + "|"
-                                      + kr.gateway    + "|"
-                                      + kr.interfaceName;
-                startupRouteCtx.routes[key] = WatchRoute{
-                    kr.destination, kr.gateway, kr.interfaceName,
-                    kr.interfaceIndex, kr.metric, kr.table,
-                    kr.protocol, {},
-                    static_cast<uint8_t>(kr.family), kr.prefixLen,
-                    0u, kr.scope, kr.type, 0u};
+                const std::string key =
+                    kr.destination + "|" + kr.gateway + "|" + kr.interfaceName;
+                startupRouteCtx.routes[key] =
+                    WatchRoute{kr.destination,
+                               kr.gateway,
+                               kr.interfaceName,
+                               kr.interfaceIndex,
+                               kr.metric,
+                               kr.table,
+                               kr.protocol,
+                               {},
+                               static_cast<uint8_t>(kr.family),
+                               kr.prefixLen,
+                               0u,
+                               kr.scope,
+                               kr.type,
+                               0u};
             }
         }
     }
@@ -3177,8 +3457,8 @@ int main(int argc, char* argv[])
     }
 
     // ── Step 5: Open live monitoring fds ─────────────────────────────────
-    g_startup_route_fd   = netlink_init();
-    g_startup_neigh_fd   = netlink_neigh_init();
+    g_startup_route_fd = netlink_init();
+    g_startup_neigh_fd = netlink_neigh_init();
     g_startup_nexthop_fd = netlink_nexthop_init();
 
     // ── Step 6: Launch background monitor threads ─────────────────────────
@@ -3189,31 +3469,25 @@ int main(int argc, char* argv[])
     if (g_startup_route_fd >= 0)
     {
         const int rfd = g_startup_route_fd;
-        startupRouteThread = std::thread(
-            [rfd, rctx = &startupRouteCtx]()
-            {
-                netlink_run(rfd, startupRouteLiveCb, rctx);
-            });
+        startupRouteThread = std::thread([rfd, rctx = &startupRouteCtx]() {
+            netlink_run(rfd, startupRouteLiveCb, rctx);
+        });
         g_startup_route_tid = startupRouteThread.native_handle();
     }
     if (g_startup_neigh_fd >= 0)
     {
         const int nfd = g_startup_neigh_fd;
-        startupNeighThread = std::thread(
-            [nfd, nctx = &startupNeighCtx]()
-            {
-                netlink_neigh_run(nfd, startupNeighLiveCb, nctx);
-            });
+        startupNeighThread = std::thread([nfd, nctx = &startupNeighCtx]() {
+            netlink_neigh_run(nfd, startupNeighLiveCb, nctx);
+        });
         g_startup_neigh_tid = startupNeighThread.native_handle();
     }
     if (g_startup_nexthop_fd >= 0)
     {
         const int nhfd = g_startup_nexthop_fd;
-        startupNhThread = std::thread(
-            [nhfd, nhctx = &startupNhCtx]()
-            {
-                netlink_nexthop_run(nhfd, startupNexthopLiveCb, nhctx);
-            });
+        startupNhThread = std::thread([nhfd, nhctx = &startupNhCtx]() {
+            netlink_nexthop_run(nhfd, startupNexthopLiveCb, nhctx);
+        });
         g_startup_nexthop_tid = startupNhThread.native_handle();
     }
 
@@ -3222,9 +3496,9 @@ int main(int argc, char* argv[])
     // path (normal return, exception, or early return from a command).
     struct StartupGuard
     {
-        std::thread&         routeThread;
-        std::thread&         neighThread;
-        std::thread&         nhThread;
+        std::thread& routeThread;
+        std::thread& neighThread;
+        std::thread& nhThread;
         sra::UdpTableServer& udpSrv;
 
         ~StartupGuard()
@@ -3249,23 +3523,29 @@ int main(int argc, char* argv[])
             }
             // Zero thread IDs before joining so a late signal delivery
             // cannot pthread_kill() an already-joined (invalid) thread.
-            g_startup_route_tid   = 0;
-            g_startup_neigh_tid   = 0;
+            g_startup_route_tid = 0;
+            g_startup_neigh_tid = 0;
             g_startup_nexthop_tid = 0;
-            if (routeThread.joinable()) routeThread.join();
-            if (neighThread.joinable()) neighThread.join();
-            if (nhThread.joinable())    nhThread.join();
+            if (routeThread.joinable())
+                routeThread.join();
+            if (neighThread.joinable())
+                neighThread.join();
+            if (nhThread.joinable())
+                nhThread.join();
             udpSrv.stop();
         }
-    } startupGuard{startupRouteThread, startupNeighThread,
-                   startupNhThread, startupUdpServer};
+    } startupGuard{startupRouteThread,
+                   startupNeighThread,
+                   startupNhThread,
+                   startupUdpServer};
 
     // ── Install default signal handler (commands install their own) ───────
     {
-        struct sigaction sa{};
+        struct sigaction sa
+        {};
         sa.sa_handler = startupSigHandler;
         sigemptyset(&sa.sa_mask);
-        sigaction(SIGINT,  &sa, nullptr);
+        sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
     }
 
@@ -3319,14 +3599,16 @@ int main(int argc, char* argv[])
     // itself after displaying the initial kernel route table.
     // -----------------------------------------------------------------------
     std::string activeLoopback = clientCfg.loopback;
-    if (command != "watch" && command != "neighbors" && command != "nexthops"
-        && command != "add-del-list")
+    if (command != "watch" && command != "neighbors" && command != "nexthops" &&
+        command != "add-del-list")
     {
-        std::println("[Startup] Requesting loopback from server based on client IP...");
+        std::println(
+            "[Startup] Requesting loopback from server based on client IP...");
         auto lbResult = client.requestLoopback();
         if (lbResult)
         {
-            std::println("[Startup] Loopback received from server: '{}'", *lbResult);
+            std::println("[Startup] Loopback received from server: '{}'",
+                         *lbResult);
             activeLoopback = *lbResult;
         }
         else
@@ -3493,7 +3775,8 @@ int main(int argc, char* argv[])
     {
         if (args.empty())
         {
-            std::println(std::cerr, "Usage: sra get-loopbacks <loopback-address>");
+            std::println(std::cerr,
+                         "Usage: sra get-loopbacks <loopback-address>");
             return EXIT_FAILURE;
         }
         auto result = client.getLoopbacks(args[0]);
@@ -3520,8 +3803,10 @@ int main(int argc, char* argv[])
                 for (const auto& pfx : iface.prefixes())
                 {
                     std::println("    {} weight={} role='{}' desc='{}'",
-                                 pfx.prefix(), pfx.weight(),
-                                 pfx.role(), pfx.description());
+                                 pfx.prefix(),
+                                 pfx.weight(),
+                                 pfx.role(),
+                                 pfx.description());
                 }
             }
         }
@@ -3544,15 +3829,19 @@ int main(int argc, char* argv[])
     //   • srmd   — gRPC over TCP (--server flag); route management / SOT auth.
     //   • ud_server — separate process; Unix-domain socket (first positional
     //                 arg, default /tmp/ud_server.sock); receives VRF route-add
-    //                 commands encoded in the udproto/routeproto/cmdproto stack.
+    //                 commands encoded in the udproto/routeproto/cmdproto
+    //                 stack.
     //   srmd has NO Unix-domain socket — gRPC only.
     //
     // Startup sequence:
     //   1. Start GrpcProc background thread (all gRPC calls go to srmd).
-    //   2. [srmd gRPC] RequestLoopback → PERMISSION_DENIED = IP not in SOT → exit.
-    //   3. [srmd gRPC] GetLoopbacks(loopback) → log VRF/interface/prefix config.
+    //   2. [srmd gRPC] RequestLoopback → PERMISSION_DENIED = IP not in SOT →
+    //   exit.
+    //   3. [srmd gRPC] GetLoopbacks(loopback) → log VRF/interface/prefix
+    //   config.
     //   4. Display nexthop / neighbor / /32 route tables (kernel netlink).
-    //   5. [srmd gRPC] GetAllRoutes → build SingleRouteRequest for nni interfaces,
+    //   5. [srmd gRPC] GetAllRoutes → build SingleRouteRequest for nni
+    //   interfaces,
     //      nexthop_id looked up from the kernel nexthop table.
     //   6. [ud_server Unix socket] Submit SingleRouteRequest via SraUdpClient.
     //   7. Main loop: keep running until SIGINT/SIGTERM.
@@ -3565,15 +3854,16 @@ int main(int argc, char* argv[])
     {
         // Install signal handler for the run command.
         {
-            struct sigaction sa{};
+            struct sigaction sa
+            {};
             sa.sa_handler = runSigHandler;
             sigemptyset(&sa.sa_mask);
-            sigaction(SIGINT,  &sa, nullptr);
+            sigaction(SIGINT, &sa, nullptr);
             sigaction(SIGTERM, &sa, nullptr);
         }
 
-        std::println("[run] SRA daemon starting — server={} tls={}",
-                     server, useTls);
+        std::println(
+            "[run] SRA daemon starting — server={} tls={}", server, useTls);
 
         // ── Step 1: Start GrpcProc (non-blocking gRPC) ──────────────────────
         sra::GrpcProc grpcProc(client, /*autoStart=*/true);
@@ -3608,8 +3898,7 @@ int main(int argc, char* argv[])
         std::println("[run] [gRPC] Submitting GetLoopbacks('{}')…", loopback);
         const uint64_t glId =
             grpcProc.submit(sra::GetLoopbacksParams{loopback});
-        auto glResp =
-            grpcProc.waitForResponse(glId, std::chrono::seconds(30));
+        auto glResp = grpcProc.waitForResponse(glId, std::chrono::seconds(30));
         if (glResp)
         {
             const auto& glResult =
@@ -3623,20 +3912,24 @@ int main(int argc, char* argv[])
                 {
                     std::println("[run]   iface='{}' type={} local={} "
                                  "nexthop={} weight={}",
-                                 ifc.name(), ifc.type(), ifc.local_address(),
-                                 ifc.nexthop().empty() ? "(none)" : ifc.nexthop(),
+                                 ifc.name(),
+                                 ifc.type(),
+                                 ifc.local_address(),
+                                 ifc.nexthop().empty() ? "(none)"
+                                                       : ifc.nexthop(),
                                  ifc.weight());
                     for (const auto& pfx : ifc.prefixes())
                     {
                         std::println("[run]     prefix={} weight={} role={}",
-                                     pfx.prefix(), pfx.weight(), pfx.role());
+                                     pfx.prefix(),
+                                     pfx.weight(),
+                                     pfx.role());
                     }
                 }
             }
             else
             {
-                std::println("[run] GetLoopbacks failed: {}",
-                             glResult.error());
+                std::println("[run] GetLoopbacks failed: {}", glResult.error());
             }
         }
 
@@ -3648,9 +3941,8 @@ int main(int argc, char* argv[])
             std::println("[run]   nexthop id={} gw='{}' oif='{}' proto={}",
                          id,
                          nh.gateway.empty() ? "-" : nh.gateway,
-                         nh.oif_name.empty()
-                             ? std::to_string(nh.oif)
-                             : nh.oif_name,
+                         nh.oif_name.empty() ? std::to_string(nh.oif)
+                                             : nh.oif_name,
                          static_cast<unsigned>(nh.protocol));
         }
 
@@ -3662,8 +3954,7 @@ int main(int argc, char* argv[])
         // ── Step 5: GetAllRoutes ─────────────────────────────────────────────
         std::println("[run] [gRPC] Submitting GetAllRoutes…");
         const uint64_t arId = grpcProc.submit(sra::GetAllRoutesParams{});
-        auto arResp =
-            grpcProc.waitForResponse(arId, std::chrono::seconds(30));
+        auto arResp = grpcProc.waitForResponse(arId, std::chrono::seconds(30));
         if (!arResp)
         {
             std::println(std::cerr, "[run] GetAllRoutes: timeout");
@@ -3674,15 +3965,15 @@ int main(int argc, char* argv[])
             std::get<sra::GetAllRoutesResult>(arResp->payload);
         if (!arResult)
         {
-            std::println(std::cerr, "[run] GetAllRoutes failed: {}",
-                         arResult.error());
+            std::println(
+                std::cerr, "[run] GetAllRoutes failed: {}", arResult.error());
             return EXIT_FAILURE;
         }
 
         printAllRoutes(*arResult);
 
-        // ── Step 6: Build SingleRouteRequest from GetAllRoutes (nni only) ─────
-        // For each VrfRoute with interface_type == "nni":
+        // ── Step 6: Build SingleRouteRequest from GetAllRoutes (nni only)
+        // ───── For each VrfRoute with interface_type == "nni":
         //   • look up nexthop_id from the kernel nexthop table by gateway IP
         //   • convert each prefix string to binary PrefixIpv4 entries
         const std::string udSocketPath =
@@ -3690,8 +3981,9 @@ int main(int argc, char* argv[])
 
         sra::SraUdpClient vrfClient(udSocketPath);
         vrfClient.start();
-        std::println("[run] SraUdpClient started (non-blocking Unix socket='{}')",
-                     udSocketPath);
+        std::println(
+            "[run] SraUdpClient started (non-blocking Unix socket='{}')",
+            udSocketPath);
 
         // ── Load VRF table and arm the nexthop event handler ─────────────────
         // Future nexthop ADDED / CHANGED / REMOVED events will look up the
@@ -3699,9 +3991,9 @@ int main(int argc, char* argv[])
         // (SINGLE_ROUTE, type=1) to ud_server whenever a match is found.
         sra::VrfTable vrfTable;
         vrfTable.load(*arResult);
-        startupNhCtx.vrfTable  = &vrfTable;
+        startupNhCtx.vrfTable = &vrfTable;
         startupNhCtx.vrfClient = &vrfClient;
-        startupNhCtx.neighCtx  = &startupNeighCtx;
+        startupNhCtx.neighCtx = &startupNeighCtx;
         std::println("[run] VRF table loaded: {} entry/entries; "
                      "nexthop event handler armed",
                      vrfTable.size());
@@ -3721,7 +4013,8 @@ int main(int argc, char* argv[])
             if (!neighborHasIp(startupNeighCtx, route.nexthop()))
             {
                 std::println("[run] nexthop '{}' absent from adjacency table — "
-                             "sending ICMP echo request", route.nexthop());
+                             "sending ICMP echo request",
+                             route.nexthop());
                 sendIcmpEchoRequest(route.nexthop());
             }
 
@@ -3737,7 +4030,8 @@ int main(int argc, char* argv[])
             }
 
             // Parse nexthop address into binary form.
-            struct in_addr nhAddr{};
+            struct in_addr nhAddr
+            {};
             if (::inet_pton(AF_INET, route.nexthop().c_str(), &nhAddr) != 1)
             {
                 std::println(std::cerr,
@@ -3752,13 +4046,14 @@ int main(int argc, char* argv[])
             // Interface name (null-padded fixed array).
             const std::string& ifn = route.interface_name();
             for (std::size_t k = 0;
-                 k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
+                 k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+                 ++k)
             {
                 iface.iface_name[k] = ifn[k];
             }
-            iface.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
-                                       nhBytes[2], nhBytes[3]};
-            iface.nexthop_id_ipv4   = nexthopId;
+            iface.nexthop_addr_ipv4 = {
+                nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
+            iface.nexthop_id_ipv4 = nexthopId;
 
             // Convert each prefix string "A.B.C.D/N" to PrefixIpv4.
             for (const auto& pfx : route.prefixes())
@@ -3771,7 +4066,8 @@ int main(int argc, char* argv[])
                 const auto maskLen = static_cast<std::uint8_t>(
                     std::stoul(pfxStr.substr(slash + 1)));
 
-                struct in_addr pfxAddr{};
+                struct in_addr pfxAddr
+                {};
                 if (::inet_pton(AF_INET, addrStr.c_str(), &pfxAddr) != 1)
                     continue;
                 const auto* pfxBytes =
@@ -3784,8 +4080,10 @@ int main(int argc, char* argv[])
 
             std::println("[run] nni interface: iface='{}' nexthop='{}' "
                          "nexthop_id={} prefixes={}",
-                         route.interface_name(), route.nexthop(),
-                         nexthopId, iface.prefixes.size());
+                         route.interface_name(),
+                         route.nexthop(),
+                         nexthopId,
+                         iface.prefixes.size());
 
             singleReq.interfaces.push_back(std::move(iface));
             ++nniCount;
@@ -3793,8 +4091,10 @@ int main(int argc, char* argv[])
 
         if (nniCount > 0)
         {
-            std::println("[run] Submitting SingleRouteRequest ({} nni interface(s)) "
-                         "to Unix socket…", nniCount);
+            std::println(
+                "[run] Submitting SingleRouteRequest ({} nni interface(s)) "
+                "to Unix socket…",
+                nniCount);
             vrfClient.submitAdd(std::move(singleReq));
         }
         else
@@ -3803,11 +4103,11 @@ int main(int argc, char* argv[])
                          "response — no route-add request sent");
         }
 
-        // ── Step 7: Main daemon loop ──────────────────────────────────────────
-        // Netlink background threads (routes, neighbors, nexthops) keep
-        // running and update the in-memory tables automatically.
-        // The gRPC channel stays open via GrpcProc.
-        // The SraUdpClient thread awaits further submit() calls.
+        // ── Step 7: Main daemon loop
+        // ────────────────────────────────────────── Netlink background threads
+        // (routes, neighbors, nexthops) keep running and update the in-memory
+        // tables automatically. The gRPC channel stays open via GrpcProc. The
+        // SraUdpClient thread awaits further submit() calls.
         std::println("[run] Daemon running (Ctrl-C to stop)…");
         while (!g_run_stop)
         {
@@ -3823,22 +4123,26 @@ int main(int argc, char* argv[])
         //
         // Shutdown sequence for each background thread:
         //  1. close(fd) in signal handler — marks the fd as invalid.
-        //  2. pthread_kill(tid, SIGINT)   — interrupts blocking recv() with EINTR.
+        //  2. pthread_kill(tid, SIGINT)   — interrupts blocking recv() with
+        //  EINTR.
         //  3. netlink_*_run EINTR path    — retries recv() on now-closed fd.
-        //  4. recv() returns EBADF        — netlink_*_run returns -1, thread exits.
+        //  4. recv() returns EBADF        — netlink_*_run returns -1, thread
+        //  exits.
         //  5. StartupGuard::~StartupGuard() joins the thread successfully.
         //
         // Note: shutdown(SHUT_RD) on AF_NETLINK returns EOPNOTSUPP on Linux;
         // it is kept as a best-effort attempt for other socket types.
-        auto stopNetlinkFd = [](volatile int& fd, void (*closeFn)(int)) noexcept {
-            if (fd >= 0) {
+        auto stopNetlinkFd = [](volatile int& fd,
+                                void (*closeFn)(int)) noexcept {
+            if (fd >= 0)
+            {
                 ::shutdown(fd, SHUT_RD);
                 closeFn(fd);
                 fd = -1;
             }
         };
-        stopNetlinkFd(g_startup_route_fd,   netlink_close);
-        stopNetlinkFd(g_startup_neigh_fd,   netlink_neigh_close);
+        stopNetlinkFd(g_startup_route_fd, netlink_close);
+        stopNetlinkFd(g_startup_neigh_fd, netlink_neigh_close);
         stopNetlinkFd(g_startup_nexthop_fd, netlink_nexthop_close);
 
         vrfClient.stop();
@@ -3868,14 +4172,17 @@ int main(int argc, char* argv[])
         }
         else
         {
-            std::println("[add-del-list] loopback from srmd: {} (using config: '{}')",
-                         lbResult.error(), activeLoopback);
+            std::println(
+                "[add-del-list] loopback from srmd: {} (using config: '{}')",
+                lbResult.error(),
+                activeLoopback);
         }
 
         if (activeLoopback.empty())
         {
-            std::println(std::cerr,
-                         "[add-del-list] no loopback available — cannot fetch prefixes");
+            std::println(
+                std::cerr,
+                "[add-del-list] no loopback available — cannot fetch prefixes");
             vrfClient.stop();
             return EXIT_FAILURE;
         }
@@ -3888,7 +4195,8 @@ int main(int argc, char* argv[])
         if (glResult)
         {
             std::println("[add-del-list] GetLoopbacks: {} — {} interface(s)",
-                         glResult->message(), glResult->interfaces_size());
+                         glResult->message(),
+                         glResult->interfaces_size());
 
             // ── Step 3: Build SingleRouteRequest (nni interfaces only) ───────
             cmdproto::SingleRouteRequest singleReq;
@@ -3899,7 +4207,8 @@ int main(int argc, char* argv[])
                 if (li.nexthop().empty())
                     continue;
 
-                struct in_addr nhAddr{};
+                struct in_addr nhAddr
+                {};
                 if (::inet_pton(AF_INET, li.nexthop().c_str(), &nhAddr) != 1)
                     continue;
                 const auto* nhBytes =
@@ -3908,11 +4217,12 @@ int main(int argc, char* argv[])
                 cmdproto::Interface entry{};
                 const std::string& ifn = li.name();
                 for (std::size_t k = 0;
-                     k < cmdproto::IFACE_NAME_SIZE && k < ifn.size(); ++k)
+                     k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+                     ++k)
                     entry.iface_name[k] = ifn[k];
-                entry.nexthop_addr_ipv4 = {nhBytes[0], nhBytes[1],
-                                           nhBytes[2], nhBytes[3]};
-                entry.nexthop_id_ipv4   = 0;
+                entry.nexthop_addr_ipv4 = {
+                    nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
+                entry.nexthop_id_ipv4 = 0;
 
                 for (const auto& pfx : li.prefixes())
                 {
@@ -3920,8 +4230,10 @@ int main(int argc, char* argv[])
                     const auto slash = pfxStr.rfind('/');
                     if (slash == std::string::npos)
                         continue;
-                    struct in_addr pfxAddr{};
-                    if (::inet_pton(AF_INET, pfxStr.substr(0, slash).c_str(),
+                    struct in_addr pfxAddr
+                    {};
+                    if (::inet_pton(AF_INET,
+                                    pfxStr.substr(0, slash).c_str(),
                                     &pfxAddr) != 1)
                         continue;
                     const auto* pb =
@@ -3932,8 +4244,11 @@ int main(int argc, char* argv[])
                         {pb[0], pb[1], pb[2], pb[3]}, maskLen});
                 }
 
-                std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
-                             ifn, li.nexthop(), entry.prefixes.size());
+                std::println(
+                    "[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
+                    ifn,
+                    li.nexthop(),
+                    entry.prefixes.size());
 
                 singleReq.interfaces.push_back(std::move(entry));
             }
@@ -3941,22 +4256,25 @@ int main(int argc, char* argv[])
             if (!singleReq.interfaces.empty())
             {
                 // ── Step 4: ROUTE_ADD ────────────────────────────────────────
-                std::println("[add-del-list] [ADD] submitting {} nni interface(s) "
-                             "to ud_server…", singleReq.interfaces.size());
+                std::println(
+                    "[add-del-list] [ADD] submitting {} nni interface(s) "
+                    "to ud_server…",
+                    singleReq.interfaces.size());
 
                 auto savedInterfaces = singleReq.interfaces;
                 vrfClient.submitAdd(std::move(singleReq));
 
                 // ── Step 5: ROUTE_DEL (one per prefix) ───────────────────────
-                std::println("[add-del-list] [DEL] deleting each added prefix…");
+                std::println(
+                    "[add-del-list] [DEL] deleting each added prefix…");
                 for (const auto& iface : savedInterfaces)
                 {
                     for (const auto& pfx : iface.prefixes)
                     {
                         cmdproto::RouteDelParams delParams;
-                        delParams.dst_addr   = pfx.addr;
+                        delParams.dst_addr = pfx.addr;
                         delParams.prefix_len = pfx.mask_len;
-                        delParams.gateway    = iface.nexthop_addr_ipv4;
+                        delParams.gateway = iface.nexthop_addr_ipv4;
                         vrfClient.submitDelete(delParams);
                     }
                 }
@@ -3973,7 +4291,8 @@ int main(int argc, char* argv[])
         }
         else
         {
-            std::println(std::cerr, "[add-del-list] GetLoopbacks failed: {}",
+            std::println(std::cerr,
+                         "[add-del-list] GetLoopbacks failed: {}",
                          glResult.error());
         }
 

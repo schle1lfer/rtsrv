@@ -26,8 +26,8 @@
 #include <arpa/inet.h>
 #include <asm/types.h>
 #include <errno.h>
-#include <linux/netlink.h>
 #include <linux/neighbour.h>
+#include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <stdint.h>
@@ -46,10 +46,9 @@
 
 /* ── NDA_RTA / NDA_PAYLOAD are not always exported in user-space headers ─── */
 #ifndef NDA_RTA
-#define NDA_RTA(r) \
-    ((struct rtattr *)(((char *)(r)) + NLMSG_ALIGN(sizeof(struct ndmsg))))
-#define NDA_PAYLOAD(n) \
-    NLMSG_PAYLOAD((n), sizeof(struct ndmsg))
+#define NDA_RTA(r)                                                             \
+    ((struct rtattr*)(((char*)(r)) + NLMSG_ALIGN(sizeof(struct ndmsg))))
+#define NDA_PAYLOAD(n) NLMSG_PAYLOAD((n), sizeof(struct ndmsg))
 #endif
 
 /* ── NDA_PROTOCOL may not be present in older kernel headers ─────────────── */
@@ -68,23 +67,22 @@
  * @param cb        Caller-supplied event callback.
  * @param user_data Forwarded to @p cb.
  */
-static void nl_neigh_dispatch(const struct nlmsghdr *nlh,
-                               netlink_neigh_cb_t    cb,
-                               void                 *user_data)
+static void nl_neigh_dispatch(const struct nlmsghdr* nlh,
+                              netlink_neigh_cb_t cb,
+                              void* user_data)
 {
     /* Sanity: message must be large enough to contain ndmsg. */
     if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct ndmsg)))
         return;
 
-    const struct ndmsg *ndm = (const struct ndmsg *)NLMSG_DATA(nlh);
+    const struct ndmsg* ndm = (const struct ndmsg*)NLMSG_DATA(nlh);
 
     /* Map nlmsg_type + nlmsg_flags to event type. */
     netlink_neigh_event_t event;
     if (nlh->nlmsg_type == RTM_NEWNEIGH)
     {
-        event = (nlh->nlmsg_flags & NLM_F_REPLACE)
-                    ? NETLINK_NEIGH_CHANGED
-                    : NETLINK_NEIGH_ADDED;
+        event = (nlh->nlmsg_flags & NLM_F_REPLACE) ? NETLINK_NEIGH_CHANGED
+                                                   : NETLINK_NEIGH_ADDED;
     }
     else if (nlh->nlmsg_type == RTM_DELNEIGH)
     {
@@ -98,19 +96,18 @@ static void nl_neigh_dispatch(const struct nlmsghdr *nlh,
     /* Populate the descriptor from the ndmsg header. */
     netlink_neigh_t n;
     memset(&n, 0, sizeof(n));
-    n.family  = ndm->ndm_family;
+    n.family = ndm->ndm_family;
     n.ifindex = ndm->ndm_ifindex;
-    n.state   = ndm->ndm_state;
-    n.flags   = ndm->ndm_flags;
-    n.type    = ndm->ndm_type;
+    n.state = ndm->ndm_state;
+    n.flags = ndm->ndm_flags;
+    n.type = ndm->ndm_type;
 
     if (n.ifindex > 0)
         if_indextoname((unsigned)n.ifindex, n.ifname);
 
     /* Walk NDA_* attributes. */
     unsigned int attrlen = (unsigned int)NDA_PAYLOAD(nlh);
-    for (const struct rtattr *rta = NDA_RTA(ndm);
-         RTA_OK(rta, attrlen);
+    for (const struct rtattr* rta = NDA_RTA(ndm); RTA_OK(rta, attrlen);
          rta = RTA_NEXT(rta, attrlen))
     {
         /* Strip nested/network-byte-order flags from the type. */
@@ -131,8 +128,7 @@ static void nl_neigh_dispatch(const struct nlmsghdr *nlh,
             }
             break;
 
-        case NDA_LLADDR:
-        {
+        case NDA_LLADDR: {
             size_t ll = RTA_PAYLOAD(rta);
             if (ll > sizeof(n.lladdr))
                 ll = sizeof(n.lladdr);
@@ -147,9 +143,9 @@ static void nl_neigh_dispatch(const struct nlmsghdr *nlh,
                 struct nda_cacheinfo ci;
                 memcpy(&ci, RTA_DATA(rta), sizeof(ci));
                 n.confirmed_ms = ci.ndm_confirmed;
-                n.used_ms      = ci.ndm_used;
-                n.updated_ms   = ci.ndm_updated;
-                n.refcnt       = ci.ndm_refcnt;
+                n.used_ms = ci.ndm_used;
+                n.updated_ms = ci.ndm_updated;
+                n.refcnt = ci.ndm_refcnt;
             }
             break;
 
@@ -200,15 +196,15 @@ static void nl_neigh_dispatch(const struct nlmsghdr *nlh,
  * @param done      Set to 1 when NLMSG_DONE is encountered; may be NULL.
  * @return Number of neighbor events dispatched, or -1 on NLMSG_ERROR.
  */
-static int nl_neigh_process_buf(const char        *buf,
-                                ssize_t            n,
+static int nl_neigh_process_buf(const char* buf,
+                                ssize_t n,
                                 netlink_neigh_cb_t cb,
-                                void              *user_data,
-                                int               *done)
+                                void* user_data,
+                                int* done)
 {
     int count = 0;
 
-    for (const struct nlmsghdr *nlh = (const struct nlmsghdr *)buf;
+    for (const struct nlmsghdr* nlh = (const struct nlmsghdr*)buf;
          NLMSG_OK(nlh, (unsigned int)n);
          nlh = NLMSG_NEXT(nlh, n))
     {
@@ -221,8 +217,7 @@ static int nl_neigh_process_buf(const char        *buf,
         if (nlh->nlmsg_type == NLMSG_ERROR)
             return -1;
 
-        if (nlh->nlmsg_type == RTM_NEWNEIGH ||
-            nlh->nlmsg_type == RTM_DELNEIGH)
+        if (nlh->nlmsg_type == RTM_NEWNEIGH || nlh->nlmsg_type == RTM_DELNEIGH)
         {
             nl_neigh_dispatch(nlh, cb, user_data);
             ++count;
@@ -238,9 +233,7 @@ static int nl_neigh_process_buf(const char        *buf,
 
 int netlink_neigh_init(void)
 {
-    int fd = socket(AF_NETLINK,
-                    SOCK_RAW | SOCK_CLOEXEC,
-                    NETLINK_ROUTE);
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
     if (fd < 0)
         return -1;
 
@@ -252,7 +245,7 @@ int netlink_neigh_init(void)
     addr.nl_family = AF_NETLINK;
     addr.nl_groups = 0;
 
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
         int saved = errno;
         close(fd);
@@ -263,8 +256,8 @@ int netlink_neigh_init(void)
     /* Subscribe to the neighbor multicast group.  Non-fatal: in restricted
      * environments the dump still works and live events are simply absent. */
     int group = RTNLGRP_NEIGH;
-    if (setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
-                   &group, sizeof(group)) < 0)
+    if (setsockopt(
+            fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group, sizeof(group)) < 0)
     {
         fprintf(stderr,
                 "netlink_neigh: multicast subscribe failed "
@@ -275,28 +268,28 @@ int netlink_neigh_init(void)
     return fd;
 }
 
-int netlink_neigh_dump(int fd, netlink_neigh_cb_t cb, void *user_data)
+int netlink_neigh_dump(int fd, netlink_neigh_cb_t cb, void* user_data)
 {
     /* Build RTM_GETNEIGH dump request for all address families. */
     struct
     {
         struct nlmsghdr nlh;
-        struct ndmsg    ndm;
+        struct ndmsg ndm;
     } req;
 
     memset(&req, 0, sizeof(req));
-    req.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct ndmsg));
-    req.nlh.nlmsg_type  = RTM_GETNEIGH;
+    req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
+    req.nlh.nlmsg_type = RTM_GETNEIGH;
     req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-    req.nlh.nlmsg_seq   = 1;
-    req.ndm.ndm_family  = AF_UNSPEC; /* All families */
+    req.nlh.nlmsg_seq = 1;
+    req.ndm.ndm_family = AF_UNSPEC; /* All families */
 
     if (send(fd, &req, req.nlh.nlmsg_len, 0) < 0)
         return -1;
 
     char buf[NL_BUF_SIZE];
-    int  total = 0;
-    int  done  = 0;
+    int total = 0;
+    int done = 0;
 
     while (!done)
     {
@@ -319,7 +312,7 @@ int netlink_neigh_dump(int fd, netlink_neigh_cb_t cb, void *user_data)
     return total;
 }
 
-int netlink_neigh_run(int fd, netlink_neigh_cb_t cb, void *user_data)
+int netlink_neigh_run(int fd, netlink_neigh_cb_t cb, void* user_data)
 {
     char buf[NL_BUF_SIZE];
 

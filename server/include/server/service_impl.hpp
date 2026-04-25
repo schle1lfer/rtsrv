@@ -155,9 +155,10 @@ public:
      * SOT nodes_by_loopback map, and returns the node's loopback IPv4.
      * Returns STATUS_CODE_NOT_FOUND when the client IP is not in the SOT.
      */
-    grpc::Status RequestLoopback(grpc::ServerContext* ctx,
-                                 const srmd::v1::RequestLoopbackRequest* req,
-                                 srmd::v1::RequestLoopbackResponse* resp) override;
+    grpc::Status
+    RequestLoopback(grpc::ServerContext* ctx,
+                    const srmd::v1::RequestLoopbackRequest* req,
+                    srmd::v1::RequestLoopbackResponse* resp) override;
 
     /**
      * @brief Returns all VRF routes for the calling client.
@@ -195,8 +196,8 @@ private:
     std::string serverVersion_;  ///< Binary version for Echo responses.
     SotConfig sotConfig_;        ///< SOT configuration for authorisation.
 
-    mutable std::mutex loopbackMutex_;  ///< Guards loopbackAddress_.
-    std::string loopbackAddress_;       ///< Loopback address set by clients.
+    mutable std::mutex loopbackMutex_; ///< Guards loopbackAddress_.
+    std::string loopbackAddress_;      ///< Loopback address set by clients.
 };
 
 } // namespace srmd

@@ -44,13 +44,13 @@ namespace sra
 class VrfTable
 {
 public:
-    VrfTable()  = default;
+    VrfTable() = default;
     ~VrfTable() = default;
 
-    VrfTable(const VrfTable&)            = delete;
+    VrfTable(const VrfTable&) = delete;
     VrfTable& operator=(const VrfTable&) = delete;
-    VrfTable(VrfTable&&)                 = delete;
-    VrfTable& operator=(VrfTable&&)      = delete;
+    VrfTable(VrfTable&&) = delete;
+    VrfTable& operator=(VrfTable&&) = delete;
 
     // -----------------------------------------------------------------------
     // Write operations

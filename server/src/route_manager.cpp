@@ -11,8 +11,8 @@
 #include <chrono>
 #include <format>
 #include <fstream>
-#include <ranges>
 #include <mutex>
+#include <ranges>
 
 namespace srmd
 {

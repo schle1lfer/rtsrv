@@ -32,17 +32,17 @@
  *
  * Each concrete request carries a payload variant member that selects the RPC:
  *
- * | Payload type            | RPC called           | Response payload type     |
- * |-------------------------|----------------------|---------------------------|
- * | @ref sra::EchoParams    | Echo                 | @ref sra::EchoResult      |
- * | @ref sra::HeartbeatParams | Heartbeat          | @ref sra::HeartbeatResult |
- * | @ref sra::AddRouteParams | AddRoute            | @ref sra::AddRouteResult  |
- * | @ref sra::RemoveRouteParams | RemoveRoute      | @ref sra::RemoveRouteResult |
- * | @ref sra::GetRouteParams | GetRoute            | @ref sra::GetRouteResult  |
- * | @ref sra::ListRoutesParams | ListRoutes        | @ref sra::ListRoutesResult |
- * | @ref sra::SetLoopbackParams | SetLoopback      | @ref sra::SetLoopbackResult |
- * | @ref sra::GetLoopbackParams | GetLoopback      | @ref sra::GetLoopbackResult |
- * | @ref sra::GetLoopbacksParams | GetLoopbacks    | @ref sra::GetLoopbacksResult |
+ * | Payload type          | RPC           | Result type            |
+ * |-----------------------|---------------|------------------------|
+ * | EchoParams            | Echo          | EchoResult             |
+ * | HeartbeatParams       | Heartbeat     | HeartbeatResult        |
+ * | AddRouteParams        | AddRoute      | AddRouteResult         |
+ * | RemoveRouteParams     | RemoveRoute   | RemoveRouteResult      |
+ * | GetRouteParams        | GetRoute      | GetRouteResult         |
+ * | ListRoutesParams      | ListRoutes    | ListRoutesResult       |
+ * | SetLoopbackParams     | SetLoopback   | SetLoopbackResult      |
+ * | GetLoopbackParams     | GetLoopback   | GetLoopbackResult      |
+ * | GetLoopbacksParams    | GetLoopbacks  | GetLoopbacksResult     |
  *
  * @version 1.0
  */
@@ -94,12 +94,14 @@ struct HeartbeatParams
  */
 struct AddRouteParams
 {
-    std::string destination;  ///< Destination prefix (CIDR or "default").
-    std::string gateway;      ///< Next-hop gateway (may be empty).
+    std::string destination;   ///< Destination prefix (CIDR or "default").
+    std::string gateway;       ///< Next-hop gateway (may be empty).
     std::string interfaceName; ///< Outgoing interface (may be empty).
-    uint32_t metric{0};       ///< Route metric (lower = preferred).
-    srmd::v1::AddressFamily family{srmd::v1::ADDRESS_FAMILY_IPV4}; ///< Address family.
-    srmd::v1::RouteProtocol protocol{srmd::v1::ROUTE_PROTOCOL_STATIC}; ///< Origin protocol.
+    uint32_t metric{0};        ///< Route metric (lower = preferred).
+    srmd::v1::AddressFamily family{
+        srmd::v1::ADDRESS_FAMILY_IPV4}; ///< Address family.
+    srmd::v1::RouteProtocol protocol{
+        srmd::v1::ROUTE_PROTOCOL_STATIC}; ///< Origin protocol.
 };
 
 /**
@@ -137,7 +139,8 @@ struct SetLoopbackParams
 /**
  * @brief Payload for a GetLoopback RPC request (no parameters).
  */
-struct GetLoopbackParams {};
+struct GetLoopbackParams
+{};
 
 /**
  * @brief Payload for a GetLoopbacks RPC request.
@@ -150,30 +153,31 @@ struct GetLoopbacksParams
 /**
  * @brief Payload for a RequestLoopback RPC request (no parameters).
  */
-struct RequestLoopbackParams {};
+struct RequestLoopbackParams
+{};
 
 /**
  * @brief Payload for a GetAllRoutes RPC request (no parameters).
  */
-struct GetAllRoutesParams {};
+struct GetAllRoutesParams
+{};
 
 /**
  * @brief Discriminated union of all possible request payloads.
  *
  * The active alternative determines which RPC the grpc_proc thread will call.
  */
-using RequestPayload = std::variant<
-    EchoParams,
-    HeartbeatParams,
-    AddRouteParams,
-    RemoveRouteParams,
-    GetRouteParams,
-    ListRoutesParams,
-    SetLoopbackParams,
-    GetLoopbackParams,
-    GetLoopbacksParams,
-    RequestLoopbackParams, // 9
-    GetAllRoutesParams>;   // 10
+using RequestPayload = std::variant<EchoParams,
+                                    HeartbeatParams,
+                                    AddRouteParams,
+                                    RemoveRouteParams,
+                                    GetRouteParams,
+                                    ListRoutesParams,
+                                    SetLoopbackParams,
+                                    GetLoopbackParams,
+                                    GetLoopbacksParams,
+                                    RequestLoopbackParams, // 9
+                                    GetAllRoutesParams>;   // 10
 
 // ---------------------------------------------------------------------------
 // Response result types
@@ -195,7 +199,8 @@ using RemoveRouteResult = std::expected<void, std::string>;
 using GetRouteResult = std::expected<srmd::v1::Route, std::string>;
 
 /** @brief Result type for a completed ListRoutes RPC. */
-using ListRoutesResult = std::expected<std::vector<srmd::v1::Route>, std::string>;
+using ListRoutesResult =
+    std::expected<std::vector<srmd::v1::Route>, std::string>;
 
 /** @brief Result type for a completed SetLoopback RPC. */
 using SetLoopbackResult = std::expected<std::string, std::string>;
@@ -237,18 +242,18 @@ using GetAllRoutesResult =
  *         9  RequestLoopbackResult (= expected<string, string>)
  *        10  GetAllRoutesResult
  */
-using ResponsePayload = std::variant<
-    EchoResult,              // 0
-    HeartbeatResult,         // 1
-    AddRouteResult,          // 2  (= expected<Route, string>)
-    RemoveRouteResult,       // 3
-    GetRouteResult,          // 4  (= expected<Route, string>)
-    ListRoutesResult,        // 5
-    SetLoopbackResult,       // 6  (= expected<string, string>)
-    GetLoopbackResult,       // 7  (= expected<string, string>)
-    GetLoopbacksResult,      // 8
-    RequestLoopbackResult,   // 9  (= expected<string, string>)
-    GetAllRoutesResult>;     // 10
+using ResponsePayload =
+    std::variant<EchoResult,            // 0
+                 HeartbeatResult,       // 1
+                 AddRouteResult,        // 2  (= expected<Route, string>)
+                 RemoveRouteResult,     // 3
+                 GetRouteResult,        // 4  (= expected<Route, string>)
+                 ListRoutesResult,      // 5
+                 SetLoopbackResult,     // 6  (= expected<string, string>)
+                 GetLoopbackResult,     // 7  (= expected<string, string>)
+                 GetLoopbacksResult,    // 8
+                 RequestLoopbackResult, // 9  (= expected<string, string>)
+                 GetAllRoutesResult>;   // 10
 
 // ---------------------------------------------------------------------------
 // Request structure
@@ -263,7 +268,7 @@ using ResponsePayload = std::variant<
  */
 struct GrpcRequest
 {
-    uint64_t       id;      ///< Unique request identifier assigned at submission.
+    uint64_t id; ///< Unique request identifier assigned at submission.
     RequestPayload payload; ///< RPC-specific parameters.
 };
 
@@ -281,9 +286,10 @@ struct GrpcRequest
  */
 struct GrpcResponse
 {
-    uint64_t         id;          ///< Matches the originating GrpcRequest::id.
-    ResponsePayload  payload;     ///< RPC-specific result (success or error).
-    std::chrono::system_clock::time_point completedAt; ///< Completion timestamp.
+    uint64_t id;             ///< Matches the originating GrpcRequest::id.
+    ResponsePayload payload; ///< RPC-specific result (success or error).
+    std::chrono::system_clock::time_point
+        completedAt; ///< Completion timestamp.
 };
 
 // ---------------------------------------------------------------------------
@@ -400,10 +406,9 @@ public:
      *       simultaneously.
      * @note Retrieving a response removes it from the internal map.
      */
-    [[nodiscard]] std::optional<GrpcResponse>
-    waitForResponse(uint64_t id,
-                    std::chrono::milliseconds timeout =
-                        std::chrono::seconds(30));
+    [[nodiscard]] std::optional<GrpcResponse> waitForResponse(
+        uint64_t id,
+        std::chrono::milliseconds timeout = std::chrono::seconds(30));
 
     /**
      * @brief Non-blocking check for a completed response.
@@ -457,18 +462,20 @@ private:
     RouteClient& client_; ///< Underlying synchronous gRPC client.
 
     // Request queue
-    std::queue<GrpcRequest>   requestQueue_; ///< Pending requests (FIFO).
-    mutable std::mutex        requestMutex_; ///< Guards requestQueue_.
-    std::condition_variable   requestCv_;    ///< Notified on new request or stop.
+    std::queue<GrpcRequest> requestQueue_; ///< Pending requests (FIFO).
+    mutable std::mutex requestMutex_;      ///< Guards requestQueue_.
+    std::condition_variable requestCv_;    ///< Notified on new request or stop.
 
     // Response store
-    std::unordered_map<uint64_t, GrpcResponse> responses_; ///< Completed responses keyed by ID.
-    mutable std::mutex                          responseMutex_; ///< Guards responses_.
-    std::condition_variable                     responseCv_;    ///< Notified when a response is stored.
+    std::unordered_map<uint64_t, GrpcResponse>
+        responses_;                    ///< Completed responses keyed by ID.
+    mutable std::mutex responseMutex_; ///< Guards responses_.
+    std::condition_variable
+        responseCv_; ///< Notified when a response is stored.
 
-    std::atomic<uint64_t> nextId_{1}; ///< Monotonic request ID counter.
-    std::atomic<bool>     running_{false}; ///< Set to false to stop the thread.
-    std::thread           thread_;         ///< The grpc_proc thread.
+    std::atomic<uint64_t> nextId_{1};  ///< Monotonic request ID counter.
+    std::atomic<bool> running_{false}; ///< Set to false to stop the thread.
+    std::thread thread_;               ///< The grpc_proc thread.
 };
 
 } // namespace sra

@@ -41,13 +41,14 @@
 #include "client/udp_table_server.hpp"
 
 #include <arpa/inet.h>
+#include <net/if.h>
+
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstring>
 #include <format>
 #include <iostream>
-#include <net/if.h>
 #include <print>
 #include <sstream>
 #include <string>
@@ -62,7 +63,10 @@ using namespace std::chrono_literals;
 
 static std::atomic<bool> g_stop{false};
 
-static void sigHandler(int) { g_stop = true; }
+static void sigHandler(int)
+{
+    g_stop = true;
+}
 
 // ---------------------------------------------------------------------------
 // Simulated in-memory tables
@@ -85,7 +89,7 @@ struct ExNeighbor
  */
 struct ExNexthop
 {
-    uint32_t    id{0};
+    uint32_t id{0};
     std::string family;
     std::string gateway;
     std::string oif;
@@ -98,10 +102,10 @@ struct ExNexthop
  */
 struct ExRoute
 {
-    std::string dest;     ///< e.g. "10.0.0.1/32"
+    std::string dest; ///< e.g. "10.0.0.1/32"
     std::string gateway;
     std::string iface;
-    uint32_t    metric{0};
+    uint32_t metric{0};
     std::string protocol;
 };
 
@@ -126,7 +130,11 @@ static std::string serializeNeighbors(const std::vector<ExNeighbor>& table)
     for (const auto& n : table)
     {
         os << std::format("family={} dst={} mac={} iface={} state={}\n",
-                          n.family, n.dst, n.mac, n.iface, n.state);
+                          n.family,
+                          n.dst,
+                          n.mac,
+                          n.iface,
+                          n.state);
     }
     return os.str();
 }
@@ -149,7 +157,12 @@ static std::string serializeNexthops(const std::vector<ExNexthop>& table)
     {
         os << std::format(
             "id={} family={} gateway={} oif={} protocol={} scope={}\n",
-            n.id, n.family, n.gateway, n.oif, n.protocol, n.scope);
+            n.id,
+            n.family,
+            n.gateway,
+            n.oif,
+            n.protocol,
+            n.scope);
     }
     return os.str();
 }
@@ -170,13 +183,12 @@ static std::string serializeRoutes(const std::vector<ExRoute>& table)
     os << "ROUTES " << table.size() << '\n';
     for (const auto& r : table)
     {
-        os << std::format(
-            "dest={} gw={} iface={} metric={} protocol={}\n",
-            r.dest,
-            r.gateway.empty() ? "(none)" : r.gateway,
-            r.iface,
-            r.metric,
-            r.protocol);
+        os << std::format("dest={} gw={} iface={} metric={} protocol={}\n",
+                          r.dest,
+                          r.gateway.empty() ? "(none)" : r.gateway,
+                          r.iface,
+                          r.metric,
+                          r.protocol);
     }
     return os.str();
 }
@@ -188,23 +200,23 @@ static std::string serializeRoutes(const std::vector<ExRoute>& table)
 int main()
 {
     /* Install Ctrl-C handler. */
-    struct sigaction sa{};
+    struct sigaction sa
+    {};
     sa.sa_handler = sigHandler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
     std::println("udp_table_server_example – UdpTableServer demo");
     std::println("  Port {} → ARP/NDP neighbor table", sra::UDP_PORT_NEIGHBORS);
-    std::println("  Port {} → nexthop object table",   sra::UDP_PORT_NEXTHOPS);
+    std::println("  Port {} → nexthop object table", sra::UDP_PORT_NEXTHOPS);
     std::println("  Port {} → IPv4 /32 routing table", sra::UDP_PORT_ROUTES);
     std::println("");
 
     // ── Create and start the server ──────────────────────────────────────
 
-    sra::UdpTableServer udp(sra::UDP_PORT_NEIGHBORS,
-                            sra::UDP_PORT_NEXTHOPS,
-                            sra::UDP_PORT_ROUTES);
+    sra::UdpTableServer udp(
+        sra::UDP_PORT_NEIGHBORS, sra::UDP_PORT_NEXTHOPS, sra::UDP_PORT_ROUTES);
 
     if (!udp.start())
     {
@@ -219,17 +231,17 @@ int main()
 
     // ── Port 9001: ARP neighbors ─────────────────────────────────────────
     std::vector<ExNeighbor> neighbors = {
-        {"inet",  "192.168.1.1", "aa:bb:cc:dd:ee:01", "eth0", "reachable"},
-        {"inet",  "192.168.1.2", "aa:bb:cc:dd:ee:02", "eth0", "stale"},
-        {"inet6", "fe80::1",     "aa:bb:cc:dd:ee:03", "eth1", "reachable"},
+        {"inet", "192.168.1.1", "aa:bb:cc:dd:ee:01", "eth0", "reachable"},
+        {"inet", "192.168.1.2", "aa:bb:cc:dd:ee:02", "eth0", "stale"},
+        {"inet6", "fe80::1", "aa:bb:cc:dd:ee:03", "eth1", "reachable"},
     };
     udp.setNeighborData(serializeNeighbors(neighbors));
 
     // ── Port 9002: nexthop objects ────────────────────────────────────────
     std::vector<ExNexthop> nexthops = {
-        {1, "inet",  "10.0.0.1",  "eth0", "ospf",   "global"},
-        {2, "inet",  "10.0.0.2",  "eth0", "ospf",   "global"},
-        {3, "inet6", "fe80::1",   "eth1", "static", "link"},
+        {1, "inet", "10.0.0.1", "eth0", "ospf", "global"},
+        {2, "inet", "10.0.0.2", "eth0", "ospf", "global"},
+        {3, "inet6", "fe80::1", "eth1", "static", "link"},
     };
     udp.setNexthopData(serializeNexthops(nexthops));
 
@@ -242,7 +254,8 @@ int main()
 
     std::println("[example] Initial tables published.  Ctrl-C to stop.");
     std::println("[example] Query with: echo \"\" | nc -u -w1 127.0.0.1 9001");
-    std::println("[example] Subscribe : echo \"SUBSCRIBE\" | nc -u 127.0.0.1 9001");
+    std::println(
+        "[example] Subscribe : echo \"SUBSCRIBE\" | nc -u 127.0.0.1 9001");
     std::println("");
 
     // ── Simulate periodic NetLink events ─────────────────────────────────
@@ -256,7 +269,7 @@ int main()
         std::this_thread::sleep_for(100ms);
         ++tick;
 
-        if (tick % 50 != 0)   // every 5 s (50 × 100 ms)
+        if (tick % 50 != 0) // every 5 s (50 × 100 ms)
             continue;
 
         const int cycle = (tick / 50) % 3;
@@ -265,24 +278,31 @@ int main()
         {
             // ── Simulate NETLINK_NEIGH_ADDED on port 9001 ────────────────
             std::println("[event] NEIGH ADDED 192.168.2.10 on eth2 "
-                         "(pushed to port {} subscribers)", sra::UDP_PORT_NEIGHBORS);
-            neighbors.push_back(
-                {"inet", "192.168.2.10", "de:ad:be:ef:00:01", "eth2", "reachable"});
+                         "(pushed to port {} subscribers)",
+                         sra::UDP_PORT_NEIGHBORS);
+            neighbors.push_back({"inet",
+                                 "192.168.2.10",
+                                 "de:ad:be:ef:00:01",
+                                 "eth2",
+                                 "reachable"});
             udp.setNeighborData(serializeNeighbors(neighbors));
         }
         else if (cycle == 1)
         {
             // ── Simulate NETLINK_NEXTHOP_ADDED on port 9002 ──────────────
             std::println("[event] NEXTHOP ADDED id=4 via 10.0.0.3 "
-                         "(pushed to port {} subscribers)", sra::UDP_PORT_NEXTHOPS);
-            nexthops.push_back({4, "inet", "10.0.0.3", "eth0", "ospf", "global"});
+                         "(pushed to port {} subscribers)",
+                         sra::UDP_PORT_NEXTHOPS);
+            nexthops.push_back(
+                {4, "inet", "10.0.0.3", "eth0", "ospf", "global"});
             udp.setNexthopData(serializeNexthops(nexthops));
         }
         else
         {
             // ── Simulate NETLINK_ROUTE_ADDED on port 9003 ────────────────
             std::println("[event] ROUTE ADDED 10.1.0.3/32 via 10.0.0.3 "
-                         "(pushed to port {} subscribers)", sra::UDP_PORT_ROUTES);
+                         "(pushed to port {} subscribers)",
+                         sra::UDP_PORT_ROUTES);
             routes.push_back({"10.1.0.3/32", "10.0.0.3", "eth0", 100, "ospf"});
             udp.setRouteData(serializeRoutes(routes));
         }

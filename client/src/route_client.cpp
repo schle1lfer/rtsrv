@@ -157,9 +157,10 @@ RouteClient::addRoute(const std::string& destination,
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "AddRoute failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("AddRoute failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return resp.route();
 }
@@ -182,9 +183,10 @@ std::expected<void, std::string> RouteClient::removeRoute(const std::string& id)
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "RemoveRoute failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("RemoveRoute failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return {};
 }
@@ -208,9 +210,10 @@ RouteClient::getRoute(const std::string& id)
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "GetRoute failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("GetRoute failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return resp.route();
 }
@@ -234,9 +237,8 @@ RouteClient::listRoutes(bool activeOnly)
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(
-            std::format("ListRoutes failed ({})",
-                        srmd::v1::StatusCode_Name(resp.code())));
+        return std::unexpected(std::format(
+            "ListRoutes failed ({})", srmd::v1::StatusCode_Name(resp.code())));
     }
     return std::vector<srmd::v1::Route>(resp.routes().begin(),
                                         resp.routes().end());
@@ -261,9 +263,10 @@ RouteClient::setLoopback(const std::string& address)
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "SetLoopback failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("SetLoopback failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return resp.address();
 }
@@ -285,9 +288,10 @@ std::expected<std::string, std::string> RouteClient::getLoopback()
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "GetLoopback failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("GetLoopback failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return resp.address();
 }
@@ -311,9 +315,10 @@ RouteClient::getLoopbacks(const std::string& loopback)
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "GetLoopbacks failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("GetLoopbacks failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return resp;
 }
@@ -334,9 +339,10 @@ std::expected<std::string, std::string> RouteClient::requestLoopback()
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "RequestLoopback failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("RequestLoopback failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return resp.loopback();
 }
@@ -358,9 +364,10 @@ RouteClient::getAllRoutes()
     }
     if (resp.code() != srmd::v1::STATUS_CODE_OK)
     {
-        return std::unexpected(std::format(
-            "GetAllRoutes failed ({}): {}",
-            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+        return std::unexpected(
+            std::format("GetAllRoutes failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
     }
     return resp;
 }

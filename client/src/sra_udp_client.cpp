@@ -40,7 +40,9 @@ namespace
 static std::string fmt_ip(const cmdproto::Ipv4Addr& a)
 {
     char buf[INET_ADDRSTRLEN];
-    std::snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+    std::snprintf(buf,
+                  sizeof(buf),
+                  "%u.%u.%u.%u",
                   static_cast<unsigned>(a[0]),
                   static_cast<unsigned>(a[1]),
                   static_cast<unsigned>(a[2]),
@@ -113,7 +115,8 @@ nb_recv_frame(int fd, int timeout_ms)
                 continue;
             return std::unexpected(n.error());
         }
-        buf.insert(buf.end(), tmp.begin(),
+        buf.insert(buf.end(),
+                   tmp.begin(),
                    tmp.begin() + static_cast<std::ptrdiff_t>(*n));
 
         std::size_t end = 0;
@@ -151,8 +154,7 @@ nb_connect(int fd, const std::string& path, int timeout_ms)
     socklen_t len = sizeof(err);
     ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
     if (err != 0)
-        return std::unexpected(
-            std::error_code(err, std::system_category()));
+        return std::unexpected(std::error_code(err, std::system_category()));
     return {};
 }
 
@@ -243,15 +245,17 @@ void SraUdpClient::threadFunc()
             queue_.pop();
         }
 
-        std::visit([this](auto&& r) {
-            using T = std::decay_t<decltype(r)>;
-            if constexpr (std::is_same_v<T, cmdproto::SingleRouteRequest>)
-                processAddRequest(r);
-            else if constexpr (std::is_same_v<T, cmdproto::RouteDelParams>)
-                processDeleteRequest(r);
-            else if constexpr (std::is_same_v<T, RouteListRequest>)
-                processListRequest();
-        }, req);
+        std::visit(
+            [this](auto&& r) {
+                using T = std::decay_t<decltype(r)>;
+                if constexpr (std::is_same_v<T, cmdproto::SingleRouteRequest>)
+                    processAddRequest(r);
+                else if constexpr (std::is_same_v<T, cmdproto::RouteDelParams>)
+                    processDeleteRequest(r);
+                else if constexpr (std::is_same_v<T, RouteListRequest>)
+                    processListRequest();
+            },
+            req);
     }
 
     running_.store(false);
@@ -265,11 +269,12 @@ void SraUdpClient::threadFunc()
 void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
 {
     static std::uint16_t s_msg_id = 1;
-    const std::uint16_t  msg_id   = s_msg_id++;
+    const std::uint16_t msg_id = s_msg_id++;
 
     // Log what we're about to send
     std::println("[SraUdpClient] ROUTE_ADD msg_id={}: {} interface(s)",
-                 msg_id, req.interfaces.size());
+                 msg_id,
+                 req.interfaces.size());
     for (const auto& iface : req.interfaces)
     {
         std::println("[SraUdpClient]   iface='{}' nexthop={} nexthop_id={} "
@@ -281,8 +286,10 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
         for (std::size_t i = 0; i < iface.prefixes.size(); ++i)
         {
             const auto& p = iface.prefixes[i];
-            std::println("[SraUdpClient]     prefix[{}]: {}/{}", i,
-                         fmt_ip(p.addr), static_cast<unsigned>(p.mask_len));
+            std::println("[SraUdpClient]     prefix[{}]: {}/{}",
+                         i,
+                         fmt_ip(p.addr),
+                         static_cast<unsigned>(p.mask_len));
         }
     }
 
@@ -291,66 +298,79 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
         cmdproto::encode_command(cmdproto::make_route_add_binary(req));
     if (!cmd_bytes)
     {
-        std::println(stderr, "[SraUdpClient] encode_command: {}",
+        std::println(stderr,
+                     "[SraUdpClient] encode_command: {}",
                      cmd_bytes.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [1] cmdproto: {} byte(s)",
-                            msg_id, cmd_bytes->size()));
+                            msg_id,
+                            cmd_bytes->size()));
 
     // ── [2] Wrap in routeproto ExchangeData + DATA message ──────────────────
     routeproto::ExchangeData ed;
-    ed.commands    = *cmd_bytes;
+    ed.commands = *cmd_bytes;
     ed.num_commands = 1;
 
     auto exch_bytes = routeproto::encode_exchange(ed);
     if (!exch_bytes)
     {
-        std::println(stderr, "[SraUdpClient] encode_exchange: {}",
+        std::println(stderr,
+                     "[SraUdpClient] encode_exchange: {}",
                      exch_bytes.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [2] routeproto exchange: {} byte(s)",
-                            msg_id, exch_bytes->size()));
+                            msg_id,
+                            exch_bytes->size()));
 
-    auto data_msg  = routeproto::make_data(
+    auto data_msg = routeproto::make_data(
         msg_id, std::span<const std::uint8_t>{*exch_bytes});
     auto msg_bytes = routeproto::encode_message(data_msg);
     if (!msg_bytes)
     {
-        std::println(stderr, "[SraUdpClient] encode_message: {}",
+        std::println(stderr,
+                     "[SraUdpClient] encode_message: {}",
                      msg_bytes.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [2] routeproto message: {} byte(s)",
-                            msg_id, msg_bytes->size()));
+                            msg_id,
+                            msg_bytes->size()));
 
     // ── [3] Wrap in udproto frame ────────────────────────────────────────────
     udproto::Packet pkt{
-        .pkt_num    = msg_id,
+        .pkt_num = msg_id,
         .total_pkts = 1,
-        .ctrl       = 0x0000,
-        .data       = *msg_bytes,
+        .ctrl = 0x0000,
+        .data = *msg_bytes,
     };
     auto frame = udproto::encode_packet(pkt);
     if (!frame)
     {
-        std::println(stderr, "[SraUdpClient] encode_packet: {}",
+        std::println(stderr,
+                     "[SraUdpClient] encode_packet: {}",
                      frame.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [3] udproto frame: {} byte(s)",
-                            msg_id, frame->size()));
+                            msg_id,
+                            frame->size()));
 
     // ── [4] Create NON-BLOCKING socket ──────────────────────────────────────
     auto sock_result = net::create_socket();
     if (!sock_result)
     {
-        std::println(stderr, "[SraUdpClient] create_socket: {}",
+        std::println(stderr,
+                     "[SraUdpClient] create_socket: {}",
                      sock_result.error().message());
         return;
     }
@@ -358,23 +378,29 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
 
     if (auto r = net::set_nonblocking(sock.fd(), true); !r)
     {
-        std::println(stderr, "[SraUdpClient] set_nonblocking: {}",
-                     r.error().message());
+        std::println(
+            stderr, "[SraUdpClient] set_nonblocking: {}", r.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [4] socket fd={}", msg_id, sock.fd()));
 
     // ── [5] Connect (non-blocking) ───────────────────────────────────────────
     if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
     {
-        std::println(stderr, "[SraUdpClient] connect({}): {}",
-                     socketPath_, r.error().message());
+        std::println(stderr,
+                     "[SraUdpClient] connect({}): {}",
+                     socketPath_,
+                     r.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [5] connected fd={} path='{}'",
-                            msg_id, sock.fd(), socketPath_));
+                            msg_id,
+                            sock.fd(),
+                            socketPath_));
 
     // ── [6] Send frame (non-blocking with poll) ──────────────────────────────
     logger::log_hex("SraUdpClient", true, sock.fd(), *frame);
@@ -384,14 +410,16 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
         return;
     }
     std::println("[SraUdpClient] frame sent fd={} msg_id={} {} byte(s)",
-                 sock.fd(), msg_id, frame->size());
+                 sock.fd(),
+                 msg_id,
+                 frame->size());
 
     // ── [7] Receive response frame (non-blocking with poll) ──────────────────
     auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
     if (!frame_recv)
     {
-        std::println(stderr, "[SraUdpClient] recv: {}",
-                     frame_recv.error().message());
+        std::println(
+            stderr, "[SraUdpClient] recv: {}", frame_recv.error().message());
         return;
     }
     logger::log_hex("SraUdpClient", false, sock.fd(), *frame_recv);
@@ -400,25 +428,32 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
     auto reply_pkt = udproto::decode_packet(*frame_recv);
     if (!reply_pkt)
     {
-        std::println(stderr, "[SraUdpClient] decode_packet: {}",
+        std::println(stderr,
+                     "[SraUdpClient] decode_packet: {}",
                      reply_pkt.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [8] udproto pkt: pkt_num={} "
                             "total_pkts={} ctrl={:#06x} data={} byte(s)",
-                            msg_id, reply_pkt->pkt_num, reply_pkt->total_pkts,
-                            reply_pkt->ctrl, reply_pkt->data.size()));
+                            msg_id,
+                            reply_pkt->pkt_num,
+                            reply_pkt->total_pkts,
+                            reply_pkt->ctrl,
+                            reply_pkt->data.size()));
 
     // ── [9] Decode routeproto message ────────────────────────────────────────
     auto reply_msg = routeproto::decode_message(reply_pkt->data);
     if (!reply_msg)
     {
-        std::println(stderr, "[SraUdpClient] decode_message: {}",
+        std::println(stderr,
+                     "[SraUdpClient] decode_message: {}",
                      reply_msg.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "SraUdpClient",
+    logger::log(logger::DEBUG,
+                "SraUdpClient",
                 std::format("msg_id={} [9] routeproto msg: "
                             "type=0x{:02x} payload={} byte(s)",
                             msg_id,
@@ -440,7 +475,8 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
         std::span<const std::uint8_t>{reply_msg->payload}.subspan(1));
     if (!bin_resp)
     {
-        std::println(stderr, "[SraUdpClient] decode_route_add_binary_response: {}",
+        std::println(stderr,
+                     "[SraUdpClient] decode_route_add_binary_response: {}",
                      bin_resp.error().message());
         return;
     }
@@ -458,7 +494,8 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
     for (std::size_t i = 0; i < bin_resp->prefix_status.size(); ++i)
     {
         std::println("[SraUdpClient]   prefix[{}]: {}",
-                     i, bin_resp->prefix_status[i] ? "ok" : "FAIL");
+                     i,
+                     bin_resp->prefix_status[i] ? "ok" : "FAIL");
     }
 
     std::println("[SraUdpClient] exchange complete msg_id={}: {}",
@@ -472,8 +509,9 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
 
 void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
 {
-    static std::uint16_t s_msg_id = 0x8000; // separate counter to distinguish add/del
-    const std::uint16_t  msg_id   = s_msg_id++;
+    static std::uint16_t s_msg_id =
+        0x8000; // separate counter to distinguish add/del
+    const std::uint16_t msg_id = s_msg_id++;
 
     std::println("[SraUdpClient] ROUTE_DEL msg_id={}: {}.{}.{}.{}/{}",
                  msg_id,
@@ -484,49 +522,52 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
                  static_cast<unsigned>(params.prefix_len));
 
     // ── [1] Encode cmdproto ROUTE_DEL command ───────────────────────────────
-    auto cmd_bytes =
-        cmdproto::encode_command(cmdproto::make_route_del(params));
+    auto cmd_bytes = cmdproto::encode_command(cmdproto::make_route_del(params));
     if (!cmd_bytes)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL encode_command: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL encode_command: {}",
                      cmd_bytes.error().message());
         return;
     }
 
     // ── [2] Wrap in routeproto ExchangeData + DATA message ──────────────────
     routeproto::ExchangeData ed;
-    ed.commands     = *cmd_bytes;
+    ed.commands = *cmd_bytes;
     ed.num_commands = 1;
 
     auto exch_bytes = routeproto::encode_exchange(ed);
     if (!exch_bytes)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL encode_exchange: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL encode_exchange: {}",
                      exch_bytes.error().message());
         return;
     }
 
-    auto data_msg  = routeproto::make_data(
+    auto data_msg = routeproto::make_data(
         msg_id, std::span<const std::uint8_t>{*exch_bytes});
     auto msg_bytes = routeproto::encode_message(data_msg);
     if (!msg_bytes)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL encode_message: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL encode_message: {}",
                      msg_bytes.error().message());
         return;
     }
 
     // ── [3] Wrap in udproto frame ────────────────────────────────────────────
     udproto::Packet pkt{
-        .pkt_num    = msg_id,
+        .pkt_num = msg_id,
         .total_pkts = 1,
-        .ctrl       = 0x0000,
-        .data       = *msg_bytes,
+        .ctrl = 0x0000,
+        .data = *msg_bytes,
     };
     auto frame = udproto::encode_packet(pkt);
     if (!frame)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL encode_packet: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL encode_packet: {}",
                      frame.error().message());
         return;
     }
@@ -535,7 +576,8 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
     auto sock_result = net::create_socket();
     if (!sock_result)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL create_socket: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL create_socket: {}",
                      sock_result.error().message());
         return;
     }
@@ -543,7 +585,8 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
 
     if (auto r = net::set_nonblocking(sock.fd(), true); !r)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL set_nonblocking: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL set_nonblocking: {}",
                      r.error().message());
         return;
     }
@@ -551,8 +594,10 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
     // ── [5] Connect (non-blocking) ───────────────────────────────────────────
     if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL connect({}): {}",
-                     socketPath_, r.error().message());
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL connect({}): {}",
+                     socketPath_,
+                     r.error().message());
         return;
     }
 
@@ -560,18 +605,20 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
     logger::log_hex("SraUdpClient", true, sock.fd(), *frame);
     if (auto r = nb_send_all(sock.fd(), *frame, ioTimeoutMs_); !r)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL send: {}",
-                     r.error().message());
+        std::println(
+            stderr, "[SraUdpClient] ROUTE_DEL send: {}", r.error().message());
         return;
     }
     std::println("[SraUdpClient] ROUTE_DEL frame sent msg_id={} {} byte(s)",
-                 msg_id, frame->size());
+                 msg_id,
+                 frame->size());
 
     // ── [7] Receive response frame ───────────────────────────────────────────
     auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
     if (!frame_recv)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL recv: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL recv: {}",
                      frame_recv.error().message());
         return;
     }
@@ -581,7 +628,8 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
     auto reply_pkt = udproto::decode_packet(*frame_recv);
     if (!reply_pkt)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL decode_packet: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL decode_packet: {}",
                      reply_pkt.error().message());
         return;
     }
@@ -590,7 +638,8 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
     auto reply_msg = routeproto::decode_message(reply_pkt->data);
     if (!reply_msg)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_DEL decode_message: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_DEL decode_message: {}",
                      reply_msg.error().message());
         return;
     }
@@ -603,13 +652,15 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
 
     const std::uint8_t ack_status = reply_msg->payload[0];
     // ── [10] Log result ──────────────────────────────────────────────────────
-    std::println("[SraUdpClient] ROUTE_DEL response msg_id={}: ack=0x{:02x} ({})",
-                 msg_id,
-                 static_cast<unsigned>(ack_status),
-                 ack_status == 0x00 ? "ok" : "error");
+    std::println(
+        "[SraUdpClient] ROUTE_DEL response msg_id={}: ack=0x{:02x} ({})",
+        msg_id,
+        static_cast<unsigned>(ack_status),
+        ack_status == 0x00 ? "ok" : "error");
 
     std::println("[SraUdpClient] ROUTE_DEL exchange complete msg_id={}: {}",
-                 msg_id, ack_status == 0x00 ? "PASS" : "FAIL");
+                 msg_id,
+                 ack_status == 0x00 ? "PASS" : "FAIL");
 }
 
 // ---------------------------------------------------------------------------
@@ -618,8 +669,9 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
 
 void SraUdpClient::processListRequest()
 {
-    static std::uint16_t s_msg_id = 0xC000; // separate counter for list commands
-    const std::uint16_t  msg_id   = s_msg_id++;
+    static std::uint16_t s_msg_id =
+        0xC000; // separate counter for list commands
+    const std::uint16_t msg_id = s_msg_id++;
 
     std::println("[SraUdpClient] ROUTE_LIST msg_id={}", msg_id);
 
@@ -627,45 +679,49 @@ void SraUdpClient::processListRequest()
     auto cmd_bytes = cmdproto::encode_command(cmdproto::make_route_list());
     if (!cmd_bytes)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST encode_command: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST encode_command: {}",
                      cmd_bytes.error().message());
         return;
     }
 
     // ── [2] Wrap in routeproto ExchangeData + DATA message ──────────────────
     routeproto::ExchangeData ed;
-    ed.commands     = *cmd_bytes;
+    ed.commands = *cmd_bytes;
     ed.num_commands = 1;
 
     auto exch_bytes = routeproto::encode_exchange(ed);
     if (!exch_bytes)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST encode_exchange: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST encode_exchange: {}",
                      exch_bytes.error().message());
         return;
     }
 
-    auto data_msg  = routeproto::make_data(
+    auto data_msg = routeproto::make_data(
         msg_id, std::span<const std::uint8_t>{*exch_bytes});
     auto msg_bytes = routeproto::encode_message(data_msg);
     if (!msg_bytes)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST encode_message: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST encode_message: {}",
                      msg_bytes.error().message());
         return;
     }
 
     // ── [3] Wrap in udproto frame ────────────────────────────────────────────
     udproto::Packet pkt{
-        .pkt_num    = msg_id,
+        .pkt_num = msg_id,
         .total_pkts = 1,
-        .ctrl       = 0x0000,
-        .data       = *msg_bytes,
+        .ctrl = 0x0000,
+        .data = *msg_bytes,
     };
     auto frame = udproto::encode_packet(pkt);
     if (!frame)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST encode_packet: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST encode_packet: {}",
                      frame.error().message());
         return;
     }
@@ -674,7 +730,8 @@ void SraUdpClient::processListRequest()
     auto sock_result = net::create_socket();
     if (!sock_result)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST create_socket: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST create_socket: {}",
                      sock_result.error().message());
         return;
     }
@@ -682,7 +739,8 @@ void SraUdpClient::processListRequest()
 
     if (auto r = net::set_nonblocking(sock.fd(), true); !r)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST set_nonblocking: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST set_nonblocking: {}",
                      r.error().message());
         return;
     }
@@ -690,8 +748,10 @@ void SraUdpClient::processListRequest()
     // ── [5] Connect (non-blocking) ───────────────────────────────────────────
     if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST connect({}): {}",
-                     socketPath_, r.error().message());
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST connect({}): {}",
+                     socketPath_,
+                     r.error().message());
         return;
     }
 
@@ -699,18 +759,20 @@ void SraUdpClient::processListRequest()
     logger::log_hex("SraUdpClient", true, sock.fd(), *frame);
     if (auto r = nb_send_all(sock.fd(), *frame, ioTimeoutMs_); !r)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST send: {}",
-                     r.error().message());
+        std::println(
+            stderr, "[SraUdpClient] ROUTE_LIST send: {}", r.error().message());
         return;
     }
     std::println("[SraUdpClient] ROUTE_LIST frame sent msg_id={} {} byte(s)",
-                 msg_id, frame->size());
+                 msg_id,
+                 frame->size());
 
     // ── [7] Receive response frame ───────────────────────────────────────────
     auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
     if (!frame_recv)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST recv: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST recv: {}",
                      frame_recv.error().message());
         return;
     }
@@ -720,7 +782,8 @@ void SraUdpClient::processListRequest()
     auto reply_pkt = udproto::decode_packet(*frame_recv);
     if (!reply_pkt)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST decode_packet: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST decode_packet: {}",
                      reply_pkt.error().message());
         return;
     }
@@ -729,14 +792,16 @@ void SraUdpClient::processListRequest()
     auto reply_msg = routeproto::decode_message(reply_pkt->data);
     if (!reply_msg)
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST decode_message: {}",
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST decode_message: {}",
                      reply_msg.error().message());
         return;
     }
 
     if (reply_msg->payload.empty())
     {
-        std::println(stderr, "[SraUdpClient] ROUTE_LIST response payload empty");
+        std::println(stderr,
+                     "[SraUdpClient] ROUTE_LIST response payload empty");
         return;
     }
 

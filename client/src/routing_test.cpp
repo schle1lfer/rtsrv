@@ -117,8 +117,9 @@ static void printRoute(const sra::KernelRoute& route, int indent = 10)
 static const sra::KernelRoute*
 findRoute(const std::vector<sra::KernelRoute>& routes, std::string_view dst)
 {
-    auto it = std::ranges::find_if(
-        routes, [&](const sra::KernelRoute& r) { return r.destination == dst; });
+    auto it = std::ranges::find_if(routes, [&](const sra::KernelRoute& r) {
+        return r.destination == dst;
+    });
     return (it != routes.end()) ? &*it : nullptr;
 }
 
@@ -153,7 +154,8 @@ static bool phaseAdd(sra::RoutingManager& rm)
 {
     std::println("\n[1/4] ADD {} via {} ...", kDst, kGw);
 
-    // -- addRoute --------------------------------------------------------------
+    // -- addRoute
+    // --------------------------------------------------------------
     sra::RouteParams p;
     p.destination = std::string(kDst);
     p.gateway = std::string(kGw);
@@ -170,12 +172,14 @@ static bool phaseAdd(sra::RoutingManager& rm)
     }
     std::println("        addRoute       : OK");
 
-    // -- verify ----------------------------------------------------------------
+    // -- verify
+    // ----------------------------------------------------------------
     const auto routes = snapshot(rm);
     const auto* entry = findRoute(routes, kDst);
     if (entry == nullptr)
     {
-        std::println("        verify present : FAIL  (route not found in table)");
+        std::println(
+            "        verify present : FAIL  (route not found in table)");
         return false;
     }
     std::print("        verify present : OK  ");
@@ -192,9 +196,11 @@ static bool phaseAdd(sra::RoutingManager& rm)
 static bool phaseReplace(sra::RoutingManager& rm)
 {
     std::println("\n[2/4] REPLACE (metric {} → {}) ...",
-                 kMetricInitial, kMetricReplaced);
+                 kMetricInitial,
+                 kMetricReplaced);
 
-    // -- replaceRoute ----------------------------------------------------------
+    // -- replaceRoute
+    // ----------------------------------------------------------
     sra::RouteParams p;
     p.destination = std::string(kDst);
     p.gateway = std::string(kGw);
@@ -211,19 +217,22 @@ static bool phaseReplace(sra::RoutingManager& rm)
     }
     std::println("        replaceRoute   : OK");
 
-    // -- verify metric ---------------------------------------------------------
+    // -- verify metric
+    // ---------------------------------------------------------
     const auto routes = snapshot(rm);
     const auto* entry = findRoute(routes, kDst);
     if (entry == nullptr)
     {
-        std::println("        verify metric  : FAIL  (route not found after replace)");
+        std::println(
+            "        verify metric  : FAIL  (route not found after replace)");
         return false;
     }
     if (entry->metric != kMetricReplaced)
     {
         std::println("        verify metric  : FAIL  "
                      "(expected metric={}, got metric={})",
-                     kMetricReplaced, entry->metric);
+                     kMetricReplaced,
+                     entry->metric);
         return false;
     }
     std::print("        verify metric  : OK  ");
@@ -241,7 +250,8 @@ static bool phaseRemove(sra::RoutingManager& rm)
 {
     std::println("\n[3/4] REMOVE {} ...", kDst);
 
-    // -- removeRoute -----------------------------------------------------------
+    // -- removeRoute
+    // -----------------------------------------------------------
     sra::RouteParams p;
     p.destination = std::string(kDst);
     p.gateway = std::string(kGw);
@@ -256,7 +266,8 @@ static bool phaseRemove(sra::RoutingManager& rm)
     }
     std::println("        removeRoute    : OK");
 
-    // -- verify absence --------------------------------------------------------
+    // -- verify absence
+    // --------------------------------------------------------
     const auto routes = snapshot(rm);
     const auto* entry = findRoute(routes, kDst);
     if (entry != nullptr)
@@ -270,7 +281,8 @@ static bool phaseRemove(sra::RoutingManager& rm)
 }
 
 /**
- * @brief Phase 4 – attempts a second removal to verify idempotent error handling.
+ * @brief Phase 4 – attempts a second removal to verify idempotent error
+ * handling.
  *
  * The kernel returns @c ESRCH (no such process) or @c ENOENT when asked to
  * delete a route that does not exist.  The test treats this as the expected
@@ -320,8 +332,8 @@ int main()
 
     sra::RoutingManager rm;
 
-    const bool ok = phaseAdd(rm) && phaseReplace(rm) && phaseRemove(rm) &&
-                    phaseCleanup(rm);
+    const bool ok =
+        phaseAdd(rm) && phaseReplace(rm) && phaseRemove(rm) && phaseCleanup(rm);
 
     if (ok)
     {

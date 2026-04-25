@@ -89,11 +89,11 @@ struct InterfaceAddress
  */
 struct NetworkInterface
 {
-    std::string name;                        ///< Interface name (e.g. "eth0").
-    uint32_t index{0};                       ///< Kernel interface index.
-    uint32_t flags{0};                       ///< Interface flags (IFF_UP, …).
-    std::string hwAddress;                   ///< MAC in "aa:bb:cc:dd:ee:ff" or "".
-    uint32_t mtu{0};                         ///< MTU in bytes.
+    std::string name;      ///< Interface name (e.g. "eth0").
+    uint32_t index{0};     ///< Kernel interface index.
+    uint32_t flags{0};     ///< Interface flags (IFF_UP, …).
+    std::string hwAddress; ///< MAC in "aa:bb:cc:dd:ee:ff" or "".
+    uint32_t mtu{0};       ///< MTU in bytes.
     std::vector<InterfaceAddress> addresses; ///< Assigned IP addresses.
 
     /**
@@ -138,17 +138,18 @@ struct NetworkInterface
  */
 struct KernelRoute
 {
-    std::string destination; ///< Destination prefix in CIDR (e.g. "10.0.0.0/8").
-    std::string gateway;     ///< Next-hop gateway (empty when on-link/direct).
-    std::string interfaceName; ///< Outgoing interface name (e.g. "eth0").
+    std::string
+        destination;     ///< Destination prefix in CIDR (e.g. "10.0.0.0/8").
+    std::string gateway; ///< Next-hop gateway (empty when on-link/direct).
+    std::string interfaceName;  ///< Outgoing interface name (e.g. "eth0").
     uint32_t interfaceIndex{0}; ///< Outgoing interface index (0 if unknown).
-    uint32_t metric{0};      ///< Route priority; lower value wins.
-    uint8_t prefixLen{0};    ///< Prefix length (duplicates the /N in destination).
-    uint8_t protocol{0};     ///< Origin protocol (RTPROT_STATIC, RTPROT_ZEBRA, …).
+    uint32_t metric{0};         ///< Route priority; lower value wins.
+    uint8_t prefixLen{0}; ///< Prefix length (duplicates the /N in destination).
+    uint8_t protocol{0}; ///< Origin protocol (RTPROT_STATIC, RTPROT_ZEBRA, …).
     uint8_t type{RTN_UNICAST}; ///< Route type (RTN_UNICAST, RTN_BLACKHOLE, …).
-    uint32_t table{RT_TABLE_MAIN}; ///< Routing table ID (254 = main).
+    uint32_t table{RT_TABLE_MAIN};    ///< Routing table ID (254 = main).
     uint8_t scope{RT_SCOPE_UNIVERSE}; ///< Route scope.
-    int family{AF_INET};     ///< Address family: @c AF_INET or @c AF_INET6.
+    int family{AF_INET}; ///< Address family: @c AF_INET or @c AF_INET6.
 };
 
 // ---------------------------------------------------------------------------
@@ -312,8 +313,7 @@ public:
      * @return Vector of KernelRoute entries on success, or an error string.
      */
     [[nodiscard]] std::expected<std::vector<KernelRoute>, std::string>
-    listRoutes(int family = AF_UNSPEC,
-               uint32_t table = RT_TABLE_UNSPEC) const;
+    listRoutes(int family = AF_UNSPEC, uint32_t table = RT_TABLE_UNSPEC) const;
 
     // -----------------------------------------------------------------------
     // Route mutations
@@ -366,9 +366,9 @@ public:
     replaceRoute(const RouteParams& params);
 
 private:
-    int fd_{-1};               ///< NETLINK_ROUTE socket file descriptor.
-    mutable uint32_t seq_{1};  ///< Monotonically increasing request sequence.
-    mutable std::mutex mtx_;   ///< Serialises all socket operations.
+    int fd_{-1};              ///< NETLINK_ROUTE socket file descriptor.
+    mutable uint32_t seq_{1}; ///< Monotonically increasing request sequence.
+    mutable std::mutex mtx_;  ///< Serialises all socket operations.
 
     /**
      * @brief Reads all netlink response messages for one request.
@@ -383,8 +383,7 @@ private:
      * @return @c void on success, or an error string on failure.
      */
     [[nodiscard]] std::expected<void, std::string>
-    recvAll(uint32_t seq,
-            const std::function<void(nlmsghdr*)>& handler) const;
+    recvAll(uint32_t seq, const std::function<void(nlmsghdr*)>& handler) const;
 
     /**
      * @brief Issues RTM_GETLINK dump and returns raw interface descriptors.
@@ -418,10 +417,8 @@ private:
      *                @c NLM_F_REPLACE, @c NLM_F_EXCL).
      * @return @c void on success, or an error string.
      */
-    [[nodiscard]] std::expected<void, std::string>
-    sendRouteRequest(const RouteParams& params,
-                     uint16_t nlType,
-                     uint16_t flags);
+    [[nodiscard]] std::expected<void, std::string> sendRouteRequest(
+        const RouteParams& params, uint16_t nlType, uint16_t flags);
 };
 
 } // namespace sra

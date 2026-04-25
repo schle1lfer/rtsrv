@@ -144,8 +144,8 @@ struct Field
 /// @brief A fully decoded command with its list of fields.
 struct Command
 {
-    CmdId cmd_id{};             ///< Command identifier
-    std::vector<Field> fields;  ///< TLV fields (legacy format)
+    CmdId cmd_id{};                        ///< Command identifier
+    std::vector<Field> fields;             ///< TLV fields (legacy format)
     std::vector<std::uint8_t> raw_payload; ///< Raw binary payload (new format)
 };
 
@@ -230,8 +230,8 @@ inline constexpr std::size_t PREFIX_IPV4_WIRE_SIZE = 5;
 /// @brief One IPv4 prefix entry carried inside an Interface.
 struct PrefixIpv4
 {
-    Ipv4Addr addr{};          ///< Prefix network address (network byte order)
-    std::uint8_t mask_len{};  ///< Prefix length in bits (0–32)
+    Ipv4Addr addr{};         ///< Prefix network address (network byte order)
+    std::uint8_t mask_len{}; ///< Prefix length in bits (0–32)
 };
 
 /// @brief Fixed-length interface name field: 32 bytes, null-terminated.
@@ -258,10 +258,10 @@ inline constexpr std::size_t INTERFACE_FIXED_SIZE = 42;
  */
 struct Interface
 {
-    IfaceName     iface_name{};         ///< Interface name (32 bytes, null-padded)
-    Ipv4Addr      nexthop_addr_ipv4{};  ///< Next-hop gateway address
-    std::uint32_t nexthop_id_ipv4{};    ///< Next-hop identifier
-    std::vector<PrefixIpv4> prefixes;   ///< Prefix list for this interface
+    IfaceName iface_name{};          ///< Interface name (32 bytes, null-padded)
+    Ipv4Addr nexthop_addr_ipv4{};    ///< Next-hop gateway address
+    std::uint32_t nexthop_id_ipv4{}; ///< Next-hop identifier
+    std::vector<PrefixIpv4> prefixes; ///< Prefix list for this interface
 };
 
 /**
@@ -428,22 +428,20 @@ decode_route_list_response(std::span<const std::uint8_t> raw);
 struct HandlerCallbacks
 {
     /// Signature for route-add callbacks.
-    using AddRouteFn = std::function<
-        std::expected<void, std::error_code>(
-            std::shared_ptr<netlink::RouteAddParams>)>;
+    using AddRouteFn = std::function<std::expected<void, std::error_code>(
+        std::shared_ptr<netlink::RouteAddParams>)>;
 
     /// Signature for route-delete callbacks.
-    using DelRouteFn = std::function<
-        std::expected<void, std::error_code>(
-            std::shared_ptr<netlink::RouteDelParams>)>;
+    using DelRouteFn = std::function<std::expected<void, std::error_code>(
+        std::shared_ptr<netlink::RouteDelParams>)>;
 
     /// Signature for route-list callbacks.
     using ListRoutesFn = std::function<
         std::expected<std::vector<netlink::RouteEntry>, std::error_code>(
             std::shared_ptr<netlink::RouteTable>)>;
 
-    AddRouteFn   route_add;  ///< Called by handle_route_add()
-    DelRouteFn   route_del;  ///< Called by handle_route_del()
+    AddRouteFn route_add;    ///< Called by handle_route_add()
+    DelRouteFn route_del;    ///< Called by handle_route_del()
     ListRoutesFn route_list; ///< Called by handle_route_list()
 };
 

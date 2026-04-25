@@ -3,8 +3,8 @@
  * @brief VRF route client over a non-blocking UNIX-domain socket.
  *
  * SraUdpClient runs in a dedicated background thread.  Callers submit
- * commands (ROUTE_ADD, ROUTE_DEL, ROUTE_LIST) via submitAdd(), submitDelete(), or
- * submitList(); the thread picks them up, encodes and sends them over an
+ * commands (ROUTE_ADD, ROUTE_DEL, ROUTE_LIST) via submitAdd(), submitDelete(),
+ * or submitList(); the thread picks them up, encodes and sends them over an
  * AF_UNIX stream socket in non-blocking mode (using poll() for all I/O
  * readiness checks), receives the response frame, and decodes and logs the
  * result.
@@ -32,13 +32,15 @@ namespace sra
 {
 
 /// @brief Tag type for a ROUTE_LIST request (carries no parameters).
-struct RouteListRequest {};
+struct RouteListRequest
+{};
 
 /**
  * @brief Runs route exchanges (add / delete / list) in a background thread.
  *
  * Non-blocking socket operation:
- *  - The AF_UNIX socket is created with O_NONBLOCK set via net::set_nonblocking().
+ *  - The AF_UNIX socket is created with O_NONBLOCK set via
+ * net::set_nonblocking().
  *  - All send / receive I/O uses poll() to wait for readiness before each
  *    syscall, with a configurable per-operation timeout.
  *  - connect() on AF_UNIX is typically instantaneous; EINPROGRESS is handled
@@ -51,19 +53,20 @@ class SraUdpClient
 {
 public:
     /// @brief Discriminated union of all supported command types.
-    using Request = std::variant<
-        cmdproto::SingleRouteRequest, ///< ROUTE_ADD (binary payload)
-        cmdproto::RouteDelParams,     ///< ROUTE_DEL (TLV)
-        RouteListRequest              ///< ROUTE_LIST (no fields)
-    >;
+    using Request =
+        std::variant<cmdproto::SingleRouteRequest, ///< ROUTE_ADD (binary
+                                                   ///< payload)
+                     cmdproto::RouteDelParams,     ///< ROUTE_DEL (TLV)
+                     RouteListRequest              ///< ROUTE_LIST (no fields)
+                     >;
 
     /**
      * @brief Constructs the client.
      * @param socketPath  Filesystem path of the UNIX-domain server socket.
      * @param ioTimeoutMs Per-operation poll() timeout in milliseconds.
      */
-    explicit SraUdpClient(std::string socketPath    = "/tmp/ud_server.sock",
-                          int         ioTimeoutMs   = 5000);
+    explicit SraUdpClient(std::string socketPath = "/tmp/ud_server.sock",
+                          int ioTimeoutMs = 5000);
 
     ~SraUdpClient();
 
@@ -111,15 +114,15 @@ private:
     void processListRequest();
 
     std::string socketPath_;
-    int         ioTimeoutMs_;
+    int ioTimeoutMs_;
 
-    std::queue<Request>     queue_;
-    std::mutex              queueMutex_;
+    std::queue<Request> queue_;
+    std::mutex queueMutex_;
     std::condition_variable queueCv_;
 
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> running_{false};
-    std::thread       thread_;
+    std::thread thread_;
 };
 
 } // namespace sra

@@ -16,16 +16,18 @@
 #include "client/udp_table_server.hpp"
 
 #include <arpa/inet.h>
-#include <cerrno>
-#include <cstring>
 #include <fcntl.h>
-#include <iostream>
 #include <poll.h>
-#include <print>
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace sra {
+#include <cerrno>
+#include <cstring>
+#include <iostream>
+#include <print>
+
+namespace sra
+{
 
 // ── Constructor / Destructor ─────────────────────────────────────────────────
 
@@ -34,12 +36,12 @@ UdpTableServer::UdpTableServer(uint16_t portNeighbors,
                                uint16_t portRoutes)
 {
     neighbors_.port = portNeighbors;
-    nexthops_.port  = portNexthops;
-    routes_.port    = portRoutes;
+    nexthops_.port = portNexthops;
+    routes_.port = portRoutes;
 
     neighbors_.stopPipe[0] = neighbors_.stopPipe[1] = -1;
-    nexthops_.stopPipe[0]  = nexthops_.stopPipe[1]  = -1;
-    routes_.stopPipe[0]    = routes_.stopPipe[1]     = -1;
+    nexthops_.stopPipe[0] = nexthops_.stopPipe[1] = -1;
+    routes_.stopPipe[0] = routes_.stopPipe[1] = -1;
 }
 
 UdpTableServer::~UdpTableServer()
@@ -56,7 +58,8 @@ int UdpTableServer::openSocket(uint16_t port)
     {
         std::println(std::cerr,
                      "[UdpTableServer] socket() failed for port {}: {}",
-                     port, std::strerror(errno));
+                     port,
+                     std::strerror(errno));
         return -1;
     }
 
@@ -65,15 +68,16 @@ int UdpTableServer::openSocket(uint16_t port)
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
     sockaddr_in addr{};
-    addr.sin_family      = AF_INET;
+    addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons(port);
+    addr.sin_port = htons(port);
 
     if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
     {
         std::println(std::cerr,
                      "[UdpTableServer] bind() failed for port {}: {}",
-                     port, std::strerror(errno));
+                     port,
+                     std::strerror(errno));
         ::close(fd);
         return -1;
     }
@@ -102,7 +106,8 @@ bool UdpTableServer::start()
         {
             std::println(std::cerr,
                          "[UdpTableServer] pipe() failed for port {}: {}",
-                         ps->port, std::strerror(errno));
+                         ps->port,
+                         std::strerror(errno));
             stop();
             return false;
         }
@@ -114,12 +119,20 @@ bool UdpTableServer::start()
 
     running_ = true;
 
-    neighbors_.thread = std::thread([this]{ runListener(neighbors_); });
-    nexthops_.thread  = std::thread([this]{ runListener(nexthops_);  });
-    routes_.thread    = std::thread([this]{ runListener(routes_);    });
+    neighbors_.thread = std::thread([this] {
+        runListener(neighbors_);
+    });
+    nexthops_.thread = std::thread([this] {
+        runListener(nexthops_);
+    });
+    routes_.thread = std::thread([this] {
+        runListener(routes_);
+    });
 
     std::println("[UdpTableServer] Listening on UDP ports {}/{}/{}",
-                 neighbors_.port, nexthops_.port, routes_.port);
+                 neighbors_.port,
+                 nexthops_.port,
+                 routes_.port);
     return true;
 }
 
@@ -147,8 +160,16 @@ void UdpTableServer::stop()
             ::close(ps->fd);
             ps->fd = -1;
         }
-        if (ps->stopPipe[0] >= 0) { ::close(ps->stopPipe[0]); ps->stopPipe[0] = -1; }
-        if (ps->stopPipe[1] >= 0) { ::close(ps->stopPipe[1]); ps->stopPipe[1] = -1; }
+        if (ps->stopPipe[0] >= 0)
+        {
+            ::close(ps->stopPipe[0]);
+            ps->stopPipe[0] = -1;
+        }
+        if (ps->stopPipe[1] >= 0)
+        {
+            ::close(ps->stopPipe[1]);
+            ps->stopPipe[1] = -1;
+        }
     }
 }
 
@@ -183,7 +204,8 @@ void UdpTableServer::setRouteData(std::string data)
 
 // ── Push helpers ─────────────────────────────────────────────────────────────
 
-void UdpTableServer::pushToSubscribers(PortState& ps, const std::string& payload)
+void UdpTableServer::pushToSubscribers(PortState& ps,
+                                       const std::string& payload)
 {
     std::lock_guard lock(ps.subMutex);
     for (const auto& addr : ps.subscribers)
@@ -203,9 +225,9 @@ void UdpTableServer::runListener(PortState& ps)
 {
     /* Two poll descriptors: [0] = UDP socket, [1] = stop-pipe read end. */
     pollfd fds[2];
-    fds[0].fd     = ps.fd;
+    fds[0].fd = ps.fd;
     fds[0].events = POLLIN;
-    fds[1].fd     = ps.stopPipe[0];
+    fds[1].fd = ps.stopPipe[0];
     fds[1].events = POLLIN;
 
     constexpr std::size_t kBufLen = 256;
@@ -233,10 +255,11 @@ void UdpTableServer::runListener(PortState& ps)
 
         /* Receive the incoming datagram. */
         sockaddr_in sender{};
-        socklen_t   senderLen = sizeof(sender);
+        socklen_t senderLen = sizeof(sender);
 
         const ssize_t n = ::recvfrom(ps.fd,
-                                     buf, kBufLen - 1,
+                                     buf,
+                                     kBufLen - 1,
                                      0,
                                      reinterpret_cast<sockaddr*>(&sender),
                                      &senderLen);
@@ -250,7 +273,8 @@ void UdpTableServer::runListener(PortState& ps)
         ::inet_ntop(AF_INET, &sender.sin_addr, senderIp, sizeof(senderIp));
 
         /* Check for SUBSCRIBE request. */
-        const bool subscribe = (n >= 9 && std::strncmp(buf, "SUBSCRIBE", 9) == 0);
+        const bool subscribe =
+            (n >= 9 && std::strncmp(buf, "SUBSCRIBE", 9) == 0);
         if (subscribe)
         {
             std::lock_guard lock(ps.subMutex);
@@ -258,8 +282,8 @@ void UdpTableServer::runListener(PortState& ps)
             bool found = false;
             for (const auto& s : ps.subscribers)
             {
-                if (s.sin_addr.s_addr == sender.sin_addr.s_addr
-                    && s.sin_port == sender.sin_port)
+                if (s.sin_addr.s_addr == sender.sin_addr.s_addr &&
+                    s.sin_port == sender.sin_port)
                 {
                     found = true;
                     break;
@@ -269,7 +293,9 @@ void UdpTableServer::runListener(PortState& ps)
             {
                 ps.subscribers.push_back(sender);
                 std::println("[UdpTableServer] port {} subscriber added: {}:{}",
-                             ps.port, senderIp, ntohs(sender.sin_port));
+                             ps.port,
+                             senderIp,
+                             ntohs(sender.sin_port));
             }
         }
 

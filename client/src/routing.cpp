@@ -1,6 +1,7 @@
 /**
  * @file client/src/routing.cpp
- * @brief Linux kernel routing-table and network-interface manager implementation.
+ * @brief Linux kernel routing-table and network-interface manager
+ * implementation.
  *
  * All netlink communication uses a single @c NETLINK_ROUTE socket kept open
  * for the lifetime of the RoutingManager object.  Requests are serialised with
@@ -17,6 +18,7 @@
 
 #include "client/routing.hpp"
 
+#include <arpa/inet.h>
 #include <asm/types.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
@@ -24,8 +26,6 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
-#include <arpa/inet.h>
 
 #include <array>
 #include <cerrno>
@@ -67,21 +67,17 @@ constexpr std::size_t kNlReqSize = 1024;
  * @param alen    Payload length in bytes.
  * @return Pointer to the new attribute on success, @c nullptr on overflow.
  */
-rtattr* addRtAttr(nlmsghdr* nlh,
-                  std::size_t maxLen,
-                  int type,
-                  const void* data,
-                  int alen)
+rtattr* addRtAttr(
+    nlmsghdr* nlh, std::size_t maxLen, int type, const void* data, int alen)
 {
     int len = static_cast<int>(RTA_LENGTH(static_cast<unsigned>(alen)));
-    if (NLMSG_ALIGN(nlh->nlmsg_len) +
-            static_cast<unsigned>(RTA_ALIGN(len)) >
+    if (NLMSG_ALIGN(nlh->nlmsg_len) + static_cast<unsigned>(RTA_ALIGN(len)) >
         maxLen)
     {
         return nullptr;
     }
-    auto* rta = reinterpret_cast<rtattr*>(
-        reinterpret_cast<char*>(nlh) + NLMSG_ALIGN(nlh->nlmsg_len));
+    auto* rta = reinterpret_cast<rtattr*>(reinterpret_cast<char*>(nlh) +
+                                          NLMSG_ALIGN(nlh->nlmsg_len));
     rta->rta_type = static_cast<unsigned short>(type);
     rta->rta_len = static_cast<unsigned short>(len);
     if (alen > 0 && data != nullptr)
@@ -121,9 +117,8 @@ parseCidr(const std::string& cidr, int family)
             int pl = std::stoi(cidr.substr(slashPos + 1));
             if (pl < 0 || pl > maxPfx)
             {
-                return std::unexpected(
-                    std::format("prefix length {} out of range in '{}'",
-                                pl, cidr));
+                return std::unexpected(std::format(
+                    "prefix length {} out of range in '{}'", pl, cidr));
             }
             prefixLen = static_cast<uint8_t>(pl);
         }
@@ -141,8 +136,7 @@ parseCidr(const std::string& cidr, int family)
     std::array<uint8_t, 16> buf{};
     if (inet_pton(family, addrStr.c_str(), buf.data()) != 1)
     {
-        return std::unexpected(
-            std::format("inet_pton('{}') failed", addrStr));
+        return std::unexpected(std::format("inet_pton('{}') failed", addrStr));
     }
     return std::make_pair(buf, prefixLen);
 }
@@ -177,9 +171,13 @@ std::string macToString(const uint8_t* data, int len)
     {
         return {};
     }
-    return std::format(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        data[0], data[1], data[2], data[3], data[4], data[5]);
+    return std::format("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                       data[0],
+                       data[1],
+                       data[2],
+                       data[3],
+                       data[4],
+                       data[5]);
 }
 
 /**
@@ -209,8 +207,8 @@ RoutingManager::RoutingManager()
     fd_ = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
     if (fd_ < 0)
     {
-        throw std::system_error(errno, std::generic_category(),
-                                "RoutingManager: socket");
+        throw std::system_error(
+            errno, std::generic_category(), "RoutingManager: socket");
     }
 
     sockaddr_nl sa{};
@@ -220,8 +218,8 @@ RoutingManager::RoutingManager()
         const int saved = errno;
         close(fd_);
         fd_ = -1;
-        throw std::system_error(saved, std::generic_category(),
-                                "RoutingManager: bind");
+        throw std::system_error(
+            saved, std::generic_category(), "RoutingManager: bind");
     }
 }
 
@@ -278,9 +276,8 @@ RoutingManager::recvAll(uint32_t seq,
                     reinterpret_cast<const nlmsgerr*>(NLMSG_DATA(nlh));
                 if (err->error != 0)
                 {
-                    return std::unexpected(
-                        std::format("netlink error: {}",
-                                    std::strerror(-err->error)));
+                    return std::unexpected(std::format(
+                        "netlink error: {}", std::strerror(-err->error)));
                 }
                 // err->error == 0: this is a positive ACK.
                 return {};
@@ -334,8 +331,7 @@ RoutingManager::dumpLinks() const
             return;
         }
 
-        const auto* ifi =
-            reinterpret_cast<const ifinfomsg*>(NLMSG_DATA(nlh));
+        const auto* ifi = reinterpret_cast<const ifinfomsg*>(NLMSG_DATA(nlh));
         int attrLen = static_cast<int>(IFLA_PAYLOAD(nlh));
         const auto* rta = IFLA_RTA(ifi);
 
@@ -347,27 +343,25 @@ RoutingManager::dumpLinks() const
         {
             switch (rta->rta_type)
             {
-                case IFLA_IFNAME:
-                    iface.name =
-                        reinterpret_cast<const char*>(RTA_DATA(rta));
-                    break;
+            case IFLA_IFNAME:
+                iface.name = reinterpret_cast<const char*>(RTA_DATA(rta));
+                break;
 
-                case IFLA_MTU:
-                {
-                    uint32_t mtu{};
-                    std::memcpy(&mtu, RTA_DATA(rta), sizeof(mtu));
-                    iface.mtu = mtu;
-                    break;
-                }
+            case IFLA_MTU: {
+                uint32_t mtu{};
+                std::memcpy(&mtu, RTA_DATA(rta), sizeof(mtu));
+                iface.mtu = mtu;
+                break;
+            }
 
-                case IFLA_ADDRESS:
-                    iface.hwAddress = macToString(
-                        reinterpret_cast<const uint8_t*>(RTA_DATA(rta)),
-                        static_cast<int>(RTA_PAYLOAD(rta)));
-                    break;
+            case IFLA_ADDRESS:
+                iface.hwAddress =
+                    macToString(reinterpret_cast<const uint8_t*>(RTA_DATA(rta)),
+                                static_cast<int>(RTA_PAYLOAD(rta)));
+                break;
 
-                default:
-                    break;
+            default:
+                break;
             }
         }
 
@@ -416,8 +410,7 @@ RoutingManager::dumpAddrs(std::vector<NetworkInterface>& ifaces) const
             return;
         }
 
-        const auto* ifa =
-            reinterpret_cast<const ifaddrmsg*>(NLMSG_DATA(nlh));
+        const auto* ifa = reinterpret_cast<const ifaddrmsg*>(NLMSG_DATA(nlh));
         if (ifa->ifa_family != AF_INET && ifa->ifa_family != AF_INET6)
         {
             return;
@@ -445,8 +438,7 @@ RoutingManager::dumpAddrs(std::vector<NetworkInterface>& ifaces) const
             }
         }
 
-        const std::string& chosen =
-            !localAddr.empty() ? localAddr : peerAddr;
+        const std::string& chosen = !localAddr.empty() ? localAddr : peerAddr;
         if (chosen.empty())
         {
             return;
@@ -457,7 +449,8 @@ RoutingManager::dumpAddrs(std::vector<NetworkInterface>& ifaces) const
             if (iface.index == ifa->ifa_index)
             {
                 iface.addresses.push_back(
-                    InterfaceAddress{chosen, ifa->ifa_prefixlen,
+                    InterfaceAddress{chosen,
+                                     ifa->ifa_prefixlen,
                                      static_cast<int>(ifa->ifa_family)});
                 break;
             }
@@ -586,86 +579,76 @@ RoutingManager::listRoutes(int family, uint32_t table) const
         {
             switch (rta->rta_type)
             {
-                case RTA_DST:
-                    route.destination =
-                        addrToString(RTA_DATA(rta), route.family) + "/" +
-                        std::to_string(route.prefixLen);
-                    hasDst = true;
-                    break;
+            case RTA_DST:
+                route.destination = addrToString(RTA_DATA(rta), route.family) +
+                                    "/" + std::to_string(route.prefixLen);
+                hasDst = true;
+                break;
 
-                case RTA_GATEWAY:
-                    route.gateway =
-                        addrToString(RTA_DATA(rta), route.family);
-                    break;
+            case RTA_GATEWAY:
+                route.gateway = addrToString(RTA_DATA(rta), route.family);
+                break;
 
-                case RTA_OIF:
+            case RTA_OIF: {
+                uint32_t oif{};
+                std::memcpy(&oif, RTA_DATA(rta), sizeof(oif));
+                route.interfaceIndex = oif;
+                route.interfaceName = ifIndexToName(oif);
+                break;
+            }
+
+            case RTA_PRIORITY: {
+                uint32_t prio{};
+                std::memcpy(&prio, RTA_DATA(rta), sizeof(prio));
+                route.metric = prio;
+                break;
+            }
+
+            case RTA_TABLE: {
+                uint32_t tbl{};
+                std::memcpy(&tbl, RTA_DATA(rta), sizeof(tbl));
+                route.table = tbl;
+                break;
+            }
+
+            case RTA_MULTIPATH: {
+                // FRR/Zebra encodes nexthops in RTA_MULTIPATH even for
+                // single-path OSPF routes.  Walk the rtnexthop list and
+                // collect (gateway, oif) for each entry; the caller gets
+                // one KernelRoute per nexthop so ECMP is fully visible.
+                auto* rtnh = reinterpret_cast<rtnexthop*>(RTA_DATA(rta));
+                int nhrem = static_cast<int>(RTA_PAYLOAD(rta));
+
+                while (RTNH_OK(rtnh, nhrem))
                 {
-                    uint32_t oif{};
-                    std::memcpy(&oif, RTA_DATA(rta), sizeof(oif));
-                    route.interfaceIndex = oif;
-                    route.interfaceName = ifIndexToName(oif);
-                    break;
-                }
+                    std::string nhGw;
+                    const auto nhOif =
+                        static_cast<uint32_t>(rtnh->rtnh_ifindex);
 
-                case RTA_PRIORITY:
-                {
-                    uint32_t prio{};
-                    std::memcpy(&prio, RTA_DATA(rta), sizeof(prio));
-                    route.metric = prio;
-                    break;
-                }
+                    // Each rtnexthop may have nested rtattrs, the most
+                    // important being RTA_GATEWAY (the nexthop address).
+                    auto* inner = reinterpret_cast<rtattr*>(RTNH_DATA(rtnh));
+                    int ilen = static_cast<int>(rtnh->rtnh_len) -
+                               static_cast<int>(sizeof(rtnexthop));
 
-                case RTA_TABLE:
-                {
-                    uint32_t tbl{};
-                    std::memcpy(&tbl, RTA_DATA(rta), sizeof(tbl));
-                    route.table = tbl;
-                    break;
-                }
-
-                case RTA_MULTIPATH:
-                {
-                    // FRR/Zebra encodes nexthops in RTA_MULTIPATH even for
-                    // single-path OSPF routes.  Walk the rtnexthop list and
-                    // collect (gateway, oif) for each entry; the caller gets
-                    // one KernelRoute per nexthop so ECMP is fully visible.
-                    auto* rtnh = reinterpret_cast<rtnexthop*>(
-                        RTA_DATA(rta));
-                    int nhrem = static_cast<int>(RTA_PAYLOAD(rta));
-
-                    while (RTNH_OK(rtnh, nhrem))
+                    for (; RTA_OK(inner, ilen); inner = RTA_NEXT(inner, ilen))
                     {
-                        std::string nhGw;
-                        const auto  nhOif =
-                            static_cast<uint32_t>(rtnh->rtnh_ifindex);
-
-                        // Each rtnexthop may have nested rtattrs, the most
-                        // important being RTA_GATEWAY (the nexthop address).
-                        auto* inner = reinterpret_cast<rtattr*>(
-                            RTNH_DATA(rtnh));
-                        int ilen = static_cast<int>(rtnh->rtnh_len) -
-                                   static_cast<int>(sizeof(rtnexthop));
-
-                        for (; RTA_OK(inner, ilen);
-                             inner = RTA_NEXT(inner, ilen))
+                        if (inner->rta_type == RTA_GATEWAY)
                         {
-                            if (inner->rta_type == RTA_GATEWAY)
-                            {
-                                nhGw = addrToString(RTA_DATA(inner),
-                                                    route.family);
-                            }
+                            nhGw = addrToString(RTA_DATA(inner), route.family);
                         }
-
-                        nexthops.emplace_back(std::move(nhGw), nhOif);
-
-                        nhrem -= NLMSG_ALIGN(rtnh->rtnh_len);
-                        rtnh   = RTNH_NEXT(rtnh);
                     }
-                    break;
-                }
 
-                default:
-                    break;
+                    nexthops.emplace_back(std::move(nhGw), nhOif);
+
+                    nhrem -= NLMSG_ALIGN(rtnh->rtnh_len);
+                    rtnh = RTNH_NEXT(rtnh);
+                }
+                break;
+            }
+
+            default:
+                break;
             }
         }
 
@@ -697,10 +680,10 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                 {
                     continue;
                 }
-                KernelRoute r    = route; // copy shared fields
-                r.gateway        = nhGw;
+                KernelRoute r = route; // copy shared fields
+                r.gateway = nhGw;
                 r.interfaceIndex = nhOif;
-                r.interfaceName  = ifIndexToName(nhOif);
+                r.interfaceName = ifIndexToName(nhOif);
                 routes.push_back(std::move(r));
             }
         }
@@ -717,10 +700,8 @@ RoutingManager::listRoutes(int family, uint32_t table) const
 // Private: sendRouteRequest
 // ---------------------------------------------------------------------------
 
-std::expected<void, std::string>
-RoutingManager::sendRouteRequest(const RouteParams& params,
-                                 uint16_t nlType,
-                                 uint16_t flags)
+std::expected<void, std::string> RoutingManager::sendRouteRequest(
+    const RouteParams& params, uint16_t nlType, uint16_t flags)
 {
     // -- Parse destination CIDR -----------------------------------------------
     auto cidr = parseCidr(params.destination, params.family);
@@ -735,8 +716,8 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     bool hasGw{false};
     if (!params.gateway.empty())
     {
-        if (inet_pton(params.family, params.gateway.c_str(),
-                      gwAddr.data()) != 1)
+        if (inet_pton(params.family, params.gateway.c_str(), gwAddr.data()) !=
+            1)
         {
             return std::unexpected(
                 std::format("invalid gateway address '{}'", params.gateway));
@@ -748,13 +729,12 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     uint32_t oif{0};
     if (!params.interfaceName.empty())
     {
-        const unsigned idx =
-            if_nametoindex(params.interfaceName.c_str());
+        const unsigned idx = if_nametoindex(params.interfaceName.c_str());
         if (idx == 0)
         {
-            return std::unexpected(
-                std::format("if_nametoindex '{}': {}",
-                            params.interfaceName, std::strerror(errno)));
+            return std::unexpected(std::format("if_nametoindex '{}': {}",
+                                               params.interfaceName,
+                                               std::strerror(errno)));
         }
         oif = static_cast<uint32_t>(idx);
     }
@@ -769,8 +749,7 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     std::array<char, kNlReqSize> buf{};
     auto* nlh = reinterpret_cast<nlmsghdr*>(buf.data());
     nlh->nlmsg_type = nlType;
-    nlh->nlmsg_flags =
-        static_cast<uint16_t>(NLM_F_REQUEST | NLM_F_ACK) | flags;
+    nlh->nlmsg_flags = static_cast<uint16_t>(NLM_F_REQUEST | NLM_F_ACK) | flags;
     const uint32_t mySeq = seq_++;
     nlh->nlmsg_seq = mySeq;
     nlh->nlmsg_len = NLMSG_LENGTH(sizeof(rtmsg));
@@ -791,8 +770,7 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     const int addrLen = (params.family == AF_INET6) ? 16 : 4;
 
     // RTA_DST – destination network address
-    if (addRtAttr(nlh, buf.size(), RTA_DST, dstAddr.data(), addrLen) ==
-        nullptr)
+    if (addRtAttr(nlh, buf.size(), RTA_DST, dstAddr.data(), addrLen) == nullptr)
     {
         return std::unexpected("message buffer overflow: RTA_DST");
     }
@@ -800,8 +778,8 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     // RTA_GATEWAY – optional next-hop
     if (hasGw)
     {
-        if (addRtAttr(nlh, buf.size(), RTA_GATEWAY, gwAddr.data(),
-                      addrLen) == nullptr)
+        if (addRtAttr(nlh, buf.size(), RTA_GATEWAY, gwAddr.data(), addrLen) ==
+            nullptr)
         {
             return std::unexpected("message buffer overflow: RTA_GATEWAY");
         }
@@ -810,8 +788,7 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     // RTA_OIF – optional output interface
     if (oif != 0)
     {
-        if (addRtAttr(nlh, buf.size(), RTA_OIF, &oif, sizeof(oif)) ==
-            nullptr)
+        if (addRtAttr(nlh, buf.size(), RTA_OIF, &oif, sizeof(oif)) == nullptr)
         {
             return std::unexpected("message buffer overflow: RTA_OIF");
         }
@@ -820,7 +797,10 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     // RTA_PRIORITY – only emitted when non-zero to preserve kernel defaults
     if (params.metric != 0)
     {
-        if (addRtAttr(nlh, buf.size(), RTA_PRIORITY, &params.metric,
+        if (addRtAttr(nlh,
+                      buf.size(),
+                      RTA_PRIORITY,
+                      &params.metric,
                       sizeof(params.metric)) == nullptr)
         {
             return std::unexpected("message buffer overflow: RTA_PRIORITY");
@@ -830,7 +810,10 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
     // RTA_TABLE – required when the table ID does not fit in 8 bits
     if (params.table > 255)
     {
-        if (addRtAttr(nlh, buf.size(), RTA_TABLE, &params.table,
+        if (addRtAttr(nlh,
+                      buf.size(),
+                      RTA_TABLE,
+                      &params.table,
                       sizeof(params.table)) == nullptr)
         {
             return std::unexpected("message buffer overflow: RTA_TABLE");
@@ -839,8 +822,7 @@ RoutingManager::sendRouteRequest(const RouteParams& params,
 
     if (send(fd_, buf.data(), nlh->nlmsg_len, 0) < 0)
     {
-        return std::unexpected(
-            std::format("send: {}", std::strerror(errno)));
+        return std::unexpected(std::format("send: {}", std::strerror(errno)));
     }
 
     // Wait for the kernel ACK / NACK (NLMSG_ERROR with err == 0 / err < 0).
@@ -856,9 +838,7 @@ RoutingManager::addRoute(const RouteParams& params)
 {
     std::lock_guard lock(mtx_);
     return sendRouteRequest(
-        params,
-        RTM_NEWROUTE,
-        static_cast<uint16_t>(NLM_F_CREATE | NLM_F_EXCL));
+        params, RTM_NEWROUTE, static_cast<uint16_t>(NLM_F_CREATE | NLM_F_EXCL));
 }
 
 // ---------------------------------------------------------------------------

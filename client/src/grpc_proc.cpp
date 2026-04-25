@@ -18,8 +18,7 @@ namespace sra
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-GrpcProc::GrpcProc(RouteClient& client, bool autoStart)
-    : client_(client)
+GrpcProc::GrpcProc(RouteClient& client, bool autoStart) : client_(client)
 {
     if (autoStart)
     {
@@ -40,7 +39,8 @@ void GrpcProc::start()
 {
     if (running_.exchange(true))
     {
-        throw std::logic_error("GrpcProc::start() called while already running");
+        throw std::logic_error(
+            "GrpcProc::start() called while already running");
     }
     thread_ = std::thread(&GrpcProc::threadFunc, this);
 }
@@ -51,7 +51,8 @@ void GrpcProc::stop()
     {
         return; // already stopped or never started
     }
-    requestCv_.notify_all(); // wake the thread so it can observe running_ == false
+    requestCv_
+        .notify_all(); // wake the thread so it can observe running_ == false
     if (thread_.joinable())
     {
         thread_.join();
@@ -86,8 +87,7 @@ std::optional<GrpcResponse>
 GrpcProc::waitForResponse(uint64_t id, std::chrono::milliseconds timeout)
 {
     std::unique_lock lock(responseMutex_);
-    const bool arrived = responseCv_.wait_for(lock, timeout, [&]
-    {
+    const bool arrived = responseCv_.wait_for(lock, timeout, [&] {
         return responses_.contains(id);
     });
 
@@ -143,8 +143,7 @@ void GrpcProc::threadFunc()
         // ── Wait for a request ──────────────────────────────────────────────
         {
             std::unique_lock lock(requestMutex_);
-            requestCv_.wait(lock, [this]
-            {
+            requestCv_.wait(lock, [this] {
                 return !requestQueue_.empty() || !running_.load();
             });
 
@@ -164,10 +163,9 @@ void GrpcProc::threadFunc()
         {
             std::lock_guard lock(responseMutex_);
             responses_.emplace(req.id,
-                               GrpcResponse{
-                                   req.id,
-                                   std::move(result),
-                                   std::chrono::system_clock::now()});
+                               GrpcResponse{req.id,
+                                            std::move(result),
+                                            std::chrono::system_clock::now()});
         }
         responseCv_.notify_all();
     }
@@ -184,11 +182,11 @@ void GrpcProc::threadFunc()
 ResponsePayload GrpcProc::dispatch(const GrpcRequest& req)
 {
     return std::visit(
-        [this](const auto& params) -> ResponsePayload
-        {
+        [this](const auto& params) -> ResponsePayload {
             using T = std::decay_t<decltype(params)>;
 
-            // Non-ambiguous types: implicit conversion to ResponsePayload is fine.
+            // Non-ambiguous types: implicit conversion to ResponsePayload is
+            // fine.
             if constexpr (std::is_same_v<T, EchoParams>)
             {
                 return client_.echo(params.message);
@@ -213,14 +211,13 @@ ResponsePayload GrpcProc::dispatch(const GrpcRequest& req)
             // variant alternative explicitly (see index map in grpc_proc.hpp).
             else if constexpr (std::is_same_v<T, AddRouteParams>)
             {
-                return ResponsePayload(
-                    std::in_place_index<2>,
-                    client_.addRoute(params.destination,
-                                     params.gateway,
-                                     params.interfaceName,
-                                     params.metric,
-                                     params.family,
-                                     params.protocol));
+                return ResponsePayload(std::in_place_index<2>,
+                                       client_.addRoute(params.destination,
+                                                        params.gateway,
+                                                        params.interfaceName,
+                                                        params.metric,
+                                                        params.family,
+                                                        params.protocol));
             }
             else if constexpr (std::is_same_v<T, GetRouteParams>)
             {

@@ -85,15 +85,15 @@
 // Test fixture
 // ---------------------------------------------------------------------------
 
-static constexpr std::string_view kIfaceName  = "eth0";
-static constexpr std::string_view kNexthopIp  = "10.0.0.1";
-static constexpr std::uint32_t    kNexthopId  = 42;
+static constexpr std::string_view kIfaceName = "eth0";
+static constexpr std::string_view kNexthopIp = "10.0.0.1";
+static constexpr std::uint32_t kNexthopId = 42;
 
 struct TestPrefix
 {
     std::string_view cidr;
     std::string_view addr;
-    std::uint8_t     mask;
+    std::uint8_t mask;
 };
 
 static constexpr std::array<TestPrefix, 2> kPrefixes{{
@@ -111,7 +111,8 @@ static constexpr std::array<TestPrefix, 2> kPrefixes{{
  */
 static bool parse_ipv4(std::string_view s, cmdproto::Ipv4Addr& out)
 {
-    struct in_addr a{};
+    struct in_addr a
+    {};
     if (::inet_pton(AF_INET, std::string(s).c_str(), &a) != 1)
         return false;
     const auto* b = reinterpret_cast<const std::uint8_t*>(&a.s_addr);
@@ -131,7 +132,8 @@ nb_send_all(int fd, std::span<const std::uint8_t> data, int timeout_ms = 5000)
         pollfd pfd{fd, POLLOUT, 0};
         int r = ::poll(&pfd, 1, timeout_ms);
         if (r < 0)
-            return std::unexpected(std::error_code(errno, std::system_category()));
+            return std::unexpected(
+                std::error_code(errno, std::system_category()));
         if (r == 0)
             return std::unexpected(
                 net::make_error_code(net::NetError::SendFailed));
@@ -163,7 +165,8 @@ nb_recv_frame(int fd, int timeout_ms = 5000)
         pollfd pfd{fd, POLLIN, 0};
         int r = ::poll(&pfd, 1, timeout_ms);
         if (r < 0)
-            return std::unexpected(std::error_code(errno, std::system_category()));
+            return std::unexpected(
+                std::error_code(errno, std::system_category()));
         if (r == 0)
             return std::unexpected(
                 net::make_error_code(net::NetError::RecvFailed));
@@ -175,7 +178,8 @@ nb_recv_frame(int fd, int timeout_ms = 5000)
                 continue;
             return std::unexpected(n.error());
         }
-        buf.insert(buf.end(), tmp.begin(),
+        buf.insert(buf.end(),
+                   tmp.begin(),
                    tmp.begin() + static_cast<std::ptrdiff_t>(*n));
 
         std::size_t end = 0;
@@ -196,8 +200,7 @@ nb_recv_frame(int fd, int timeout_ms = 5000)
  * kNexthopIp, kNexthopId) and the kPrefixes prefix list, then encodes the
  * full protocol stack: cmdproto → ExchangeData → routeproto DATA → udproto.
  */
-static std::expected<std::vector<std::uint8_t>, std::error_code>
-phase_encode()
+static std::expected<std::vector<std::uint8_t>, std::error_code> phase_encode()
 {
     std::print("[1/6] encoding ROUTE_ADD INTERFACE_ROUTE command ... ");
 
@@ -206,7 +209,8 @@ phase_encode()
 
     // Null-padded 32-byte interface name.
     for (std::size_t i = 0;
-         i < cmdproto::IFACE_NAME_SIZE && i < kIfaceName.size(); ++i)
+         i < cmdproto::IFACE_NAME_SIZE && i < kIfaceName.size();
+         ++i)
         iface.iface_name[i] = kIfaceName[i];
 
     if (!parse_ipv4(kNexthopIp, iface.nexthop_addr_ipv4))
@@ -234,7 +238,7 @@ phase_encode()
     req.interfaces.push_back(std::move(iface));
 
     // cmdproto: ROUTE_ADD with INTERFACE_ROUTE binary payload.
-    auto cmd       = cmdproto::make_route_add_binary(req);
+    auto cmd = cmdproto::make_route_add_binary(req);
     auto cmd_bytes = cmdproto::encode_command(cmd);
     if (!cmd_bytes)
     {
@@ -244,20 +248,21 @@ phase_encode()
 
     // routeproto: wrap in ExchangeData + DATA message.
     routeproto::ExchangeData ed;
-    ed.commands     = *cmd_bytes;
+    ed.commands = *cmd_bytes;
     ed.num_commands = 1;
 
     auto exch_bytes = routeproto::encode_exchange(ed);
     if (!exch_bytes)
     {
-        std::println("FAIL (encode_exchange: {})", exch_bytes.error().message());
+        std::println("FAIL (encode_exchange: {})",
+                     exch_bytes.error().message());
         return std::unexpected(exch_bytes.error());
     }
 
     static std::uint16_t s_msg_id = 1;
-    const std::uint16_t  msg_id   = s_msg_id++;
+    const std::uint16_t msg_id = s_msg_id++;
 
-    auto data_msg  = routeproto::make_data(msg_id, *exch_bytes);
+    auto data_msg = routeproto::make_data(msg_id, *exch_bytes);
     auto msg_bytes = routeproto::encode_message(data_msg);
     if (!msg_bytes)
     {
@@ -267,10 +272,10 @@ phase_encode()
 
     // udproto: wrap in a framed packet.
     udproto::Packet pkt{
-        .pkt_num    = msg_id,
+        .pkt_num = msg_id,
         .total_pkts = 1,
-        .ctrl       = 0x0000,
-        .data       = *msg_bytes,
+        .ctrl = 0x0000,
+        .data = *msg_bytes,
     };
     auto frame = udproto::encode_packet(pkt);
     if (!frame)
@@ -294,8 +299,7 @@ phase_connect(const std::string& sock_path)
     auto sock_result = net::create_socket();
     if (!sock_result)
     {
-        std::println("FAIL (create_socket: {})",
-                     sock_result.error().message());
+        std::println("FAIL (create_socket: {})", sock_result.error().message());
         return std::unexpected(sock_result.error());
     }
 
@@ -390,7 +394,8 @@ int main(int argc, char* argv[])
         std::println("FAIL ({})", recv_frame_data.error().message());
         return EXIT_FAILURE;
     }
-    logger::log_hex("route_add_single_iface", false, sock->fd(), *recv_frame_data);
+    logger::log_hex(
+        "route_add_single_iface", false, sock->fd(), *recv_frame_data);
     std::println("OK ({} bytes)", recv_frame_data->size());
 
     // ── Phase 5: decode ─────────────────────────────────────────────────────
@@ -454,7 +459,8 @@ int main(int argc, char* argv[])
     if (bin_resp->prefix_status.size() < kPrefixes.size())
     {
         std::println("      WARNING: expected {} prefix result(s), got {}",
-                     kPrefixes.size(), bin_resp->prefix_status.size());
+                     kPrefixes.size(),
+                     bin_resp->prefix_status.size());
     }
 
     std::println("");

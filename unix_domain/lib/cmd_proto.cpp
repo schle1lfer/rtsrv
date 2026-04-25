@@ -149,7 +149,7 @@ void write_be32(std::vector<std::uint8_t>& out, std::uint32_t v)
 {
     out.push_back(static_cast<std::uint8_t>(v >> 24));
     out.push_back(static_cast<std::uint8_t>(v >> 16));
-    out.push_back(static_cast<std::uint8_t>(v >>  8));
+    out.push_back(static_cast<std::uint8_t>(v >> 8));
     out.push_back(static_cast<std::uint8_t>(v));
 }
 
@@ -161,10 +161,10 @@ void write_be32(std::vector<std::uint8_t>& out, std::uint32_t v)
  */
 std::uint32_t read_be32(std::span<const std::uint8_t> buf, std::size_t offset)
 {
-    return (static_cast<std::uint32_t>(buf[offset])     << 24) |
+    return (static_cast<std::uint32_t>(buf[offset]) << 24) |
            (static_cast<std::uint32_t>(buf[offset + 1]) << 16) |
-           (static_cast<std::uint32_t>(buf[offset + 2]) <<  8) |
-            static_cast<std::uint32_t>(buf[offset + 3]);
+           (static_cast<std::uint32_t>(buf[offset + 2]) << 8) |
+           static_cast<std::uint32_t>(buf[offset + 3]);
 }
 
 /**
@@ -228,12 +228,18 @@ std::string_view field_id_name(FieldId id) noexcept
 {
     switch (id)
     {
-    case FieldId::DST_ADDR:   return "DST_ADDR";
-    case FieldId::PREFIX_LEN: return "PREFIX_LEN";
-    case FieldId::GATEWAY:    return "GATEWAY";
-    case FieldId::IF_NAME:    return "IF_NAME";
-    case FieldId::METRIC:     return "METRIC";
-    default:                  return "UNKNOWN";
+    case FieldId::DST_ADDR:
+        return "DST_ADDR";
+    case FieldId::PREFIX_LEN:
+        return "PREFIX_LEN";
+    case FieldId::GATEWAY:
+        return "GATEWAY";
+    case FieldId::IF_NAME:
+        return "IF_NAME";
+    case FieldId::METRIC:
+        return "METRIC";
+    default:
+        return "UNKNOWN";
     }
 }
 
@@ -257,8 +263,10 @@ encode_command(const Command& cmd)
         write_be16(out, static_cast<std::uint16_t>(cmd.raw_payload.size()));
         out.insert(out.end(), cmd.raw_payload.begin(), cmd.raw_payload.end());
 
-        logger::log(logger::DEBUG, "cmdproto",
-                    std::format("encode cmd (binary): cmd_id=0x{:02x}({}) data_len={}  total={}",
+        logger::log(logger::DEBUG,
+                    "cmdproto",
+                    std::format("encode cmd (binary): cmd_id=0x{:02x}({}) "
+                                "data_len={}  total={}",
                                 static_cast<unsigned>(cmd.cmd_id),
                                 cmd_id_name(cmd.cmd_id),
                                 cmd.raw_payload.size(),
@@ -277,11 +285,13 @@ encode_command(const Command& cmd)
     out.push_back(static_cast<std::uint8_t>(cmd.cmd_id));
     write_be16(out, static_cast<std::uint16_t>(fields_size));
 
-    logger::log(logger::DEBUG, "cmdproto",
-                std::format("encode cmd (tlv) hdr: cmd_id=0x{:02x}({}) data_len={}",
-                            static_cast<unsigned>(cmd.cmd_id),
-                            cmd_id_name(cmd.cmd_id),
-                            fields_size));
+    logger::log(
+        logger::DEBUG,
+        "cmdproto",
+        std::format("encode cmd (tlv) hdr: cmd_id=0x{:02x}({}) data_len={}",
+                    static_cast<unsigned>(cmd.cmd_id),
+                    cmd_id_name(cmd.cmd_id),
+                    fields_size));
 
     // Field entries.
     std::size_t fi = 0;
@@ -291,9 +301,11 @@ encode_command(const Command& cmd)
         out.push_back(static_cast<std::uint8_t>(f.field_id));
         out.push_back(static_cast<std::uint8_t>(f.data.size()));
         out.insert(out.end(), f.data.begin(), f.data.end());
-        logger::log(logger::DEBUG, "cmdproto",
+        logger::log(logger::DEBUG,
+                    "cmdproto",
                     std::format("  field[{}] @{}: id=0x{:02x}({}) len={}",
-                                fi++, field_offset,
+                                fi++,
+                                field_offset,
                                 static_cast<unsigned>(f.field_id),
                                 field_id_name(f.field_id),
                                 f.data.size()));
@@ -337,11 +349,13 @@ decode_command(std::span<const std::uint8_t> raw)
     Command cmd;
     cmd.cmd_id = static_cast<CmdId>(cmd_id_byte);
 
-    logger::log(logger::DEBUG, "cmdproto",
-                std::format("decode cmd hdr @0: cmd_id=0x{:02x}({}) data_len={}",
-                            cmd_id_byte,
-                            cmd_id_name(cmd.cmd_id),
-                            data_len));
+    logger::log(
+        logger::DEBUG,
+        "cmdproto",
+        std::format("decode cmd hdr @0: cmd_id=0x{:02x}({}) data_len={}",
+                    cmd_id_byte,
+                    cmd_id_name(cmd.cmd_id),
+                    data_len));
 
     // Always capture the raw payload bytes so callers can choose between
     // binary-format and TLV-format decoding.
@@ -360,7 +374,7 @@ decode_command(std::span<const std::uint8_t> raw)
         if (end - pos < FIELD_HEADER_SIZE)
             break; // truncated field header — stop gracefully
 
-        const auto field_id  = raw[pos];
+        const auto field_id = raw[pos];
         const auto field_len = raw[pos + 1];
         pos += FIELD_HEADER_SIZE;
 
@@ -372,9 +386,11 @@ decode_command(std::span<const std::uint8_t> raw)
         f.data.assign(raw.begin() + static_cast<std::ptrdiff_t>(pos),
                       raw.begin() +
                           static_cast<std::ptrdiff_t>(pos + field_len));
-        logger::log(logger::DEBUG, "cmdproto",
+        logger::log(logger::DEBUG,
+                    "cmdproto",
                     std::format("  field[{}] @{}: id=0x{:02x}({}) len={}",
-                                fi++, pos - FIELD_HEADER_SIZE,
+                                fi++,
+                                pos - FIELD_HEADER_SIZE,
                                 field_id,
                                 field_id_name(static_cast<FieldId>(field_id)),
                                 field_len));
@@ -695,8 +711,8 @@ decode_route_list_response(std::span<const std::uint8_t> raw)
 // ---------------------------------------------------------------------------
 // Stub command handlers
 // ---------------------------------------------------------------------------
-//std::expected<RouteAddBinaryResponse, std::error_code>
-//handle_route_add_payload(const SingleRouteRequest& req)
+// std::expected<RouteAddBinaryResponse, std::error_code>
+// handle_route_add_payload(const SingleRouteRequest& req)
 /// @brief @copybrief cmdproto::handle_route_add
 std::expected<void, std::error_code> handle_route_add(const RouteAddParams& p)
 {
@@ -733,7 +749,8 @@ std::expected<void, std::error_code> handle_route_add(const RouteAddParams& p)
     if (g_callbacks.route_add)
     {
         // hw ASIC
-        return g_callbacks.route_add(std::make_shared<netlink::RouteAddParams>(np));
+        return g_callbacks.route_add(
+            std::make_shared<netlink::RouteAddParams>(np));
     }
     else
     {
@@ -774,7 +791,8 @@ std::expected<void, std::error_code> handle_route_del(const RouteDelParams& p)
     if (g_callbacks.route_del)
     {
         // hw ASIC
-        return g_callbacks.route_del(std::make_shared<netlink::RouteDelParams>(np));
+        return g_callbacks.route_del(
+            std::make_shared<netlink::RouteDelParams>(np));
     }
     else
     {
@@ -791,7 +809,8 @@ std::expected<std::vector<RouteEntry>, std::error_code> handle_route_list()
     if (g_callbacks.route_list)
     {
         // hw ASIC
-        auto table = std::make_shared<netlink::RouteTable>(netlink::RouteTable::Main);
+        auto table =
+            std::make_shared<netlink::RouteTable>(netlink::RouteTable::Main);
         nl_routes = g_callbacks.route_list(std::move(table));
     }
     else
@@ -802,7 +821,7 @@ std::expected<std::vector<RouteEntry>, std::error_code> handle_route_list()
 
     if (!nl_routes)
         return std::unexpected(nl_routes.error());
-    
+
     std::vector<RouteEntry> routes;
     routes.reserve(nl_routes->size());
 
@@ -950,7 +969,8 @@ decode_route_add_payload(std::span<const std::uint8_t> raw)
             iface.prefixes.push_back(p);
         }
 
-        logger::log(logger::INFO, "cmdproto",
+        logger::log(logger::INFO,
+                    "cmdproto",
                     std::format("  iface='{}' nexthop={} id={} prefixes={}",
                                 iface.iface_name.data(),
                                 fmt_ipv4(iface.nexthop_addr_ipv4),
@@ -960,7 +980,8 @@ decode_route_add_payload(std::span<const std::uint8_t> raw)
         req.interfaces.push_back(std::move(iface));
     }
 
-    logger::log(logger::INFO, "cmdproto",
+    logger::log(logger::INFO,
+                "cmdproto",
                 std::format("decode_route_add_payload: type=SINGLE_ROUTE"
                             "  interfaces={}",
                             req.interfaces.size()));
@@ -998,10 +1019,12 @@ encode_route_add_binary_response(const RouteAddBinaryResponse& resp)
             bits_hex += ' ';
         bits_hex += std::format("{:02x}", out[i]);
     }
-    logger::log(logger::INFO, "cmdproto",
+    logger::log(logger::INFO,
+                "cmdproto",
                 std::format("encode_route_add_binary_response:"
                             "  status=0x{:02x}  prefix_bytes={}  [{}]",
-                            resp.status_code, status_bytes,
+                            resp.status_code,
+                            status_bytes,
                             bits_hex.empty() ? "(none)" : bits_hex));
 
     return out;
@@ -1033,10 +1056,12 @@ handle_route_add_payload(const SingleRouteRequest& req)
     for (const auto& iface : req.interfaces)
         total_prefixes += iface.prefixes.size();
 
-    logger::log(logger::INFO, "cmdproto",
+    logger::log(logger::INFO,
+                "cmdproto",
                 std::format("handle_route_add_payload: {} interface(s)"
                             " {} total prefix(es)",
-                            req.interfaces.size(), total_prefixes));
+                            req.interfaces.size(),
+                            total_prefixes));
 
     RouteAddBinaryResponse resp;
     resp.status_code = 0x00;
@@ -1044,7 +1069,8 @@ handle_route_add_payload(const SingleRouteRequest& req)
 
     for (const auto& iface : req.interfaces)
     {
-        logger::log(logger::INFO, "cmdproto",
+        logger::log(logger::INFO,
+                    "cmdproto",
                     std::format("  iface='{}' nexthop={} id={} prefixes={}",
                                 iface.iface_name.data(),
                                 fmt_ipv4(iface.nexthop_addr_ipv4),
@@ -1056,43 +1082,49 @@ handle_route_add_payload(const SingleRouteRequest& req)
             const auto& pfx = iface.prefixes[i];
 
             netlink::RouteAddParams np;
-            np.dst         = pfx.addr;
-            np.prefix_len  = pfx.mask_len;
-            np.gateway     = iface.nexthop_addr_ipv4;
+            np.dst = pfx.addr;
+            np.prefix_len = pfx.mask_len;
+            np.gateway = iface.nexthop_addr_ipv4;
             np.has_gateway = true;
-            np.if_name     = iface.iface_name.data();
-            np.scope       = netlink::RouteScope::Universe;
-            np.protocol    = netlink::RouteProtocol::Static;
-            np.type        = netlink::RouteType::Unicast;
-            np.table       = netlink::RouteTable::Main;
+            np.if_name = iface.iface_name.data();
+            np.scope = netlink::RouteScope::Universe;
+            np.protocol = netlink::RouteProtocol::Static;
+            np.type = netlink::RouteType::Unicast;
+            np.table = netlink::RouteTable::Main;
 
-            //auto result = netlink::add_route(np);
-            if (g_callbacks.route_add) {
-                g_callbacks.route_add(std::make_shared<netlink::RouteAddParams>(np));
+            // auto result = netlink::add_route(np);
+            if (g_callbacks.route_add)
+            {
+                g_callbacks.route_add(
+                    std::make_shared<netlink::RouteAddParams>(np));
             }
-            const bool ok = true; //result.has_value();
+            const bool ok = true; // result.has_value();
             resp.prefix_status.push_back(ok);
             if (!ok)
                 resp.status_code = 0x01;
 
-            logger::log(logger::INFO, "cmdproto",
-                        std::format("    prefix[{:02}]  {}/{}  via {}  dev {}"
-                                    "  ->  {}{}",
-                                    i,
-                                    fmt_ipv4(pfx.addr),
-                                    static_cast<unsigned>(pfx.mask_len),
-                                    fmt_ipv4(iface.nexthop_addr_ipv4),
-                                    iface.iface_name.data(),
-                                    ok ? "OK" : "FAIL",
-                                    ok ? "" : std::format("  ({})",
-                                        "CB TEST"/*result.error().message()*/)));
+            logger::log(
+                logger::INFO,
+                "cmdproto",
+                std::format(
+                    "    prefix[{:02}]  {}/{}  via {}  dev {}"
+                    "  ->  {}{}",
+                    i,
+                    fmt_ipv4(pfx.addr),
+                    static_cast<unsigned>(pfx.mask_len),
+                    fmt_ipv4(iface.nexthop_addr_ipv4),
+                    iface.iface_name.data(),
+                    ok ? "OK" : "FAIL",
+                    ok ? ""
+                       : std::format("  ({})",
+                                     "CB TEST" /*result.error().message()*/)));
         }
     }
 
-    const int ok_count =
-        static_cast<int>(std::count(resp.prefix_status.begin(),
-                                    resp.prefix_status.end(), true));
-    logger::log(logger::INFO, "cmdproto",
+    const int ok_count = static_cast<int>(
+        std::count(resp.prefix_status.begin(), resp.prefix_status.end(), true));
+    logger::log(logger::INFO,
+                "cmdproto",
                 std::format("handle_route_add_payload: {}/{} prefix(es)"
                             " installed  status=0x{:02x}",
                             ok_count,

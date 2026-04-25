@@ -52,8 +52,7 @@ static void printResponse(const sra::GrpcResponse& resp)
     std::print("  [id={}] ", resp.id);
 
     std::visit(
-        [](const auto& result)
-        {
+        [](const auto& result) {
             using T = std::decay_t<decltype(result)>;
 
             if constexpr (std::is_same_v<T, sra::EchoResult>)
@@ -83,7 +82,8 @@ static void printResponse(const sra::GrpcResponse& resp)
                 if (result)
                 {
                     std::println("AddRoute OK  → id={} dest={}",
-                                 result->id(), result->destination());
+                                 result->id(),
+                                 result->destination());
                 }
                 else
                 {
@@ -105,7 +105,8 @@ static void printResponse(const sra::GrpcResponse& resp)
             {
                 if (result)
                 {
-                    std::println("GetRoute OK  → dest={}", result->destination());
+                    std::println("GetRoute OK  → dest={}",
+                                 result->destination());
                 }
                 else
                 {
@@ -116,7 +117,8 @@ static void printResponse(const sra::GrpcResponse& resp)
             {
                 if (result)
                 {
-                    std::println("ListRoutes OK  → {} route(s)", result->size());
+                    std::println("ListRoutes OK  → {} route(s)",
+                                 result->size());
                 }
                 else
                 {
@@ -168,17 +170,21 @@ static void exampleFireAndCollect(sra::GrpcProc& proc)
     std::println("\n=== Example 1: fire-and-collect ===");
 
     // Submit requests without waiting for them
-    const uint64_t idEcho  = proc.submit(sra::EchoParams{"hello from grpc_proc"});
-    const uint64_t idHb    = proc.submit(sra::HeartbeatParams{42});
-    const uint64_t idList  = proc.submit(sra::ListRoutesParams{false});
-    const uint64_t idAdd   = proc.submit(sra::AddRouteParams{
-        .destination  = "192.168.100.0/24",
-        .gateway      = "10.0.0.1",
-        .interfaceName = "eth0",
-        .metric       = 10});
+    const uint64_t idEcho =
+        proc.submit(sra::EchoParams{"hello from grpc_proc"});
+    const uint64_t idHb = proc.submit(sra::HeartbeatParams{42});
+    const uint64_t idList = proc.submit(sra::ListRoutesParams{false});
+    const uint64_t idAdd =
+        proc.submit(sra::AddRouteParams{.destination = "192.168.100.0/24",
+                                        .gateway = "10.0.0.1",
+                                        .interfaceName = "eth0",
+                                        .metric = 10});
 
     std::println("  Submitted 4 requests (ids {}, {}, {}, {}), now collecting…",
-                 idEcho, idHb, idList, idAdd);
+                 idEcho,
+                 idHb,
+                 idList,
+                 idAdd);
 
     // Collect responses – order of retrieval is independent of submission order
     for (const uint64_t id : {idEcho, idHb, idList, idAdd})
@@ -220,11 +226,10 @@ static void exampleMultiThreaded(sra::GrpcProc& proc, int numThreads = 4)
 
     for (int i = 0; i < numThreads; ++i)
     {
-        workers.emplace_back([&proc, i]
-        {
+        workers.emplace_back([&proc, i] {
             // Each thread submits its own request
-            const uint64_t id = proc.submit(
-                sra::EchoParams{std::format("thread-{}", i)});
+            const uint64_t id =
+                proc.submit(sra::EchoParams{std::format("thread-{}", i)});
 
             // Each thread waits for its own response
             auto resp = proc.waitForResponse(id, 15s);
@@ -298,8 +303,7 @@ static void exampleNonBlockingPoll(sra::GrpcProc& proc)
  */
 int main(int argc, char* argv[])
 {
-    const std::string serverAddr =
-        (argc > 1) ? argv[1] : "127.0.0.1:50051";
+    const std::string serverAddr = (argc > 1) ? argv[1] : "127.0.0.1:50051";
 
     std::println("grpc_proc example – connecting to {}", serverAddr);
 
@@ -314,14 +318,16 @@ int main(int argc, char* argv[])
 
     std::println("grpc_proc thread started.");
     std::println("Pending: {}  Stored responses: {}",
-                 proc.pendingCount(), proc.storedResponseCount());
+                 proc.pendingCount(),
+                 proc.storedResponseCount());
 
     // ── Run examples ─────────────────────────────────────────────────────────
     exampleFireAndCollect(proc);
     exampleMultiThreaded(proc, 4);
     exampleNonBlockingPoll(proc);
 
-    // ── Graceful shutdown ─────────────────────────────────────────────────────
+    // ── Graceful shutdown
+    // ─────────────────────────────────────────────────────
     std::println("\nStopping grpc_proc thread…");
     proc.stop();
     std::println("Done.");

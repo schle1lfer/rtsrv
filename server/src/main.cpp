@@ -259,8 +259,8 @@ int main(int argc, char* argv[])
 
     // Parse the SOT file first – no network connections yet
     std::println("srmd  build #{}  Parsing SOT: {}",
-                    rtsrv::build::kBuildNumber,
-                    sotPath);
+                 rtsrv::build::kBuildNumber,
+                 sotPath);
 
     auto sotResult = srmd::loadSotConfig(sotPath);
     if (!sotResult)
@@ -371,7 +371,9 @@ int main(int argc, char* argv[])
     srmd::RouteManager routeManager;
 
     srmd::SwitchRouteManagerImpl service(
-        routeManager, serverId, std::string(rtsrv::build::kFullVersion),
+        routeManager,
+        serverId,
+        std::string(rtsrv::build::kFullVersion),
         std::move(*sotResult));
 
     // -----------------------------------------------------------------------
@@ -444,7 +446,8 @@ int main(int argc, char* argv[])
     {
         if (daemon.shouldReload())
         {
-            BOOST_LOG_TRIVIAL(info) << "SIGHUP received – reload not implemented";
+            BOOST_LOG_TRIVIAL(info)
+                << "SIGHUP received – reload not implemented";
         }
         std::this_thread::sleep_for(500ms);
     }

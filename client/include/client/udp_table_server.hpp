@@ -45,24 +45,26 @@
 
 #pragma once
 
+#include <netinet/in.h>
+
 #include <cstdint>
 #include <mutex>
-#include <netinet/in.h>
 #include <shared_mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
-namespace sra {
+namespace sra
+{
 
 /** UDP port for the ARP/NDP neighbor table. */
 inline constexpr uint16_t UDP_PORT_NEIGHBORS = 9001;
 
 /** UDP port for the nexthop object table. */
-inline constexpr uint16_t UDP_PORT_NEXTHOPS  = 9002;
+inline constexpr uint16_t UDP_PORT_NEXTHOPS = 9002;
 
 /** UDP port for the IPv4 /32 routing table. */
-inline constexpr uint16_t UDP_PORT_ROUTES    = 9003;
+inline constexpr uint16_t UDP_PORT_ROUTES = 9003;
 
 /**
  * @brief UDP server that exposes three kernel table snapshots on fixed ports.
@@ -82,12 +84,12 @@ public:
      * @param portRoutes    Port for the IPv4 /32 routing table (default 9003).
      */
     explicit UdpTableServer(uint16_t portNeighbors = UDP_PORT_NEIGHBORS,
-                            uint16_t portNexthops  = UDP_PORT_NEXTHOPS,
-                            uint16_t portRoutes    = UDP_PORT_ROUTES);
+                            uint16_t portNexthops = UDP_PORT_NEXTHOPS,
+                            uint16_t portRoutes = UDP_PORT_ROUTES);
 
     ~UdpTableServer();
 
-    UdpTableServer(const UdpTableServer&)            = delete;
+    UdpTableServer(const UdpTableServer&) = delete;
     UdpTableServer& operator=(const UdpTableServer&) = delete;
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -136,14 +138,14 @@ private:
     struct PortState
     {
         uint16_t port{0};
-        int      fd{-1};
-        int      stopPipe[2]{-1, -1};   ///< pipe[0]=read, pipe[1]=write
+        int fd{-1};
+        int stopPipe[2]{-1, -1}; ///< pipe[0]=read, pipe[1]=write
 
         mutable std::shared_mutex dataMutex;
-        std::string               data;  ///< latest serialized snapshot
+        std::string data; ///< latest serialized snapshot
 
-        std::mutex                subMutex;
-        std::vector<sockaddr_in>  subscribers; ///< push-update recipients
+        std::mutex subMutex;
+        std::vector<sockaddr_in> subscribers; ///< push-update recipients
 
         std::thread thread;
     };

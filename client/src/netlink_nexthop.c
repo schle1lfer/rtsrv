@@ -50,27 +50,27 @@
 /* Nexthop message header (struct nhmsg from linux/nexthop.h, Linux 5.3+). */
 struct nl_nhmsg
 {
-    unsigned char  nh_family;
-    unsigned char  nh_scope;
-    unsigned char  nh_protocol;
-    unsigned char  resvd;
-    unsigned int   nh_flags;
+    unsigned char nh_family;
+    unsigned char nh_scope;
+    unsigned char nh_protocol;
+    unsigned char resvd;
+    unsigned int nh_flags;
 };
 
 /* Nexthop group member (struct nexthop_grp from linux/nexthop.h). */
 struct nl_nexthop_grp
 {
     uint32_t id;
-    uint8_t  weight;        /* actual_weight = weight + 1 */
-    uint8_t  weight_high;
+    uint8_t weight; /* actual_weight = weight + 1 */
+    uint8_t weight_high;
     uint16_t resvd;
 };
 
 /* RTM_*NEXTHOP message types (Linux 5.3+). */
 #ifndef RTM_NEWNEXTHOP
-#define RTM_NEWNEXTHOP  104
-#define RTM_DELNEXTHOP  105
-#define RTM_GETNEXTHOP  106
+#define RTM_NEWNEXTHOP 104
+#define RTM_DELNEXTHOP 105
+#define RTM_GETNEXTHOP 106
 #endif
 
 /* RTNLGRP_NEXTHOP multicast group number (Linux 5.3+). */
@@ -83,27 +83,27 @@ struct nl_nexthop_grp
 enum
 {
     NHA_UNSPEC,
-    NHA_ID,           /* u32 */
-    NHA_GROUP,        /* array of struct nl_nexthop_grp */
-    NHA_GROUP_TYPE,   /* u16: 0=mpath, 1=resilient */
-    NHA_BLACKHOLE,    /* flag (no payload) */
-    NHA_OIF,          /* u32 */
-    NHA_GATEWAY,      /* in_addr or in6_addr */
-    NHA_ENCAP_TYPE,   /* u16 */
-    NHA_ENCAP,        /* nested */
-    NHA_GROUPS,       /* flag (dump groups) */
-    NHA_MASTER,       /* u32 */
-    NHA_FDB,          /* flag */
+    NHA_ID,         /* u32 */
+    NHA_GROUP,      /* array of struct nl_nexthop_grp */
+    NHA_GROUP_TYPE, /* u16: 0=mpath, 1=resilient */
+    NHA_BLACKHOLE,  /* flag (no payload) */
+    NHA_OIF,        /* u32 */
+    NHA_GATEWAY,    /* in_addr or in6_addr */
+    NHA_ENCAP_TYPE, /* u16 */
+    NHA_ENCAP,      /* nested */
+    NHA_GROUPS,     /* flag (dump groups) */
+    NHA_MASTER,     /* u32 */
+    NHA_FDB,        /* flag */
     __NHA_MAX
 };
 #define NHA_MAX (__NHA_MAX - 1)
 #endif
 
-/* Helper macros for nhmsg attribute access (analogous to RTM_RTA/RTM_PAYLOAD). */
-#define NL_NHA_RTA(n) \
-    ((struct rtattr *)(((char *)(n)) + NLMSG_ALIGN(sizeof(struct nl_nhmsg))))
-#define NL_NHA_PAYLOAD(n) \
-    NLMSG_PAYLOAD((n), sizeof(struct nl_nhmsg))
+/* Helper macros for nhmsg attribute access (analogous to RTM_RTA/RTM_PAYLOAD).
+ */
+#define NL_NHA_RTA(n)                                                          \
+    ((struct rtattr*)(((char*)(n)) + NLMSG_ALIGN(sizeof(struct nl_nhmsg))))
+#define NL_NHA_PAYLOAD(n) NLMSG_PAYLOAD((n), sizeof(struct nl_nhmsg))
 
 /* ---------------------------------------------------------------------------
  * Internal helpers
@@ -116,23 +116,21 @@ enum
  * @param cb        Caller-supplied event callback.
  * @param user_data Forwarded to @p cb.
  */
-static void nl_nexthop_dispatch(const struct nlmsghdr  *nlh,
-                                netlink_nexthop_cb_t    cb,
-                                void                   *user_data)
+static void nl_nexthop_dispatch(const struct nlmsghdr* nlh,
+                                netlink_nexthop_cb_t cb,
+                                void* user_data)
 {
     if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct nl_nhmsg)))
         return;
 
-    const struct nl_nhmsg *nhm =
-        (const struct nl_nhmsg *)NLMSG_DATA(nlh);
+    const struct nl_nhmsg* nhm = (const struct nl_nhmsg*)NLMSG_DATA(nlh);
 
     /* Map message type + flags to event. */
     netlink_nexthop_event_t event;
     if (nlh->nlmsg_type == RTM_NEWNEXTHOP)
     {
-        event = (nlh->nlmsg_flags & NLM_F_REPLACE)
-                    ? NETLINK_NEXTHOP_CHANGED
-                    : NETLINK_NEXTHOP_ADDED;
+        event = (nlh->nlmsg_flags & NLM_F_REPLACE) ? NETLINK_NEXTHOP_CHANGED
+                                                   : NETLINK_NEXTHOP_ADDED;
     }
     else if (nlh->nlmsg_type == RTM_DELNEXTHOP)
     {
@@ -146,15 +144,14 @@ static void nl_nexthop_dispatch(const struct nlmsghdr  *nlh,
     /* Populate descriptor from the nhmsg header. */
     netlink_nexthop_t nh;
     memset(&nh, 0, sizeof(nh));
-    nh.family   = nhm->nh_family;
-    nh.scope    = nhm->nh_scope;
+    nh.family = nhm->nh_family;
+    nh.scope = nhm->nh_scope;
     nh.protocol = nhm->nh_protocol;
-    nh.flags    = nhm->nh_flags;
+    nh.flags = nhm->nh_flags;
 
     /* Walk NHA_* attributes. */
     unsigned int attrlen = (unsigned int)NL_NHA_PAYLOAD(nlh);
-    for (const struct rtattr *rta = NL_NHA_RTA(nhm);
-         RTA_OK(rta, attrlen);
+    for (const struct rtattr* rta = NL_NHA_RTA(nhm); RTA_OK(rta, attrlen);
          rta = RTA_NEXT(rta, attrlen))
     {
         /* Use only the low byte to strip any nested/byteorder flags. */
@@ -180,14 +177,14 @@ static void nl_nexthop_dispatch(const struct nlmsghdr  *nlh,
             if (nh.family == AF_INET &&
                 RTA_PAYLOAD(rta) >= sizeof(struct in_addr))
             {
-                inet_ntop(AF_INET, RTA_DATA(rta),
-                          nh.gateway, sizeof(nh.gateway));
+                inet_ntop(
+                    AF_INET, RTA_DATA(rta), nh.gateway, sizeof(nh.gateway));
             }
             else if (nh.family == AF_INET6 &&
                      RTA_PAYLOAD(rta) >= sizeof(struct in6_addr))
             {
-                inet_ntop(AF_INET6, RTA_DATA(rta),
-                          nh.gateway, sizeof(nh.gateway));
+                inet_ntop(
+                    AF_INET6, RTA_DATA(rta), nh.gateway, sizeof(nh.gateway));
             }
             break;
 
@@ -208,20 +205,19 @@ static void nl_nexthop_dispatch(const struct nlmsghdr  *nlh,
             }
             break;
 
-        case NHA_GROUP:
-        {
+        case NHA_GROUP: {
             /* Array of struct nl_nexthop_grp. */
             size_t grp_sz = sizeof(struct nl_nexthop_grp);
-            size_t count  = RTA_PAYLOAD(rta) / grp_sz;
+            size_t count = RTA_PAYLOAD(rta) / grp_sz;
             if (count > NETLINK_NEXTHOP_MAX_GROUP)
                 count = NETLINK_NEXTHOP_MAX_GROUP;
 
-            const struct nl_nexthop_grp *grp =
-                (const struct nl_nexthop_grp *)RTA_DATA(rta);
+            const struct nl_nexthop_grp* grp =
+                (const struct nl_nexthop_grp*)RTA_DATA(rta);
             for (size_t i = 0; i < count; ++i)
             {
-                nh.group[i].id          = grp[i].id;
-                nh.group[i].weight      = grp[i].weight;
+                nh.group[i].id = grp[i].id;
+                nh.group[i].weight = grp[i].weight;
                 nh.group[i].weight_high = grp[i].weight_high;
             }
             nh.group_count = (uint32_t)count;
@@ -256,15 +252,15 @@ static void nl_nexthop_dispatch(const struct nlmsghdr  *nlh,
  * @param done      Set to 1 when NLMSG_DONE is encountered; may be NULL.
  * @return Number of nexthop events dispatched, or -1 on NLMSG_ERROR.
  */
-static int nl_nexthop_process_buf(const char           *buf,
-                                  ssize_t               n,
-                                  netlink_nexthop_cb_t  cb,
-                                  void                 *user_data,
-                                  int                  *done)
+static int nl_nexthop_process_buf(const char* buf,
+                                  ssize_t n,
+                                  netlink_nexthop_cb_t cb,
+                                  void* user_data,
+                                  int* done)
 {
     int count = 0;
 
-    for (const struct nlmsghdr *nlh = (const struct nlmsghdr *)buf;
+    for (const struct nlmsghdr* nlh = (const struct nlmsghdr*)buf;
          NLMSG_OK(nlh, (unsigned int)n);
          nlh = NLMSG_NEXT(nlh, n))
     {
@@ -294,9 +290,7 @@ static int nl_nexthop_process_buf(const char           *buf,
 
 int netlink_nexthop_init(void)
 {
-    int fd = socket(AF_NETLINK,
-                    SOCK_RAW | SOCK_CLOEXEC,
-                    NETLINK_ROUTE);
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
     if (fd < 0)
         return -1;
 
@@ -308,7 +302,7 @@ int netlink_nexthop_init(void)
     addr.nl_family = AF_NETLINK;
     addr.nl_groups = 0;
 
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
         int saved = errno;
         close(fd);
@@ -319,8 +313,8 @@ int netlink_nexthop_init(void)
     /* Subscribe to the nexthop multicast group.  Non-fatal: in restricted
      * environments the dump still works and live events are simply absent. */
     int group = RTNLGRP_NEXTHOP;
-    if (setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
-                   &group, sizeof(group)) < 0)
+    if (setsockopt(
+            fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group, sizeof(group)) < 0)
     {
         fprintf(stderr,
                 "netlink_nexthop: multicast subscribe failed "
@@ -331,7 +325,7 @@ int netlink_nexthop_init(void)
     return fd;
 }
 
-int netlink_nexthop_dump(int fd, netlink_nexthop_cb_t cb, void *user_data)
+int netlink_nexthop_dump(int fd, netlink_nexthop_cb_t cb, void* user_data)
 {
     /* Build RTM_GETNEXTHOP dump request. */
     struct
@@ -341,18 +335,18 @@ int netlink_nexthop_dump(int fd, netlink_nexthop_cb_t cb, void *user_data)
     } req;
 
     memset(&req, 0, sizeof(req));
-    req.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct nl_nhmsg));
-    req.nlh.nlmsg_type  = RTM_GETNEXTHOP;
+    req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct nl_nhmsg));
+    req.nlh.nlmsg_type = RTM_GETNEXTHOP;
     req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-    req.nlh.nlmsg_seq   = 1;
-    req.nhm.nh_family   = AF_UNSPEC;
+    req.nlh.nlmsg_seq = 1;
+    req.nhm.nh_family = AF_UNSPEC;
 
     if (send(fd, &req, req.nlh.nlmsg_len, 0) < 0)
         return -1;
 
     char buf[NL_BUF_SIZE];
-    int  total = 0;
-    int  done  = 0;
+    int total = 0;
+    int done = 0;
 
     while (!done)
     {
@@ -375,7 +369,7 @@ int netlink_nexthop_dump(int fd, netlink_nexthop_cb_t cb, void *user_data)
     return total;
 }
 
-int netlink_nexthop_run(int fd, netlink_nexthop_cb_t cb, void *user_data)
+int netlink_nexthop_run(int fd, netlink_nexthop_cb_t cb, void* user_data)
 {
     char buf[NL_BUF_SIZE];
 
