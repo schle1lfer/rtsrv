@@ -1,9 +1,16 @@
 /**
  * @file unix_domain/ud_server.cpp
- * @brief UNIX-domain socket server for route-add commands.
+ * @brief UNIX-domain socket server for route management commands.
  *
  * Listens on a configurable AF_UNIX stream socket and handles incoming
- * route-add requests encoded in the udproto/routeproto/cmdproto stack.
+ * route commands encoded in the udproto/routeproto/cmdproto stack.
+ *
+ * ## Supported commands
+ * | CmdId      | Handler               |
+ * |------------|-----------------------|
+ * | ROUTE_ADD  | dispatch_route_add()  |
+ * | ROUTE_DEL  | dispatch_route_del()  |
+ * | ROUTE_LIST | dispatch_route_list() |
  *
  * ## Supported ROUTE_ADD payload types
  * | Type         | Value | Format             | Handler                  |
@@ -188,6 +195,46 @@ dispatch_route_add(const cmdproto::Command& cmd)
     return cmdproto::encode_route_add_binary_response(*resp);
 }
 
+/**
+ * @brief Dispatches a single ROUTE_DEL command and returns the encoded
+ *        response bytes.
+ *
+ * @param cmd  Decoded ROUTE_DEL command.
+ * @return Single success byte on success, or an error code.
+ */
+static std::expected<std::vector<std::uint8_t>, std::error_code>
+dispatch_route_del(const cmdproto::Command& cmd)
+{
+    auto params = cmdproto::parse_route_del(cmd);
+    if (!params)
+        return std::unexpected(params.error());
+
+    auto result = cmdproto::handle_route_del(*params);
+    if (!result)
+        return std::unexpected(result.error());
+
+    return std::vector<std::uint8_t>{0x00};
+}
+
+/**
+ * @brief Dispatches a single ROUTE_LIST command and returns the encoded
+ *        response bytes (a serialised list of RouteEntry values).
+ *
+ * @param cmd  Decoded ROUTE_LIST command (fields unused).
+ * @return Encoded route-list payload on success, or an error code.
+ */
+static std::expected<std::vector<std::uint8_t>, std::error_code>
+dispatch_route_list(const cmdproto::Command& cmd)
+{
+    (void)cmd;
+
+    auto routes = cmdproto::handle_route_list();
+    if (!routes)
+        return std::unexpected(routes.error());
+
+    return cmdproto::encode_route_list_response(*routes);
+}
+
 // ---------------------------------------------------------------------------
 // Connection handler
 // ---------------------------------------------------------------------------
@@ -303,18 +350,30 @@ static void handle_connection(net::Socket conn)
 
         for (const auto& cmd : *cmds)
         {
-            if (cmd.cmd_id != cmdproto::CmdId::ROUTE_ADD)
+            std::expected<std::vector<std::uint8_t>, std::error_code> result;
+
+            switch (cmd.cmd_id)
             {
+            case cmdproto::CmdId::ROUTE_ADD:
+                result = dispatch_route_add(cmd);
+                break;
+            case cmdproto::CmdId::ROUTE_DEL:
+                result = dispatch_route_del(cmd);
+                break;
+            case cmdproto::CmdId::ROUTE_LIST:
+                result = dispatch_route_list(cmd);
+                break;
+            default:
                 std::println("[ud_server] unsupported cmd_id=0x{:02x}",
                              static_cast<unsigned>(cmd.cmd_id));
                 ack_status = 0x01;
                 continue;
             }
 
-            auto result = dispatch_route_add(cmd);
             if (!result)
             {
-                std::println(stderr, "[ud_server] dispatch_route_add: {}",
+                std::println(stderr, "[ud_server] dispatch cmd_id=0x{:02x}: {}",
+                             static_cast<unsigned>(cmd.cmd_id),
                              result.error().message());
                 ack_status = 0x01;
                 continue;
