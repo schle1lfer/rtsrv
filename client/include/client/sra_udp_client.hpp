@@ -1,18 +1,19 @@
 /**
  * @file client/include/client/sra_udp_client.hpp
- * @brief VRF route-add client over a non-blocking UNIX-domain socket.
+ * @brief VRF route client over a non-blocking UNIX-domain socket.
  *
  * SraUdpClient runs in a dedicated background thread.  Callers submit
- * SingleRouteRequest values via submit(); the thread picks them up, encodes
- * and sends them over an AF_UNIX stream socket in non-blocking mode (using
- * poll() for all I/O readiness checks), receives the response frame, decodes
- * and logs the per-VRF status bitmask.
+ * commands (ROUTE_ADD, ROUTE_DEL, ROUTE_LIST) via submit(), submitDelete(), or
+ * submitList(); the thread picks them up, encodes and sends them over an
+ * AF_UNIX stream socket in non-blocking mode (using poll() for all I/O
+ * readiness checks), receives the response frame, and decodes and logs the
+ * result.
  *
  * The thread remains alive until stop() is called, processing one queued
  * command at a time.  The socket is reconnected automatically if the peer
  * closes the connection between commands.
  *
- * @version 1.0
+ * @version 2.0
  */
 
 #pragma once
@@ -25,12 +26,16 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <variant>
 
 namespace sra
 {
 
+/// @brief Tag type for a ROUTE_LIST request (carries no parameters).
+struct RouteListRequest {};
+
 /**
- * @brief Runs the VRF route-add exchange in a background thread.
+ * @brief Runs route exchanges (add / delete / list) in a background thread.
  *
  * Non-blocking socket operation:
  *  - The AF_UNIX socket is created with O_NONBLOCK set via net::set_nonblocking().
@@ -39,11 +44,19 @@ namespace sra
  *  - connect() on AF_UNIX is typically instantaneous; EINPROGRESS is handled
  *    correctly if it occurs.
  *
- * Thread safety: submit() is safe to call from any thread.
+ * Thread safety: submit(), submitDelete(), and submitList() are safe to call
+ * from any thread.
  */
 class SraUdpClient
 {
 public:
+    /// @brief Discriminated union of all supported command types.
+    using Request = std::variant<
+        cmdproto::SingleRouteRequest, ///< ROUTE_ADD (binary payload)
+        cmdproto::RouteDelParams,     ///< ROUTE_DEL (TLV)
+        RouteListRequest              ///< ROUTE_LIST (no fields)
+    >;
+
     /**
      * @brief Constructs the client.
      * @param socketPath  Filesystem path of the UNIX-domain server socket.
@@ -67,7 +80,7 @@ public:
     [[nodiscard]] bool running() const noexcept;
 
     /**
-     * @brief Enqueues a route-add request for async delivery.
+     * @brief Enqueues a ROUTE_ADD request for async delivery.
      *
      * Thread-safe; may be called from any thread.  Returns immediately.
      *
@@ -75,16 +88,34 @@ public:
      */
     void submit(cmdproto::SingleRouteRequest req);
 
+    /**
+     * @brief Enqueues a ROUTE_DEL request for async delivery.
+     *
+     * Thread-safe; may be called from any thread.  Returns immediately.
+     *
+     * @param params  Route delete parameters (dst_addr, prefix_len, gateway).
+     */
+    void submitDelete(cmdproto::RouteDelParams params);
+
+    /**
+     * @brief Enqueues a ROUTE_LIST request for async delivery.
+     *
+     * Thread-safe; may be called from any thread.  Returns immediately.
+     */
+    void submitList();
+
 private:
     void threadFunc();
-    void processRequest(const cmdproto::SingleRouteRequest& req);
+    void processAddRequest(const cmdproto::SingleRouteRequest& req);
+    void processDeleteRequest(const cmdproto::RouteDelParams& params);
+    void processListRequest();
 
     std::string socketPath_;
     int         ioTimeoutMs_;
 
-    std::queue<cmdproto::SingleRouteRequest> queue_;
-    std::mutex                              queueMutex_;
-    std::condition_variable                 queueCv_;
+    std::queue<Request>     queue_;
+    std::mutex              queueMutex_;
+    std::condition_variable queueCv_;
 
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> running_{false};

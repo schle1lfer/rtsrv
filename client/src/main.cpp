@@ -3917,7 +3917,30 @@ int main(int argc, char* argv[])
                 std::println("[vrf-route-add] submitting {} nni interface(s) to "
                              "Unix socket…",
                              singleReq.interfaces.size());
+
+                // Save interfaces before the move for follow-up delete commands.
+                auto savedInterfaces = singleReq.interfaces;
+
                 vrfClient.submit(std::move(singleReq));
+
+                // After adding, delete each installed prefix via ROUTE_DEL.
+                std::println("[vrf-route-add] submitting ROUTE_DEL for each "
+                             "added prefix…");
+                for (const auto& iface : savedInterfaces)
+                {
+                    for (const auto& pfx : iface.prefixes)
+                    {
+                        cmdproto::RouteDelParams delParams;
+                        delParams.dst_addr  = pfx.addr;
+                        delParams.prefix_len = pfx.mask_len;
+                        delParams.gateway   = iface.nexthop_addr_ipv4;
+                        vrfClient.submitDelete(delParams);
+                    }
+                }
+
+                // Finally, list the routing table to confirm the current state.
+                std::println("[vrf-route-add] submitting ROUTE_LIST…");
+                vrfClient.submitList();
             }
             else
             {
