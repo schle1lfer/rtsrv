@@ -53,13 +53,13 @@
  *     set-loopback <address>  Store a loopback address on the server
  *     get-loopback            Retrieve the stored loopback address
  *     get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)
- *     vrf-route-add [socket]  Read loopback from srmd, fetch NNI prefixes via
+ *     add-del-list [socket]   Read loopback from srmd, fetch NNI prefixes via
  *                             GetLoopbacks, then deliver to ud_server (one-shot):
  *                               1. RequestLoopback  → identify this SRA node
  *                               2. GetLoopbacks     → NNI interface + prefix list
- *                               3. SingleRoute ADD  → install prefixes in ud_server
- *                               4. ROUTE_DEL        → delete each prefix
- *                               5. ROUTE_LIST       → dump resulting route table
+ *                               3. ROUTE_ADD        → install prefixes in ud_server
+ *                               4. ROUTE_DEL        → delete each prefix from ud_server
+ *                               5. ROUTE_LIST       → read list resulting route table from ud_server
  *                             Default socket: /tmp/ud_server.sock
  *     run [socket]            Full SRA daemon mode — runs until SIGINT/SIGTERM:
  *                               1. RequestLoopback → SOT auth check via srmd
@@ -2862,7 +2862,7 @@ int main(int argc, char* argv[])
             "Command: test | sync | echo | add | remove | get | list | watch"
             " | neighbors | nexthops"
             " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo"
-            " | vrf-route-add | run")
+            " | add-del-list | run")
         ("args",     po::value<std::vector<std::string>>(),
             "Command arguments");
     // clang-format on
@@ -2935,12 +2935,12 @@ int main(int argc, char* argv[])
         std::println("  get-loopback            Retrieve the stored loopback address");
         std::println("  get-loopbacks <loopback>  Query SOT interface list for a loopback (IPv4 or IPv6)");
         std::println("  grpc-proc-demo          Run async GrpcProc demo with periodic GetLoopback requests");
-        std::println("  vrf-route-add [socket]  Read loopback → GetLoopbacks → ADD → DEL → LIST");
+        std::println("  add-del-list  [socket]  Read loopback → GetLoopbacks → ADD → DEL → LIST");
         std::println("                          1. RequestLoopback  identify this SRA node in SOT");
         std::println("                          2. GetLoopbacks     fetch NNI interface + prefix list");
-        std::println("                          3. SingleRoute ADD  install prefixes in ud_server");
-        std::println("                          4. ROUTE_DEL        delete each prefix");
-        std::println("                          5. ROUTE_LIST       dump resulting route table");
+        std::println("                          3. ROUTE_ADD        install prefixes in ud_server");
+        std::println("                          4. ROUTE_DEL        delete each prefix from ud_server");
+        std::println("                          5. ROUTE_LIST       get resulting route table from ud_server");
         std::println("                          (default socket: /tmp/ud_server.sock)");
         std::println("  run [socket]            Full SRA daemon mode (continuous):");
         std::println("                            1. RequestLoopback → SOT auth check via srmd");
@@ -3320,7 +3320,7 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     std::string activeLoopback = clientCfg.loopback;
     if (command != "watch" && command != "neighbors" && command != "nexthops"
-        && command != "vrf-route-add")
+        && command != "add-del-list")
     {
         std::println("[Startup] Requesting loopback from server based on client IP...");
         auto lbResult = client.requestLoopback();
@@ -3846,12 +3846,12 @@ int main(int argc, char* argv[])
         return EXIT_SUCCESS; // StartupGuard joins threads (now exiting)
     }
 
-    if (command == "vrf-route-add")
+    if (command == "add-del-list")
     {
         const std::string socketPath =
             args.empty() ? "/tmp/ud_server.sock" : args[0];
 
-        std::println("[vrf-route-add] socket={} — starting", socketPath);
+        std::println("[add-del-list] socket={} — starting", socketPath);
 
         sra::SraUdpClient vrfClient(socketPath);
         vrfClient.start();
@@ -3859,23 +3859,23 @@ int main(int argc, char* argv[])
         // ── Step 1: RequestLoopback ──────────────────────────────────────────
         // Identifies this SRA node in the SOT by matching the client's source
         // IP against nodes_by_loopback on the server.
-        std::println("[vrf-route-add] requesting loopback from srmd…");
+        std::println("[add-del-list] requesting loopback from srmd…");
         auto lbResult = client.requestLoopback();
         if (lbResult)
         {
-            std::println("[vrf-route-add] loopback from srmd: '{}'", *lbResult);
+            std::println("[add-del-list] loopback from srmd: '{}'", *lbResult);
             activeLoopback = *lbResult;
         }
         else
         {
-            std::println("[vrf-route-add] loopback from srmd: {} (using config: '{}')",
+            std::println("[add-del-list] loopback from srmd: {} (using config: '{}')",
                          lbResult.error(), activeLoopback);
         }
 
         if (activeLoopback.empty())
         {
             std::println(std::cerr,
-                         "[vrf-route-add] no loopback available — cannot fetch prefixes");
+                         "[add-del-list] no loopback available — cannot fetch prefixes");
             vrfClient.stop();
             return EXIT_FAILURE;
         }
@@ -3883,11 +3883,11 @@ int main(int argc, char* argv[])
         // ── Step 2: GetLoopbacks ─────────────────────────────────────────────
         // Uses the loopback address obtained above to retrieve the NNI
         // interface list (with per-interface prefix sets) from the SOT.
-        std::println("[vrf-route-add] GetLoopbacks('{}')…", activeLoopback);
+        std::println("[add-del-list] GetLoopbacks('{}')…", activeLoopback);
         auto glResult = client.getLoopbacks(activeLoopback);
         if (glResult)
         {
-            std::println("[vrf-route-add] GetLoopbacks: {} — {} interface(s)",
+            std::println("[add-del-list] GetLoopbacks: {} — {} interface(s)",
                          glResult->message(), glResult->interfaces_size());
 
             // ── Step 3: Build SingleRouteRequest (nni interfaces only) ───────
@@ -3932,7 +3932,7 @@ int main(int argc, char* argv[])
                         {pb[0], pb[1], pb[2], pb[3]}, maskLen});
                 }
 
-                std::println("[vrf-route-add]   iface='{}' nexthop='{}' prefixes={}",
+                std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
                              ifn, li.nexthop(), entry.prefixes.size());
 
                 singleReq.interfaces.push_back(std::move(entry));
@@ -3941,14 +3941,14 @@ int main(int argc, char* argv[])
             if (!singleReq.interfaces.empty())
             {
                 // ── Step 4: ROUTE_ADD ────────────────────────────────────────
-                std::println("[vrf-route-add] [ADD] submitting {} nni interface(s) "
+                std::println("[add-del-list] [ADD] submitting {} nni interface(s) "
                              "to ud_server…", singleReq.interfaces.size());
 
                 auto savedInterfaces = singleReq.interfaces;
                 vrfClient.submitAdd(std::move(singleReq));
 
                 // ── Step 5: ROUTE_DEL (one per prefix) ───────────────────────
-                std::println("[vrf-route-add] [DEL] deleting each added prefix…");
+                std::println("[add-del-list] [DEL] deleting each added prefix…");
                 for (const auto& iface : savedInterfaces)
                 {
                     for (const auto& pfx : iface.prefixes)
@@ -3962,18 +3962,18 @@ int main(int argc, char* argv[])
                 }
 
                 // ── Step 6: ROUTE_LIST ───────────────────────────────────────
-                std::println("[vrf-route-add] [LIST] requesting route table…");
+                std::println("[add-del-list] [LIST] requesting route table…");
                 vrfClient.submitList();
             }
             else
             {
-                std::println("[vrf-route-add] no nni interfaces found in "
+                std::println("[add-del-list] no nni interfaces found in "
                              "GetLoopbacks response — no request sent");
             }
         }
         else
         {
-            std::println(std::cerr, "[vrf-route-add] GetLoopbacks failed: {}",
+            std::println(std::cerr, "[add-del-list] GetLoopbacks failed: {}",
                          glResult.error());
         }
 
