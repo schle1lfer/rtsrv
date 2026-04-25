@@ -8,6 +8,9 @@ TARGET_INSTALL_DIR="target-local"
 
 N_PROC=1
 
+CURR_DIR=`pwd`
+BUILDROOT_PATH="/home/user677/bulat/src/intel_bcm56870_mycelium"
+
 # local dir
 rm -rf local/
 
@@ -27,4 +30,12 @@ cmake -S . \
 cmake --build ${BUILD_DIR} -j${N_PROC} \
 && \
 cmake --install ${BUILD_DIR}
+
+
+cd ${BUILDROOT_PATH}
+make srf-dirclean
+make srf
+
+cd ${CURR_DIR}
+
 
