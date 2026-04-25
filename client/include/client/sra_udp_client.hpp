@@ -3,7 +3,7 @@
  * @brief VRF route client over a non-blocking UNIX-domain socket.
  *
  * SraUdpClient runs in a dedicated background thread.  Callers submit
- * commands (ROUTE_ADD, ROUTE_DEL, ROUTE_LIST) via submit(), submitDelete(), or
+ * commands (ROUTE_ADD, ROUTE_DEL, ROUTE_LIST) via submitAdd(), submitDelete(), or
  * submitList(); the thread picks them up, encodes and sends them over an
  * AF_UNIX stream socket in non-blocking mode (using poll() for all I/O
  * readiness checks), receives the response frame, and decodes and logs the
@@ -44,7 +44,7 @@ struct RouteListRequest {};
  *  - connect() on AF_UNIX is typically instantaneous; EINPROGRESS is handled
  *    correctly if it occurs.
  *
- * Thread safety: submit(), submitDelete(), and submitList() are safe to call
+ * Thread safety: submitAdd(), submitDelete(), and submitList() are safe to call
  * from any thread.
  */
 class SraUdpClient
@@ -86,7 +86,7 @@ public:
      *
      * @param req  SingleRouteRequest to deliver to ud_server.
      */
-    void submit(cmdproto::SingleRouteRequest req);
+    void submitAdd(cmdproto::SingleRouteRequest req);
 
     /**
      * @brief Enqueues a ROUTE_DEL request for async delivery.

@@ -2728,7 +2728,7 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
                  "({} interface(s)) to ud_server for nexthop gw={} id={}",
                  req.interfaces.size(), gateway, nh->id);
 
-    vrfClient->submit(std::move(req));
+    vrfClient->submitAdd(std::move(req));
 }
 
 /**
@@ -3786,7 +3786,7 @@ int main(int argc, char* argv[])
         {
             std::println("[run] Submitting SingleRouteRequest ({} nni interface(s)) "
                          "to Unix socket…", nniCount);
-            vrfClient.submit(std::move(singleReq));
+            vrfClient.submitAdd(std::move(singleReq));
         }
         else
         {
@@ -3921,7 +3921,7 @@ int main(int argc, char* argv[])
                 // Save interfaces before the move for follow-up delete commands.
                 auto savedInterfaces = singleReq.interfaces;
 
-                vrfClient.submit(std::move(singleReq));
+                vrfClient.submitAdd(std::move(singleReq));
 
                 // After adding, delete each installed prefix via ROUTE_DEL.
                 std::println("[vrf-route-add] submitting ROUTE_DEL for each "

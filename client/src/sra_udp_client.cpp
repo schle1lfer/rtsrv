@@ -193,7 +193,7 @@ bool SraUdpClient::running() const noexcept
     return running_.load();
 }
 
-void SraUdpClient::submit(cmdproto::SingleRouteRequest req)
+void SraUdpClient::submitAdd(cmdproto::SingleRouteRequest req)
 {
     {
         std::lock_guard lock(queueMutex_);
