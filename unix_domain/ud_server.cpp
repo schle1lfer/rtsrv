@@ -339,6 +339,58 @@ static void handle_connection(net::Socket conn)
 }
 
 // ---------------------------------------------------------------------------
+// Example logging callbacks
+//
+// Each function receives its parameters via std::shared_ptr, logs every
+// field, and then returns.  When the function returns the shared_ptr goes
+// out of scope and the pointed-to object is freed automatically.
+// ---------------------------------------------------------------------------
+
+static std::expected<void, std::error_code>
+log_route_add(std::shared_ptr<netlink::RouteAddParams> p)
+{
+    logger::log(logger::INFO, "ud_server",
+                std::format("log_route_add: dst={}/{} gw={} dev='{}'"
+                            " metric={} scope={} proto={} table={}",
+                            netlink::format_ipv4(p->dst),
+                            static_cast<unsigned>(p->prefix_len),
+                            p->has_gateway ? netlink::format_ipv4(p->gateway)
+                                           : "(none)",
+                            p->if_name,
+                            p->metric,
+                            static_cast<unsigned>(p->scope),
+                            static_cast<unsigned>(p->protocol),
+                            static_cast<unsigned>(p->table)));
+    // p goes out of scope — RouteAddParams is freed here.
+    return {};
+}
+
+static std::expected<void, std::error_code>
+log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
+{
+    logger::log(logger::INFO, "ud_server",
+                std::format("log_route_del: dst={}/{} gw={} dev='{}' table={}",
+                            netlink::format_ipv4(p->dst),
+                            static_cast<unsigned>(p->prefix_len),
+                            p->has_gateway ? netlink::format_ipv4(p->gateway)
+                                           : "(any)",
+                            p->if_name.empty() ? "(any)" : p->if_name,
+                            static_cast<unsigned>(p->table)));
+    // p goes out of scope — RouteDelParams is freed here.
+    return {};
+}
+
+static std::expected<std::vector<netlink::RouteEntry>, std::error_code>
+log_route_list(std::shared_ptr<netlink::RouteTable> t)
+{
+    logger::log(logger::INFO, "ud_server",
+                std::format("log_route_list: table={}",
+                            static_cast<unsigned>(*t)));
+    // t goes out of scope — RouteTable is freed here.
+    return std::vector<netlink::RouteEntry>{};
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -351,12 +403,9 @@ int main(int argc, char* argv[])
     logger::init(logstream, loglevel);
 
     cmdproto::HandlerCallbacks cbs;
-    cbs.route_add  = [](std::shared_ptr<netlink::RouteAddParams> p)
-        { return netlink::add_route(*p); };
-    cbs.route_del  = [](std::shared_ptr<netlink::RouteDelParams> p)
-        { return netlink::delete_route(*p); };
-    cbs.route_list = [](std::shared_ptr<netlink::RouteTable> t)
-        { return netlink::list_routes(*t); };
+    cbs.route_add  = log_route_add;
+    cbs.route_del  = log_route_del;
+    cbs.route_list = log_route_list;
     cmdproto::init_callbacks(std::move(cbs));
 
     const std::string sock_path =
