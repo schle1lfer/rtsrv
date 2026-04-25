@@ -39,6 +39,7 @@
  *                             --server + --node-ip for single-node mode.
  *     echo  <message>         Send an Echo RPC and print the response
  *     add   <dest> [gw] [iface] [metric]   Add a route
+ *     delete <dest>           Delete all routes matching a destination prefix
  *     remove <id>             Remove a route by ID
  *     get    <id>             Retrieve a route by ID
  *     list  [--active]        List all routes (--active filters to active only)
@@ -2854,7 +2855,7 @@ int main(int argc, char* argv[])
             " INFO|2 (decoded summaries),"
             " NOTICE|3, WARNING|4, ERR|5  [default: 1]")
         ("command",  po::value<std::string>(),
-            "Command: test | sync | echo | add | remove | get | list | watch"
+            "Command: test | sync | echo | add | delete | remove | get | list | watch"
             " | neighbors | nexthops"
             " | set-loopback | get-loopback | get-loopbacks | grpc-proc-demo"
             " | vrf-route-add | run")
@@ -2917,6 +2918,7 @@ int main(int argc, char* argv[])
         std::println("  sync                    Push SOT routes to server(s)");
         std::println("  echo   <message>        Send Echo RPC");
         std::println("  add    <dest> [gw] [iface] [metric]  Add route");
+        std::println("  delete <dest>           Delete all routes for a destination");
         std::println("  remove <id>             Remove route by ID");
         std::println("  get    <id>             Get route by ID");
         std::println("  list   [--active]       List routes");
@@ -3374,6 +3376,25 @@ int main(int argc, char* argv[])
         }
         std::println("Route added:");
         printRoute(*result);
+        return EXIT_SUCCESS;
+    }
+
+    if (command == "delete")
+    {
+        if (args.empty())
+        {
+            std::println(std::cerr,
+                         "Usage: sra delete <destination>");
+            return EXIT_FAILURE;
+        }
+        auto result = client.deleteRoute(args[0]);
+        if (!result)
+        {
+            std::println(std::cerr, "Error: {}", result.error());
+            return EXIT_FAILURE;
+        }
+        std::println("Deleted {} route(s) for destination '{}'.",
+                     *result, args[0]);
         return EXIT_SUCCESS;
     }
 

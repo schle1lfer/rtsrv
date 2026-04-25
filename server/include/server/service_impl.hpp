@@ -90,6 +90,13 @@ public:
                              srmd::v1::StatusResponse* resp) override;
 
     /**
+     * @brief Deletes all routes matching a destination prefix.
+     */
+    grpc::Status DeleteRoute(grpc::ServerContext* ctx,
+                             const srmd::v1::DeleteRouteRequest* req,
+                             srmd::v1::DeleteRouteResponse* resp) override;
+
+    /**
      * @brief Retrieves a single route by ID.
      */
     grpc::Status GetRoute(grpc::ServerContext* ctx,

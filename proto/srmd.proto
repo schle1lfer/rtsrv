@@ -193,6 +193,28 @@ message RemoveRouteRequest
 }
 
 // ---------------------------------------------------------------------------
+// DeleteRoute
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to delete all routes matching a destination prefix.
+ */
+message DeleteRouteRequest
+{
+    string destination = 1; ///< Destination prefix to match (CIDR or "default").
+}
+
+/**
+ * @brief Response from DeleteRoute.
+ */
+message DeleteRouteResponse
+{
+    StatusCode code = 1;    ///< Operation outcome.
+    string message = 2;     ///< Human-readable detail.
+    uint32 deleted_count = 3; ///< Number of routes removed.
+}
+
+// ---------------------------------------------------------------------------
 // GetRoute
 // ---------------------------------------------------------------------------
 
@@ -453,6 +475,14 @@ service SwitchRouteManager
      * Returns STATUS_CODE_NOT_FOUND when the ID is unknown.
      */
     rpc RemoveRoute(RemoveRouteRequest) returns (StatusResponse);
+
+    /**
+     * @brief Delete all routes matching a destination prefix.
+     *
+     * Returns STATUS_CODE_INVALID_ARGUMENT when destination is empty.
+     * Returns STATUS_CODE_NOT_FOUND when no routes match the destination.
+     */
+    rpc DeleteRoute(DeleteRouteRequest) returns (DeleteRouteResponse);
 
     /**
      * @brief Retrieve a single route by ID.

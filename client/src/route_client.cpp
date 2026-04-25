@@ -190,6 +190,32 @@ std::expected<void, std::string> RouteClient::removeRoute(const std::string& id)
 }
 
 // ---------------------------------------------------------------------------
+// DeleteRoute
+// ---------------------------------------------------------------------------
+
+std::expected<uint32_t, std::string>
+RouteClient::deleteRoute(const std::string& destination)
+{
+    srmd::v1::DeleteRouteRequest req;
+    req.set_destination(destination);
+
+    srmd::v1::DeleteRouteResponse resp;
+    auto ctx = makeContext();
+    const grpc::Status status = stub_->DeleteRoute(ctx.get(), req, &resp);
+    if (!status.ok())
+    {
+        return std::unexpected(statusToError(status));
+    }
+    if (resp.code() != srmd::v1::STATUS_CODE_OK)
+    {
+        return std::unexpected(std::format(
+            "DeleteRoute failed ({}): {}",
+            srmd::v1::StatusCode_Name(resp.code()), resp.message()));
+    }
+    return resp.deleted_count();
+}
+
+// ---------------------------------------------------------------------------
 // GetRoute
 // ---------------------------------------------------------------------------
 

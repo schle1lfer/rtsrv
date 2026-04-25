@@ -153,6 +153,37 @@ SwitchRouteManagerImpl::RemoveRoute(grpc::ServerContext* /*ctx*/,
 }
 
 // ---------------------------------------------------------------------------
+// DeleteRoute
+// ---------------------------------------------------------------------------
+
+grpc::Status
+SwitchRouteManagerImpl::DeleteRoute(grpc::ServerContext* /*ctx*/,
+                                    const srmd::v1::DeleteRouteRequest* req,
+                                    srmd::v1::DeleteRouteResponse* resp)
+{
+    if (req->destination().empty())
+    {
+        resp->set_code(srmd::v1::STATUS_CODE_INVALID_ARGUMENT);
+        resp->set_message("destination must not be empty");
+        return grpc::Status::OK;
+    }
+
+    auto result = routeManager_.deleteRoutesByDestination(req->destination());
+    if (!result)
+    {
+        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
+        resp->set_message(result.error());
+        return grpc::Status::OK;
+    }
+
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message(std::format("Deleted {} route(s) for destination '{}'",
+                                  *result, req->destination()));
+    resp->set_deleted_count(*result);
+    return grpc::Status::OK;
+}
+
+// ---------------------------------------------------------------------------
 // GetRoute
 // ---------------------------------------------------------------------------
 

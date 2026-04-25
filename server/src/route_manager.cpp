@@ -181,6 +181,53 @@ RouteManager::listRoutes(const srmd::v1::ListRoutesRequest& req) const
     return result;
 }
 
+std::expected<uint32_t, std::string>
+RouteManager::deleteRoutesByDestination(const std::string& destination)
+{
+    if (destination.empty())
+    {
+        return std::unexpected("destination must not be empty");
+    }
+
+    std::vector<srmd::v1::Route> removed;
+    {
+        std::unique_lock lock(routesMutex_);
+        for (auto it = routes_.begin(); it != routes_.end();)
+        {
+            if (it->second.destination() == destination)
+            {
+                removed.push_back(it->second);
+                it = routes_.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
+    if (removed.empty())
+    {
+        return std::unexpected(
+            std::format("No routes found for destination '{}'", destination));
+    }
+
+    const int64_t ts = nowUs();
+    for (const auto& route : removed)
+    {
+        BOOST_LOG_TRIVIAL(info) << std::format(
+            "[RouteManager] DeleteRoute id={} dest={}", route.id(), destination);
+
+        srmd::v1::RouteEvent ev;
+        ev.set_type(srmd::v1::ROUTE_EVENT_REMOVED);
+        *ev.mutable_route() = route;
+        ev.set_event_ts_us(ts);
+        notifyObservers(ev);
+    }
+
+    return static_cast<uint32_t>(removed.size());
+}
+
 // ---------------------------------------------------------------------------
 // Observer management
 // ---------------------------------------------------------------------------

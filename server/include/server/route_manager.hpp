@@ -94,6 +94,15 @@ public:
     [[nodiscard]] std::vector<srmd::v1::Route>
     listRoutes(const srmd::v1::ListRoutesRequest& req) const;
 
+    /**
+     * @brief Removes all routes whose destination matches the given prefix.
+     *
+     * @param destination  Destination prefix to match (CIDR or "default").
+     * @return The number of routes deleted, or an error string.
+     */
+    [[nodiscard]] std::expected<uint32_t, std::string>
+    deleteRoutesByDestination(const std::string& destination);
+
     // -----------------------------------------------------------------------
     // Observer registration
     // -----------------------------------------------------------------------

@@ -118,6 +118,15 @@ public:
     removeRoute(const std::string& id);
 
     /**
+     * @brief Calls DeleteRoute to remove all routes matching a destination.
+     *
+     * @param destination  Destination prefix (CIDR or "default").
+     * @return The number of deleted routes on success, or an error string.
+     */
+    [[nodiscard]] std::expected<uint32_t, std::string>
+    deleteRoute(const std::string& destination);
+
+    /**
      * @brief Calls GetRoute for the given ID.
      *
      * @param id  Route ID to retrieve.
