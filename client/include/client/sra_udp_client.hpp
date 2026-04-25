@@ -1,8 +1,8 @@
 /**
- * @file client/include/client/vrf_udp_client.hpp
+ * @file client/include/client/sra_udp_client.hpp
  * @brief VRF route-add client over a non-blocking UNIX-domain socket.
  *
- * VrfUdpClient runs in a dedicated background thread.  Callers submit
+ * SraUdpClient runs in a dedicated background thread.  Callers submit
  * SingleRouteRequest values via submit(); the thread picks them up, encodes
  * and sends them over an AF_UNIX stream socket in non-blocking mode (using
  * poll() for all I/O readiness checks), receives the response frame, decodes
@@ -41,7 +41,7 @@ namespace sra
  *
  * Thread safety: submit() is safe to call from any thread.
  */
-class VrfUdpClient
+class SraUdpClient
 {
 public:
     /**
@@ -49,13 +49,13 @@ public:
      * @param socketPath  Filesystem path of the UNIX-domain server socket.
      * @param ioTimeoutMs Per-operation poll() timeout in milliseconds.
      */
-    explicit VrfUdpClient(std::string socketPath    = "/tmp/ud_server.sock",
+    explicit SraUdpClient(std::string socketPath    = "/tmp/ud_server.sock",
                           int         ioTimeoutMs   = 5000);
 
-    ~VrfUdpClient();
+    ~SraUdpClient();
 
-    VrfUdpClient(const VrfUdpClient&) = delete;
-    VrfUdpClient& operator=(const VrfUdpClient&) = delete;
+    SraUdpClient(const SraUdpClient&) = delete;
+    SraUdpClient& operator=(const SraUdpClient&) = delete;
 
     /** @brief Launches the background thread (no-op if already running). */
     void start();

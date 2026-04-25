@@ -77,7 +77,7 @@
 #include "client/routing.hpp"
 #include "client/udp_table_server.hpp"
 #include "client/vrf_table.hpp"
-#include "client/vrf_udp_client.hpp"
+#include "client/sra_udp_client.hpp"
 #include "common/config.hpp"
 #include "server/netlink.h"
 #include "client/netlink_neigh.h"
@@ -2128,7 +2128,7 @@ struct NexthopCtx
     std::map<uint32_t, NexthopEntry> nexthops;             ///< nexthop ID → entry
     sra::UdpTableServer*             udpServer{nullptr};   ///< UDP publisher (port 9002)
     sra::VrfTable*                   vrfTable{nullptr};    ///< VRF table from GetAllRoutes
-    sra::VrfUdpClient*               vrfClient{nullptr};   ///< Unix-domain client to ud_server
+    sra::SraUdpClient*               vrfClient{nullptr};   ///< Unix-domain client to ud_server
     NeighCtx*                        neighCtx{nullptr};    ///< adjacency table (shared with neigh thread)
 };
 
@@ -2619,7 +2619,7 @@ static void sendIcmpEchoRequest(const std::string& destIp)
  */
 static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
                                    sra::VrfTable*           vrfTable,
-                                   sra::VrfUdpClient*       vrfClient,
+                                   sra::SraUdpClient*       vrfClient,
                                    NeighCtx*                neighCtx)
 {
     if (!vrfTable || !vrfClient)
@@ -2735,7 +2735,7 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
  * @brief Silent live-nexthop callback for the startup background thread.
  *
  * Updates the in-memory nexthop table, publishes the snapshot to UDP
- * subscribers, and — when the VRF table and VrfUdpClient are wired up —
+ * subscribers, and — when the VRF table and SraUdpClient are wired up —
  * checks whether the changed nexthop appears in the VRF table and sends a
  * SingleRoute request to ud_server.
  */
@@ -2885,7 +2885,7 @@ int main(int argc, char* argv[])
 
     // Initialise the unix_domain protocol-layer logger as early as possible so
     // that all logger::log / logger::log_hex calls (including those in
-    // vrf_udp_client, cmd_proto, etc.) are active for the lifetime of the run.
+    // sra_udp_client, cmd_proto, etc.) are active for the lifetime of the run.
     {
         const std::string& lvlStr = vm["loglevel"].as<std::string>();
         int lvl = logger::DEBUG;
@@ -3545,12 +3545,12 @@ int main(int argc, char* argv[])
     //   4. Display nexthop / neighbor / /32 route tables (kernel netlink).
     //   5. [srmd gRPC] GetAllRoutes → build SingleRouteRequest for nni interfaces,
     //      nexthop_id looked up from the kernel nexthop table.
-    //   6. [ud_server Unix socket] Submit SingleRouteRequest via VrfUdpClient.
+    //   6. [ud_server Unix socket] Submit SingleRouteRequest via SraUdpClient.
     //   7. Main loop: keep running until SIGINT/SIGTERM.
     //
     // Non-blocking I/O:
     //   - gRPC  : RPCs submitted to GrpcProc; executed in a background thread.
-    //   - Unix  : VrfUdpClient uses O_NONBLOCK + poll() for all socket I/O.
+    //   - Unix  : SraUdpClient uses O_NONBLOCK + poll() for all socket I/O.
     // -----------------------------------------------------------------------
     if (command == "run")
     {
@@ -3679,9 +3679,9 @@ int main(int argc, char* argv[])
         const std::string udSocketPath =
             args.empty() ? "/tmp/ud_server.sock" : args[0];
 
-        sra::VrfUdpClient vrfClient(udSocketPath);
+        sra::SraUdpClient vrfClient(udSocketPath);
         vrfClient.start();
-        std::println("[run] VrfUdpClient started (non-blocking Unix socket='{}')",
+        std::println("[run] SraUdpClient started (non-blocking Unix socket='{}')",
                      udSocketPath);
 
         // ── Load VRF table and arm the nexthop event handler ─────────────────
@@ -3798,7 +3798,7 @@ int main(int argc, char* argv[])
         // Netlink background threads (routes, neighbors, nexthops) keep
         // running and update the in-memory tables automatically.
         // The gRPC channel stays open via GrpcProc.
-        // The VrfUdpClient thread awaits further submit() calls.
+        // The SraUdpClient thread awaits further submit() calls.
         std::println("[run] Daemon running (Ctrl-C to stop)…");
         while (!g_run_stop)
         {
@@ -3844,7 +3844,7 @@ int main(int argc, char* argv[])
 
         std::println("[vrf-route-add] socket={} — starting VRF thread", socketPath);
 
-        sra::VrfUdpClient vrfClient(socketPath);
+        sra::SraUdpClient vrfClient(socketPath);
         vrfClient.start();
 
         // RequestLoopback to identify this node in the SOT.

@@ -1,5 +1,5 @@
 /**
- * @file client/src/vrf_udp_client.cpp
+ * @file client/src/sra_udp_client.cpp
  * @brief VRF UDP client — non-blocking UNIX-domain socket with command queue.
  *
  * The background thread waits for SingleRouteRequest commands, connects to the
@@ -8,7 +8,7 @@
  * status bitmask.
  */
 
-#include "client/vrf_udp_client.hpp"
+#include "client/sra_udp_client.hpp"
 
 #include "lib/cmd_proto.hpp"
 #include "lib/logger.hpp"
@@ -159,28 +159,28 @@ nb_connect(int fd, const std::string& path, int timeout_ms)
 } // namespace
 
 // ---------------------------------------------------------------------------
-// VrfUdpClient
+// SraUdpClient
 // ---------------------------------------------------------------------------
 
-VrfUdpClient::VrfUdpClient(std::string socketPath, int ioTimeoutMs)
+SraUdpClient::SraUdpClient(std::string socketPath, int ioTimeoutMs)
     : socketPath_(std::move(socketPath)), ioTimeoutMs_(ioTimeoutMs)
 {}
 
-VrfUdpClient::~VrfUdpClient()
+SraUdpClient::~SraUdpClient()
 {
     stop();
 }
 
-void VrfUdpClient::start()
+void SraUdpClient::start()
 {
     if (running_.load())
         return;
     stopRequested_.store(false);
     running_.store(true);
-    thread_ = std::thread(&VrfUdpClient::threadFunc, this);
+    thread_ = std::thread(&SraUdpClient::threadFunc, this);
 }
 
-void VrfUdpClient::stop()
+void SraUdpClient::stop()
 {
     stopRequested_.store(true);
     queueCv_.notify_all();
@@ -188,12 +188,12 @@ void VrfUdpClient::stop()
         thread_.join();
 }
 
-bool VrfUdpClient::running() const noexcept
+bool SraUdpClient::running() const noexcept
 {
     return running_.load();
 }
 
-void VrfUdpClient::submit(cmdproto::SingleRouteRequest req)
+void SraUdpClient::submit(cmdproto::SingleRouteRequest req)
 {
     {
         std::lock_guard lock(queueMutex_);
@@ -206,9 +206,9 @@ void VrfUdpClient::submit(cmdproto::SingleRouteRequest req)
 // threadFunc — main loop
 // ---------------------------------------------------------------------------
 
-void VrfUdpClient::threadFunc()
+void SraUdpClient::threadFunc()
 {
-    std::println("[VrfUdpClient] thread started, socket='{}'", socketPath_);
+    std::println("[SraUdpClient] thread started, socket='{}'", socketPath_);
 
     while (!stopRequested_.load())
     {
@@ -229,24 +229,24 @@ void VrfUdpClient::threadFunc()
     }
 
     running_.store(false);
-    std::println("[VrfUdpClient] thread stopped");
+    std::println("[SraUdpClient] thread stopped");
 }
 
 // ---------------------------------------------------------------------------
 // processRequest — encode → connect (non-blocking) → send → recv → log
 // ---------------------------------------------------------------------------
 
-void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
+void SraUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
 {
     static std::uint16_t s_msg_id = 1;
     const std::uint16_t  msg_id   = s_msg_id++;
 
     // Log what we're about to send
-    std::println("[VrfUdpClient] processing request msg_id={}: {} interface(s)",
+    std::println("[SraUdpClient] processing request msg_id={}: {} interface(s)",
                  msg_id, req.interfaces.size());
     for (const auto& iface : req.interfaces)
     {
-        std::println("[VrfUdpClient]   iface='{}' nexthop={} nexthop_id={} "
+        std::println("[SraUdpClient]   iface='{}' nexthop={} nexthop_id={} "
                      "prefixes={}",
                      iface.iface_name.data(),
                      fmt_ip(iface.nexthop_addr_ipv4),
@@ -255,7 +255,7 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
         for (std::size_t i = 0; i < iface.prefixes.size(); ++i)
         {
             const auto& p = iface.prefixes[i];
-            std::println("[VrfUdpClient]     prefix[{}]: {}/{}", i,
+            std::println("[SraUdpClient]     prefix[{}]: {}/{}", i,
                          fmt_ip(p.addr), static_cast<unsigned>(p.mask_len));
         }
     }
@@ -265,11 +265,11 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
         cmdproto::encode_command(cmdproto::make_route_add_binary(req));
     if (!cmd_bytes)
     {
-        std::println(stderr, "[VrfUdpClient] encode_command: {}",
+        std::println(stderr, "[SraUdpClient] encode_command: {}",
                      cmd_bytes.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [1] cmdproto: {} byte(s)",
                             msg_id, cmd_bytes->size()));
 
@@ -281,11 +281,11 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
     auto exch_bytes = routeproto::encode_exchange(ed);
     if (!exch_bytes)
     {
-        std::println(stderr, "[VrfUdpClient] encode_exchange: {}",
+        std::println(stderr, "[SraUdpClient] encode_exchange: {}",
                      exch_bytes.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [2] routeproto exchange: {} byte(s)",
                             msg_id, exch_bytes->size()));
 
@@ -294,11 +294,11 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
     auto msg_bytes = routeproto::encode_message(data_msg);
     if (!msg_bytes)
     {
-        std::println(stderr, "[VrfUdpClient] encode_message: {}",
+        std::println(stderr, "[SraUdpClient] encode_message: {}",
                      msg_bytes.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [2] routeproto message: {} byte(s)",
                             msg_id, msg_bytes->size()));
 
@@ -312,11 +312,11 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
     auto frame = udproto::encode_packet(pkt);
     if (!frame)
     {
-        std::println(stderr, "[VrfUdpClient] encode_packet: {}",
+        std::println(stderr, "[SraUdpClient] encode_packet: {}",
                      frame.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [3] udproto frame: {} byte(s)",
                             msg_id, frame->size()));
 
@@ -324,7 +324,7 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
     auto sock_result = net::create_socket();
     if (!sock_result)
     {
-        std::println(stderr, "[VrfUdpClient] create_socket: {}",
+        std::println(stderr, "[SraUdpClient] create_socket: {}",
                      sock_result.error().message());
         return;
     }
@@ -332,53 +332,53 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
 
     if (auto r = net::set_nonblocking(sock.fd(), true); !r)
     {
-        std::println(stderr, "[VrfUdpClient] set_nonblocking: {}",
+        std::println(stderr, "[SraUdpClient] set_nonblocking: {}",
                      r.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [4] socket fd={}", msg_id, sock.fd()));
 
     // ── [5] Connect (non-blocking) ───────────────────────────────────────────
     if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
     {
-        std::println(stderr, "[VrfUdpClient] connect({}): {}",
+        std::println(stderr, "[SraUdpClient] connect({}): {}",
                      socketPath_, r.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [5] connected fd={} path='{}'",
                             msg_id, sock.fd(), socketPath_));
 
     // ── [6] Send frame (non-blocking with poll) ──────────────────────────────
-    logger::log_hex("VrfUdpClient", true, sock.fd(), *frame);
+    logger::log_hex("SraUdpClient", true, sock.fd(), *frame);
     if (auto r = nb_send_all(sock.fd(), *frame, ioTimeoutMs_); !r)
     {
-        std::println(stderr, "[VrfUdpClient] send: {}", r.error().message());
+        std::println(stderr, "[SraUdpClient] send: {}", r.error().message());
         return;
     }
-    std::println("[VrfUdpClient] frame sent fd={} msg_id={} {} byte(s)",
+    std::println("[SraUdpClient] frame sent fd={} msg_id={} {} byte(s)",
                  sock.fd(), msg_id, frame->size());
 
     // ── [7] Receive response frame (non-blocking with poll) ──────────────────
     auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
     if (!frame_recv)
     {
-        std::println(stderr, "[VrfUdpClient] recv: {}",
+        std::println(stderr, "[SraUdpClient] recv: {}",
                      frame_recv.error().message());
         return;
     }
-    logger::log_hex("VrfUdpClient", false, sock.fd(), *frame_recv);
+    logger::log_hex("SraUdpClient", false, sock.fd(), *frame_recv);
 
     // ── [8] Decode udproto packet ────────────────────────────────────────────
     auto reply_pkt = udproto::decode_packet(*frame_recv);
     if (!reply_pkt)
     {
-        std::println(stderr, "[VrfUdpClient] decode_packet: {}",
+        std::println(stderr, "[SraUdpClient] decode_packet: {}",
                      reply_pkt.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [8] udproto pkt: pkt_num={} "
                             "total_pkts={} ctrl={:#06x} data={} byte(s)",
                             msg_id, reply_pkt->pkt_num, reply_pkt->total_pkts,
@@ -388,11 +388,11 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
     auto reply_msg = routeproto::decode_message(reply_pkt->data);
     if (!reply_msg)
     {
-        std::println(stderr, "[VrfUdpClient] decode_message: {}",
+        std::println(stderr, "[SraUdpClient] decode_message: {}",
                      reply_msg.error().message());
         return;
     }
-    logger::log(logger::DEBUG, "VrfUdpClient",
+    logger::log(logger::DEBUG, "SraUdpClient",
                 std::format("msg_id={} [9] routeproto msg: "
                             "type=0x{:02x} payload={} byte(s)",
                             msg_id,
@@ -402,7 +402,7 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
     if (reply_msg->payload.size() < 2)
     {
         std::println(stderr,
-                     "[VrfUdpClient] response payload too short ({} bytes)",
+                     "[SraUdpClient] response payload too short ({} bytes)",
                      reply_msg->payload.size());
         return;
     }
@@ -414,13 +414,13 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
         std::span<const std::uint8_t>{reply_msg->payload}.subspan(1));
     if (!bin_resp)
     {
-        std::println(stderr, "[VrfUdpClient] decode_route_add_binary_response: {}",
+        std::println(stderr, "[SraUdpClient] decode_route_add_binary_response: {}",
                      bin_resp.error().message());
         return;
     }
 
     // ── [11] Log per-prefix result bits ─────────────────────────────────────
-    std::println("[VrfUdpClient] response msg_id={}: msg_type=0x{:02x} "
+    std::println("[SraUdpClient] response msg_id={}: msg_type=0x{:02x} "
                  "ack=0x{:02x} overall_status=0x{:02x} ({})",
                  msg_id,
                  static_cast<unsigned>(reply_msg->msg_type),
@@ -431,11 +431,11 @@ void VrfUdpClient::processRequest(const cmdproto::SingleRouteRequest& req)
 
     for (std::size_t i = 0; i < bin_resp->prefix_status.size(); ++i)
     {
-        std::println("[VrfUdpClient]   prefix[{}]: {}",
+        std::println("[SraUdpClient]   prefix[{}]: {}",
                      i, bin_resp->prefix_status[i] ? "ok" : "FAIL");
     }
 
-    std::println("[VrfUdpClient] exchange complete msg_id={}: {}",
+    std::println("[SraUdpClient] exchange complete msg_id={}: {}",
                  msg_id,
                  bin_resp->status_code == 0x00 ? "PASS" : "FAIL");
 }
