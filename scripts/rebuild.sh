@@ -2,10 +2,22 @@
 
 BUILD_DIR="server-build"
 INSTALL_DIR="server-local"
+
+TARGET_BUILD_DIR="target-build"
+TARGET_INSTALL_DIR="target-local"
+
 N_PROC=1
 
+# local dir
+rm -rf local/
+
+# servers dirs
 rm -rf ${INSTALL_DIR}/
 rm -rf ${BUILD_DIR}/
+
+# targets dirs
+rm -rf ${TARGET_INSTALL_DIR}/
+rm -rf ${TARGET_BUILD_DIR}/
 
 cmake -S . \
  -B ${BUILD_DIR} \

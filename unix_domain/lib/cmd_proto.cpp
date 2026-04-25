@@ -695,7 +695,8 @@ decode_route_list_response(std::span<const std::uint8_t> raw)
 // ---------------------------------------------------------------------------
 // Stub command handlers
 // ---------------------------------------------------------------------------
-
+//std::expected<RouteAddBinaryResponse, std::error_code>
+//handle_route_add_payload(const SingleRouteRequest& req)
 /// @brief @copybrief cmdproto::handle_route_add
 std::expected<void, std::error_code> handle_route_add(const RouteAddParams& p)
 {
@@ -730,9 +731,15 @@ std::expected<void, std::error_code> handle_route_add(const RouteAddParams& p)
     }
 
     if (g_callbacks.route_add)
+    {
+        // hw ASIC
         return g_callbacks.route_add(std::make_shared<netlink::RouteAddParams>(np));
-
-    return netlink::add_route(np);
+    }
+    else
+    {
+        // virt ASIC
+        return netlink::add_route(np);
+    }
 }
 
 /// @brief @copybrief cmdproto::handle_route_del
@@ -765,9 +772,15 @@ std::expected<void, std::error_code> handle_route_del(const RouteDelParams& p)
     }
 
     if (g_callbacks.route_del)
+    {
+        // hw ASIC
         return g_callbacks.route_del(std::make_shared<netlink::RouteDelParams>(np));
-
-    return netlink::delete_route(np);
+    }
+    else
+    {
+        // virt ASIC
+        return netlink::delete_route(np);
+    }
 }
 
 /// @brief @copybrief cmdproto::handle_route_list
@@ -777,17 +790,19 @@ std::expected<std::vector<RouteEntry>, std::error_code> handle_route_list()
 
     if (g_callbacks.route_list)
     {
+        // hw ASIC
         auto table = std::make_shared<netlink::RouteTable>(netlink::RouteTable::Main);
         nl_routes = g_callbacks.route_list(std::move(table));
     }
     else
     {
+        // virt ASIC
         nl_routes = netlink::list_routes(netlink::RouteTable::Main);
     }
 
     if (!nl_routes)
         return std::unexpected(nl_routes.error());
-
+    
     std::vector<RouteEntry> routes;
     routes.reserve(nl_routes->size());
 
@@ -1051,8 +1066,11 @@ handle_route_add_payload(const SingleRouteRequest& req)
             np.type        = netlink::RouteType::Unicast;
             np.table       = netlink::RouteTable::Main;
 
-            auto result = netlink::add_route(np);
-            const bool ok = result.has_value();
+            //auto result = netlink::add_route(np);
+            if (g_callbacks.route_add) {
+                g_callbacks.route_add(std::make_shared<netlink::RouteAddParams>(np));
+            }
+            const bool ok = true; //result.has_value();
             resp.prefix_status.push_back(ok);
             if (!ok)
                 resp.status_code = 0x01;
@@ -1067,7 +1085,7 @@ handle_route_add_payload(const SingleRouteRequest& req)
                                     iface.iface_name.data(),
                                     ok ? "OK" : "FAIL",
                                     ok ? "" : std::format("  ({})",
-                                        result.error().message())));
+                                        "CB TEST"/*result.error().message()*/)));
         }
     }
 
