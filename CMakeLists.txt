@@ -216,8 +216,9 @@ add_subdirectory(test)
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 
-install(TARGETS srmd RUNTIME DESTINATION "${CMAKE_INSTALL_SBINDIR}")
-install(TARGETS sra  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(TARGETS srmd      RUNTIME DESTINATION "${CMAKE_INSTALL_SBINDIR}")
+install(TARGETS ud_server RUNTIME DESTINATION "${CMAKE_INSTALL_SBINDIR}")
+install(TARGETS sra       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 # srmd::srmd.json
 install(
@@ -298,7 +299,7 @@ message(STATUS "  Version         : ${PROJECT_VERSION}")
 message(STATUS "  Build type      : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ standard    : ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Install prefix  : ${CMAKE_INSTALL_PREFIX}")
-message(STATUS "  Targets         : srmd (server)  sra (client)")
+message(STATUS "  Targets         : srmd (server)  ud_server  sra (client)")
 message(STATUS "  Build number    : auto-incremented each build")
-message(STATUS "  Versioned names : srmd-<N>-<ts>  sra-<N>-<ts>")
+message(STATUS "  Versioned names : srmd-<N>-<ts>  ud_server-<N>-<ts>  sra-<N>-<ts>")
 message(STATUS "")
