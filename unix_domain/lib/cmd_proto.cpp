@@ -526,6 +526,15 @@ Command make_route_del(const RouteDelParams& p)
         }
     }
 
+    // IF_NAME: omit when empty (match any interface).
+    if (!p.if_name.empty())
+    {
+        Field f;
+        f.field_id = FieldId::IF_NAME;
+        f.data.assign(p.if_name.begin(), p.if_name.end());
+        cmd.fields.push_back(std::move(f));
+    }
+
     // VRF_NAME: omit when empty (default VRF).
     if (!p.vrfs_name.empty())
     {
@@ -640,6 +649,11 @@ parse_route_del(const Command& cmd)
         std::copy(gw->data.begin(), gw->data.end(), p.gateway.begin());
     }
     // When absent, p.gateway remains all-zero ("match any").
+
+    // IF_NAME — optional, variable-length UTF-8.
+    const Field* ifn = find_field(cmd, FieldId::IF_NAME);
+    if (ifn)
+        p.if_name.assign(ifn->data.begin(), ifn->data.end());
 
     // VRF_NAME — optional, variable-length UTF-8.
     const Field* vrf = find_field(cmd, FieldId::VRF_NAME);
@@ -800,6 +814,7 @@ std::expected<void, std::error_code> handle_route_del(const RouteDelParams& p)
     netlink::RouteDelParams np;
     np.dst = p.dst_addr;
     np.prefix_len = p.prefix_len;
+    np.if_name = p.if_name;
     np.table = netlink::RouteTable::Main;
     np.vrfs_name = p.vrfs_name;
 

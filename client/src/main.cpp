@@ -4287,6 +4287,7 @@ int main(int argc, char* argv[])
                     delParams.dst_addr = pfx.addr;
                     delParams.prefix_len = pfx.mask_len;
                     delParams.gateway = iface.nexthop_addr_ipv4;
+                    delParams.if_name = std::string(iface.iface_name.data());
                     delParams.vrfs_name = vrfsName;
                     vrfClient.submitDelete(delParams);
                 }

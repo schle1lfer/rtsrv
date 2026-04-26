@@ -180,6 +180,7 @@ struct RouteDelParams
     Ipv4Addr dst_addr{};       ///< Destination network address
     std::uint8_t prefix_len{}; ///< CIDR prefix length (0–32)
     Ipv4Addr gateway{};        ///< Gateway to match (all-zero = any)
+    std::string if_name;       ///< Egress interface to match (empty = any)
     std::string vrfs_name;     ///< VRF name (empty = default VRF)
 };
 
