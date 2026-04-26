@@ -109,9 +109,9 @@ public:
 
 private:
     void threadFunc();
-    void processAddRequest(const cmdproto::SingleRouteRequest& req);
-    void processDeleteRequest(const cmdproto::RouteDelParams& params);
-    void processListRequest();
+    void processAddRequest(int fd, const cmdproto::SingleRouteRequest& req);
+    void processDeleteRequest(int fd, const cmdproto::RouteDelParams& params);
+    void processListRequest(int fd);
 
     std::string socketPath_;
     int ioTimeoutMs_;

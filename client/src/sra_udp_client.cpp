@@ -158,6 +158,29 @@ nb_connect(int fd, const std::string& path, int timeout_ms)
     return {};
 }
 
+/**
+ * @brief Creates a non-blocking AF_UNIX socket and connects to @p path.
+ *
+ * Combines socket creation, set_nonblocking, and nb_connect into one step
+ * so the returned Socket is ready for immediate use.
+ */
+static std::expected<net::Socket, std::error_code>
+openConnection(const std::string& path, int timeout_ms)
+{
+    auto sock_result = net::create_socket();
+    if (!sock_result)
+        return std::unexpected(sock_result.error());
+    net::Socket sock = std::move(*sock_result);
+
+    if (auto r = net::set_nonblocking(sock.fd(), true); !r)
+        return std::unexpected(r.error());
+
+    if (auto r = nb_connect(sock.fd(), path, timeout_ms); !r)
+        return std::unexpected(r.error());
+
+    return sock;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -230,6 +253,22 @@ void SraUdpClient::threadFunc()
 {
     std::println("[SraUdpClient] thread started, socket='{}'", socketPath_);
 
+    auto conn_result = openConnection(socketPath_, ioTimeoutMs_);
+    if (!conn_result)
+    {
+        std::println(stderr,
+                     "[SraUdpClient] connect({}): {}",
+                     socketPath_,
+                     conn_result.error().message());
+        running_.store(false);
+        std::println("[SraUdpClient] thread stopped");
+        return;
+    }
+    net::Socket conn = std::move(*conn_result);
+    std::println("[SraUdpClient] connected fd={} path='{}'",
+                 conn.fd(),
+                 socketPath_);
+
     while (true)
     {
         Request req;
@@ -246,14 +285,14 @@ void SraUdpClient::threadFunc()
         }
 
         std::visit(
-            [this](auto&& r) {
+            [this, &conn](auto&& r) {
                 using T = std::decay_t<decltype(r)>;
                 if constexpr (std::is_same_v<T, cmdproto::SingleRouteRequest>)
-                    processAddRequest(r);
+                    processAddRequest(conn.fd(), r);
                 else if constexpr (std::is_same_v<T, cmdproto::RouteDelParams>)
-                    processDeleteRequest(r);
+                    processDeleteRequest(conn.fd(), r);
                 else if constexpr (std::is_same_v<T, RouteListRequest>)
-                    processListRequest();
+                    processListRequest(conn.fd());
             },
             req);
     }
@@ -266,7 +305,7 @@ void SraUdpClient::threadFunc()
 // processAddRequest — ROUTE_ADD binary payload
 // ---------------------------------------------------------------------------
 
-void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
+void SraUdpClient::processAddRequest(int fd, const cmdproto::SingleRouteRequest& req)
 {
     static std::uint16_t s_msg_id = 1;
     const std::uint16_t msg_id = s_msg_id++;
@@ -365,64 +404,27 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
                             msg_id,
                             frame->size()));
 
-    // ── [4] Create NON-BLOCKING socket ──────────────────────────────────────
-    auto sock_result = net::create_socket();
-    if (!sock_result)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] create_socket: {}",
-                     sock_result.error().message());
-        return;
-    }
-    net::Socket sock = std::move(*sock_result);
-
-    if (auto r = net::set_nonblocking(sock.fd(), true); !r)
-    {
-        std::println(
-            stderr, "[SraUdpClient] set_nonblocking: {}", r.error().message());
-        return;
-    }
-    logger::log(logger::DEBUG,
-                "SraUdpClient",
-                std::format("msg_id={} [4] socket fd={}", msg_id, sock.fd()));
-
-    // ── [5] Connect (non-blocking) ───────────────────────────────────────────
-    if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] connect({}): {}",
-                     socketPath_,
-                     r.error().message());
-        return;
-    }
-    logger::log(logger::DEBUG,
-                "SraUdpClient",
-                std::format("msg_id={} [5] connected fd={} path='{}'",
-                            msg_id,
-                            sock.fd(),
-                            socketPath_));
-
-    // ── [6] Send frame (non-blocking with poll) ──────────────────────────────
-    logger::log_hex("SraUdpClient", true, sock.fd(), *frame);
-    if (auto r = nb_send_all(sock.fd(), *frame, ioTimeoutMs_); !r)
+    // ── [4] Send frame (non-blocking with poll) ──────────────────────────────
+    logger::log_hex("SraUdpClient", true, fd, *frame);
+    if (auto r = nb_send_all(fd, *frame, ioTimeoutMs_); !r)
     {
         std::println(stderr, "[SraUdpClient] send: {}", r.error().message());
         return;
     }
     std::println("[SraUdpClient] frame sent fd={} msg_id={} {} byte(s)",
-                 sock.fd(),
+                 fd,
                  msg_id,
                  frame->size());
 
-    // ── [7] Receive response frame (non-blocking with poll) ──────────────────
-    auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
+    // ── [5] Receive response frame (non-blocking with poll) ──────────────────
+    auto frame_recv = nb_recv_frame(fd, ioTimeoutMs_);
     if (!frame_recv)
     {
         std::println(
             stderr, "[SraUdpClient] recv: {}", frame_recv.error().message());
         return;
     }
-    logger::log_hex("SraUdpClient", false, sock.fd(), *frame_recv);
+    logger::log_hex("SraUdpClient", false, fd, *frame_recv);
 
     // ── [8] Decode udproto packet ────────────────────────────────────────────
     auto reply_pkt = udproto::decode_packet(*frame_recv);
@@ -507,7 +509,7 @@ void SraUdpClient::processAddRequest(const cmdproto::SingleRouteRequest& req)
 // processDeleteRequest — ROUTE_DEL TLV
 // ---------------------------------------------------------------------------
 
-void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
+void SraUdpClient::processDeleteRequest(int fd, const cmdproto::RouteDelParams& params)
 {
     static std::uint16_t s_msg_id =
         0x8000; // separate counter to distinguish add/del
@@ -572,38 +574,9 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
         return;
     }
 
-    // ── [4] Create NON-BLOCKING socket ──────────────────────────────────────
-    auto sock_result = net::create_socket();
-    if (!sock_result)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] ROUTE_DEL create_socket: {}",
-                     sock_result.error().message());
-        return;
-    }
-    net::Socket sock = std::move(*sock_result);
-
-    if (auto r = net::set_nonblocking(sock.fd(), true); !r)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] ROUTE_DEL set_nonblocking: {}",
-                     r.error().message());
-        return;
-    }
-
-    // ── [5] Connect (non-blocking) ───────────────────────────────────────────
-    if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] ROUTE_DEL connect({}): {}",
-                     socketPath_,
-                     r.error().message());
-        return;
-    }
-
-    // ── [6] Send frame ───────────────────────────────────────────────────────
-    logger::log_hex("SraUdpClient", true, sock.fd(), *frame);
-    if (auto r = nb_send_all(sock.fd(), *frame, ioTimeoutMs_); !r)
+    // ── [4] Send frame ───────────────────────────────────────────────────────
+    logger::log_hex("SraUdpClient", true, fd, *frame);
+    if (auto r = nb_send_all(fd, *frame, ioTimeoutMs_); !r)
     {
         std::println(
             stderr, "[SraUdpClient] ROUTE_DEL send: {}", r.error().message());
@@ -613,8 +586,8 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
                  msg_id,
                  frame->size());
 
-    // ── [7] Receive response frame ───────────────────────────────────────────
-    auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
+    // ── [5] Receive response frame ───────────────────────────────────────────
+    auto frame_recv = nb_recv_frame(fd, ioTimeoutMs_);
     if (!frame_recv)
     {
         std::println(stderr,
@@ -622,7 +595,7 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
                      frame_recv.error().message());
         return;
     }
-    logger::log_hex("SraUdpClient", false, sock.fd(), *frame_recv);
+    logger::log_hex("SraUdpClient", false, fd, *frame_recv);
 
     // ── [8] Decode udproto packet ────────────────────────────────────────────
     auto reply_pkt = udproto::decode_packet(*frame_recv);
@@ -667,7 +640,7 @@ void SraUdpClient::processDeleteRequest(const cmdproto::RouteDelParams& params)
 // processListRequest — ROUTE_LIST
 // ---------------------------------------------------------------------------
 
-void SraUdpClient::processListRequest()
+void SraUdpClient::processListRequest(int fd)
 {
     static std::uint16_t s_msg_id =
         0xC000; // separate counter for list commands
@@ -726,38 +699,9 @@ void SraUdpClient::processListRequest()
         return;
     }
 
-    // ── [4] Create NON-BLOCKING socket ──────────────────────────────────────
-    auto sock_result = net::create_socket();
-    if (!sock_result)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] ROUTE_LIST create_socket: {}",
-                     sock_result.error().message());
-        return;
-    }
-    net::Socket sock = std::move(*sock_result);
-
-    if (auto r = net::set_nonblocking(sock.fd(), true); !r)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] ROUTE_LIST set_nonblocking: {}",
-                     r.error().message());
-        return;
-    }
-
-    // ── [5] Connect (non-blocking) ───────────────────────────────────────────
-    if (auto r = nb_connect(sock.fd(), socketPath_, ioTimeoutMs_); !r)
-    {
-        std::println(stderr,
-                     "[SraUdpClient] ROUTE_LIST connect({}): {}",
-                     socketPath_,
-                     r.error().message());
-        return;
-    }
-
-    // ── [6] Send frame ───────────────────────────────────────────────────────
-    logger::log_hex("SraUdpClient", true, sock.fd(), *frame);
-    if (auto r = nb_send_all(sock.fd(), *frame, ioTimeoutMs_); !r)
+    // ── [4] Send frame ───────────────────────────────────────────────────────
+    logger::log_hex("SraUdpClient", true, fd, *frame);
+    if (auto r = nb_send_all(fd, *frame, ioTimeoutMs_); !r)
     {
         std::println(
             stderr, "[SraUdpClient] ROUTE_LIST send: {}", r.error().message());
@@ -767,8 +711,8 @@ void SraUdpClient::processListRequest()
                  msg_id,
                  frame->size());
 
-    // ── [7] Receive response frame ───────────────────────────────────────────
-    auto frame_recv = nb_recv_frame(sock.fd(), ioTimeoutMs_);
+    // ── [5] Receive response frame ───────────────────────────────────────────
+    auto frame_recv = nb_recv_frame(fd, ioTimeoutMs_);
     if (!frame_recv)
     {
         std::println(stderr,
@@ -776,7 +720,7 @@ void SraUdpClient::processListRequest()
                      frame_recv.error().message());
         return;
     }
-    logger::log_hex("SraUdpClient", false, sock.fd(), *frame_recv);
+    logger::log_hex("SraUdpClient", false, fd, *frame_recv);
 
     // ── [8] Decode udproto packet ────────────────────────────────────────────
     auto reply_pkt = udproto::decode_packet(*frame_recv);
