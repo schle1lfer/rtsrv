@@ -3189,19 +3189,12 @@ int main(int argc, char* argv[])
                      "a loopback (IPv4 or IPv6)");
         std::println("  grpc-proc-demo          Run async GrpcProc demo with "
                      "periodic GetLoopback requests");
-        std::println("  add-del-list  [socket] [options]");
-        std::println("                gRPC mode (default): RequestLoopback → "
-                     "GetLoopbacks → ADD → DEL → LIST");
-        std::println("                Direct mode (--iface given): skip gRPC, "
-                     "use CLI params → ADD → DEL → LIST");
-        std::println("    --vrf <name>       VRF name (default: \"\")");
-        std::println("    --iface <name>     Interface name (enables direct mode)");
-        std::println("    --nexthop <ip>     Next-hop gateway IP (required in "
-                     "direct mode)");
-        std::println("    --nexthop-id <id>  Next-hop identifier (default: 0)");
-        std::println("    --prefix <cidr>    Prefix to add/delete, e.g. "
-                     "192.168.1.0/24 (repeatable)");
-        std::println("                (default socket: /tmp/ud_server.sock)");
+        std::println("  add-del-list  [socket]  RequestLoopback → GetLoopbacks"
+                     " → ADD → DEL → LIST");
+        std::println("                          Interface, nexthop and prefix"
+                     " data come from SRMD (GetLoopbacks).");
+        std::println("                          (default socket:"
+                     " /tmp/ud_server.sock)");
         std::println(
             "  run [socket]            Full SRA daemon mode (continuous):");
         std::println("                            1. RequestLoopback → SOT "
@@ -4151,218 +4144,108 @@ int main(int argc, char* argv[])
 
     if (command == "add-del-list")
     {
-        // ── Parse sub-arguments ──────────────────────────────────────────────
-        // Positional (first non-flag arg) = socket path.
-        // Flags: --vrf, --iface, --nexthop, --nexthop-id, --prefix (repeatable).
-        std::string socketPath = "/tmp/ud_server.sock";
-        std::string vrfsName;
-        std::string ifaceName;
-        std::string nexthopIp;
-        std::uint32_t nexthopId = 0;
-        std::vector<std::string> prefixStrs;
+        const std::string socketPath =
+            args.empty() ? "/tmp/ud_server.sock" : args[0];
 
-        for (std::size_t i = 0; i < args.size(); ++i)
-        {
-            if (args[i] == "--vrf" && i + 1 < args.size())
-                vrfsName = args[++i];
-            else if (args[i] == "--iface" && i + 1 < args.size())
-                ifaceName = args[++i];
-            else if (args[i] == "--nexthop" && i + 1 < args.size())
-                nexthopIp = args[++i];
-            else if (args[i] == "--nexthop-id" && i + 1 < args.size())
-                nexthopId =
-                    static_cast<std::uint32_t>(std::stoul(args[++i]));
-            else if (args[i] == "--prefix" && i + 1 < args.size())
-                prefixStrs.push_back(args[++i]);
-            else if (!args[i].starts_with("--"))
-                socketPath = args[i];
-        }
-
-        const bool directMode = !ifaceName.empty();
-
-        std::println("[add-del-list] socket={} mode={} — starting",
-                     socketPath,
-                     directMode ? "direct" : "grpc");
+        std::println("[add-del-list] socket={} — starting", socketPath);
 
         sra::SraUdpClient vrfClient(socketPath);
         vrfClient.start();
 
+        // ── Step 1: RequestLoopback ──────────────────────────────────────────
+        std::println("[add-del-list] requesting loopback from srmd…");
+        auto lbResult = client.requestLoopback();
+        if (lbResult)
+        {
+            std::println("[add-del-list] loopback from srmd: '{}'", *lbResult);
+            activeLoopback = *lbResult;
+        }
+        else
+        {
+            std::println("[add-del-list] loopback from srmd: {} "
+                         "(using config: '{}')",
+                         lbResult.error(),
+                         activeLoopback);
+        }
+
+        if (activeLoopback.empty())
+        {
+            std::println(std::cerr,
+                         "[add-del-list] no loopback available — "
+                         "cannot fetch prefixes");
+            vrfClient.stop();
+            return EXIT_FAILURE;
+        }
+
+        // ── Step 2: GetLoopbacks ─────────────────────────────────────────────
+        std::println("[add-del-list] GetLoopbacks('{}')…", activeLoopback);
+        auto glResult = client.getLoopbacks(activeLoopback);
+        if (!glResult)
+        {
+            std::println(std::cerr,
+                         "[add-del-list] GetLoopbacks failed: {}",
+                         glResult.error());
+            vrfClient.stop();
+            return EXIT_FAILURE;
+        }
+
+        std::println("[add-del-list] GetLoopbacks: {} — {} interface(s)",
+                     glResult->message(),
+                     glResult->interfaces_size());
+
+        // ── Step 3: Build SingleRouteRequest (nni interfaces only) ───────────
         cmdproto::SingleRouteRequest singleReq;
 
-        if (directMode)
+        for (const auto& li : glResult->interfaces())
         {
-            // ── Direct mode: build request from CLI args, skip gRPC ──────────
-            if (nexthopIp.empty())
-            {
-                std::println(std::cerr,
-                             "[add-del-list] --nexthop is required in direct "
-                             "mode");
-                vrfClient.stop();
-                return EXIT_FAILURE;
-            }
+            if (li.type() != "nni")
+                continue;
+            if (li.nexthop().empty())
+                continue;
 
             struct in_addr nhAddr
             {};
-            if (::inet_pton(AF_INET, nexthopIp.c_str(), &nhAddr) != 1)
-            {
-                std::println(std::cerr,
-                             "[add-del-list] invalid --nexthop address: '{}'",
-                             nexthopIp);
-                vrfClient.stop();
-                return EXIT_FAILURE;
-            }
+            if (::inet_pton(AF_INET, li.nexthop().c_str(), &nhAddr) != 1)
+                continue;
             const auto* nhBytes =
                 reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
-            singleReq.vrfs_name = vrfsName;
-
             cmdproto::Interface entry{};
+            const std::string& ifn = li.name();
             for (std::size_t k = 0;
-                 k < cmdproto::IFACE_NAME_SIZE && k < ifaceName.size();
+                 k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
                  ++k)
-                entry.iface_name[k] = ifaceName[k];
+                entry.iface_name[k] = ifn[k];
             entry.nexthop_addr_ipv4 = {
                 nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-            entry.nexthop_id_ipv4 = nexthopId;
+            entry.nexthop_id_ipv4 = 0;
 
-            for (const auto& pfxStr : prefixStrs)
+            for (const auto& pfx : li.prefixes())
             {
+                const std::string& pfxStr = pfx.prefix();
                 const auto slash = pfxStr.rfind('/');
                 if (slash == std::string::npos)
-                {
-                    std::println(std::cerr,
-                                 "[add-del-list] invalid prefix '{}' "
-                                 "(expected A.B.C.D/N)",
-                                 pfxStr);
                     continue;
-                }
                 struct in_addr pfxAddr
                 {};
-                if (::inet_pton(
-                        AF_INET, pfxStr.substr(0, slash).c_str(), &pfxAddr) !=
-                    1)
-                {
-                    std::println(std::cerr,
-                                 "[add-del-list] invalid prefix address in "
-                                 "'{}'",
-                                 pfxStr);
+                if (::inet_pton(AF_INET,
+                                pfxStr.substr(0, slash).c_str(),
+                                &pfxAddr) != 1)
                     continue;
-                }
                 const auto* pb =
                     reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
                 const auto maskLen = static_cast<std::uint8_t>(
                     std::stoul(pfxStr.substr(slash + 1)));
-                entry.prefixes.push_back(
-                    cmdproto::PrefixIpv4{{pb[0], pb[1], pb[2], pb[3]},
-                                         maskLen});
+                entry.prefixes.push_back(cmdproto::PrefixIpv4{
+                    {pb[0], pb[1], pb[2], pb[3]}, maskLen});
             }
 
-            std::println("[add-del-list]   vrf='{}' iface='{}' nexthop='{}'"
-                         " nexthop-id={} prefixes={}",
-                         vrfsName,
-                         ifaceName,
-                         nexthopIp,
-                         nexthopId,
+            std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
+                         ifn,
+                         li.nexthop(),
                          entry.prefixes.size());
 
             singleReq.interfaces.push_back(std::move(entry));
-        }
-        else
-        {
-            // ── gRPC mode: RequestLoopback → GetLoopbacks ────────────────────
-            std::println("[add-del-list] requesting loopback from srmd…");
-            auto lbResult = client.requestLoopback();
-            if (lbResult)
-            {
-                std::println("[add-del-list] loopback from srmd: '{}'",
-                             *lbResult);
-                activeLoopback = *lbResult;
-            }
-            else
-            {
-                std::println(
-                    "[add-del-list] loopback from srmd: {} (using config:"
-                    " '{}')",
-                    lbResult.error(),
-                    activeLoopback);
-            }
-
-            if (activeLoopback.empty())
-            {
-                std::println(std::cerr,
-                             "[add-del-list] no loopback available — cannot "
-                             "fetch prefixes");
-                vrfClient.stop();
-                return EXIT_FAILURE;
-            }
-
-            std::println("[add-del-list] GetLoopbacks('{}')…", activeLoopback);
-            auto glResult = client.getLoopbacks(activeLoopback);
-            if (!glResult)
-            {
-                std::println(std::cerr,
-                             "[add-del-list] GetLoopbacks failed: {}",
-                             glResult.error());
-                vrfClient.stop();
-                return EXIT_FAILURE;
-            }
-
-            std::println("[add-del-list] GetLoopbacks: {} — {} interface(s)",
-                         glResult->message(),
-                         glResult->interfaces_size());
-
-            for (const auto& li : glResult->interfaces())
-            {
-                if (li.type() != "nni")
-                    continue;
-                if (li.nexthop().empty())
-                    continue;
-
-                struct in_addr nhAddr
-                {};
-                if (::inet_pton(AF_INET, li.nexthop().c_str(), &nhAddr) != 1)
-                    continue;
-                const auto* nhBytes =
-                    reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
-
-                cmdproto::Interface entry{};
-                const std::string& ifn = li.name();
-                for (std::size_t k = 0;
-                     k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
-                     ++k)
-                    entry.iface_name[k] = ifn[k];
-                entry.nexthop_addr_ipv4 = {
-                    nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-                entry.nexthop_id_ipv4 = 0;
-
-                for (const auto& pfx : li.prefixes())
-                {
-                    const std::string& pfxStr = pfx.prefix();
-                    const auto slash = pfxStr.rfind('/');
-                    if (slash == std::string::npos)
-                        continue;
-                    struct in_addr pfxAddr
-                    {};
-                    if (::inet_pton(AF_INET,
-                                    pfxStr.substr(0, slash).c_str(),
-                                    &pfxAddr) != 1)
-                        continue;
-                    const auto* pb =
-                        reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
-                    const auto maskLen = static_cast<std::uint8_t>(
-                        std::stoul(pfxStr.substr(slash + 1)));
-                    entry.prefixes.push_back(cmdproto::PrefixIpv4{
-                        {pb[0], pb[1], pb[2], pb[3]}, maskLen});
-                }
-
-                std::println(
-                    "[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
-                    ifn,
-                    li.nexthop(),
-                    entry.prefixes.size());
-
-                singleReq.interfaces.push_back(std::move(entry));
-            }
         }
 
         if (!singleReq.interfaces.empty())
