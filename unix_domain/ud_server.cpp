@@ -418,17 +418,31 @@ log_route_add(std::shared_ptr<netlink::RouteAddParams> p)
 {
     logger::log(logger::INFO,
                 "cmdproto: ADD CB",
-                std::format("log_route_add: dst={}/{} gw={} dev='{}'"
-                            " metric={} scope={} proto={} table={}",
-                            netlink::format_ipv4(p->dst),
-                            static_cast<unsigned>(p->prefix_len),
-                            p->has_gateway ? netlink::format_ipv4(p->gateway)
-                                           : "(none)",
-                            p->if_name,
-                            p->metric,
-                            static_cast<unsigned>(p->scope),
-                            static_cast<unsigned>(p->protocol),
-                            static_cast<unsigned>(p->table)));
+                std::format("log_route_add: vrf='{}' interfaces={}",
+                            p->vrfs_name,
+                            p->interfaces.size()));
+    for (std::size_t i = 0; i < p->interfaces.size(); ++i)
+    {
+        const auto& iface = p->interfaces[i];
+        logger::log(logger::INFO,
+                    "cmdproto: ADD CB",
+                    std::format("  iface[{}]='{}' nexthop={} id={} prefixes={}",
+                                i,
+                                iface.iface_name,
+                                netlink::format_ipv4(iface.nexthop_addr),
+                                iface.nexthop_id,
+                                iface.prefixes.size()));
+        for (std::size_t j = 0; j < iface.prefixes.size(); ++j)
+        {
+            const auto& pfx = iface.prefixes[j];
+            logger::log(logger::INFO,
+                        "cmdproto: ADD CB",
+                        std::format("    prefix[{:02}]  {}/{}",
+                                    j,
+                                    netlink::format_ipv4(pfx.addr),
+                                    static_cast<unsigned>(pfx.mask_len)));
+        }
+    }
     // p goes out of scope — RouteAddParams is freed here.
     return {};
 }
@@ -439,7 +453,8 @@ log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
     logger::log(
         logger::INFO,
         "cmdproto: DEL CB",
-        std::format("log_route_del: dst={}/{} gw={} dev='{}' table={}",
+        std::format("log_route_del: vrf='{}' dst={}/{} gw={} dev='{}' table={}",
+                    p->vrfs_name,
                     netlink::format_ipv4(p->dst),
                     static_cast<unsigned>(p->prefix_len),
                     p->has_gateway ? netlink::format_ipv4(p->gateway) : "(any)",
@@ -450,13 +465,15 @@ log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
 }
 
 static std::expected<std::vector<netlink::RouteEntry>, std::error_code>
-log_route_list(std::shared_ptr<netlink::RouteTable> t)
+log_route_list(std::shared_ptr<netlink::RouteListParams> p)
 {
     logger::log(
         logger::INFO,
         "cmdproto: LIST CB",
-        std::format("log_route_list: table={}", static_cast<unsigned>(*t)));
-    // t goes out of scope — RouteTable is freed here.
+        std::format("log_route_list: vrf='{}' table={}",
+                    p->vrfs_name,
+                    static_cast<unsigned>(p->table)));
+    // p goes out of scope — RouteListParams is freed here.
     return std::vector<netlink::RouteEntry>{};
 }
 

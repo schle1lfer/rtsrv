@@ -268,21 +268,24 @@ struct Interface
  * @brief Decoded ROUTE_ADD binary request payload (type == SINGLE_ROUTE).
  *
  * ## Wire layout (big-endian, no padding)
- * | Field             | Size    | Notes                                  |
+ * | Field             | Size    | Notes                                   |
  * |-------------------|---------|-----------------------------------------|
  * | type              | 1 byte  | RouteAddPayloadType::SINGLE_ROUTE       |
+ * | vrfs_name_len     | 1 byte  | Length of vrfs_name in bytes            |
+ * | vrfs_name         | N bytes | VRF name (UTF-8, no NUL)                |
  * | iface_count       | 2 bytes | Number of interface entries (big-endian)|
- * | interface[]       | N × var | N interface entries                     |
+ * | interface[]       | M × var | M interface entries                     |
  *
  * Each interface entry:
  * | iface_name        | 32      | NUL-terminated interface name           |
  * | nexthop_addr_ipv4 | 4       | Next-hop gateway (network order)        |
  * | nexthop_id_ipv4   | 4       | Next-hop identifier (big-endian)        |
  * | prefix_count      | 2       | Number of prefix entries (big-endian)   |
- * | prefix_ipv4[]     | M × 5   | M prefix entries (addr+mask each)       |
+ * | prefix_ipv4[]     | K × 5   | K prefix entries (addr+mask each)       |
  */
 struct SingleRouteRequest
 {
+    std::string vrfs_name;             ///< VRF name (empty = default VRF)
     std::vector<Interface> interfaces; ///< Interface list (may be empty)
 };
 
@@ -420,8 +423,8 @@ decode_route_list_response(std::span<const std::uint8_t> raw);
  *       { return netlink::add_route(*p); };
  *   cbs.route_del  = [](std::shared_ptr<netlink::RouteDelParams> p)
  *       { return netlink::delete_route(*p); };
- *   cbs.route_list = [](std::shared_ptr<netlink::RouteTable> t)
- *       { return netlink::list_routes(*t); };
+ *   cbs.route_list = [](std::shared_ptr<netlink::RouteListParams> p)
+ *       { return netlink::list_routes(p->table); };
  *   cmdproto::init_callbacks(std::move(cbs));
  * @endcode
  */
@@ -438,7 +441,7 @@ struct HandlerCallbacks
     /// Signature for route-list callbacks.
     using ListRoutesFn = std::function<
         std::expected<std::vector<netlink::RouteEntry>, std::error_code>(
-            std::shared_ptr<netlink::RouteTable>)>;
+            std::shared_ptr<netlink::RouteListParams>)>;
 
     AddRouteFn route_add;    ///< Called by handle_route_add()
     DelRouteFn route_del;    ///< Called by handle_route_del()
@@ -505,7 +508,7 @@ handle_route_list();
 /**
  * @brief Serialises a SingleRouteRequest to its binary wire bytes.
  *
- * Produces: type(1=SINGLE_ROUTE) + iface_count(2) + N × interface entries.
+ * Produces: type(1) + vrfs_name_len(1) + vrfs_name(N) + iface_count(2) + M × interface entries.
  *
  * @param req  Request to encode.
  * @return Encoded bytes on success, or an error code.

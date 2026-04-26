@@ -85,6 +85,7 @@
 // Test fixture
 // ---------------------------------------------------------------------------
 
+static constexpr std::string_view kVrfsName = "default";
 static constexpr std::string_view kIfaceName = "eth0";
 static constexpr std::string_view kNexthopIp = "10.0.0.1";
 static constexpr std::uint32_t kNexthopId = 42;
@@ -235,6 +236,7 @@ static std::expected<std::vector<std::uint8_t>, std::error_code> phase_encode()
     }
 
     cmdproto::SingleRouteRequest req;
+    req.vrfs_name = std::string(kVrfsName);
     req.interfaces.push_back(std::move(iface));
 
     // cmdproto: ROUTE_ADD with INTERFACE_ROUTE binary payload.
@@ -358,6 +360,7 @@ int main(int argc, char* argv[])
     // ── Print test fixture ──────────────────────────────────────────────────
     std::println("=== route_add_single_iface test ===");
     std::println("socket    : {}", sock_path);
+    std::println("vrf       : {}", kVrfsName);
     std::println("iface     : {}", kIfaceName);
     std::println("nexthop   : {}", kNexthopIp);
     std::println("nexthop_id: {}", kNexthopId);

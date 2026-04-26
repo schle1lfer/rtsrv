@@ -209,6 +209,29 @@ struct RouteEntry
     RouteType type{RouteType::Unicast};            ///< Route handling type
 };
 
+/// @brief One IPv4 prefix carried inside a RouteInterface.
+struct RoutePrefix
+{
+    Ipv4Addr addr{};         ///< Prefix network address (network byte order)
+    std::uint8_t mask_len{}; ///< Prefix length in bits (0–32)
+};
+
+/// @brief One interface entry bundled inside a bulk RouteAddParams.
+struct RouteInterface
+{
+    std::string iface_name;            ///< Egress interface name
+    Ipv4Addr nexthop_addr{};           ///< Next-hop gateway address
+    std::uint32_t nexthop_id{};        ///< Next-hop identifier
+    std::vector<RoutePrefix> prefixes; ///< Prefix list for this interface
+};
+
+/// @brief Parameters for a route-list operation, including optional VRF context.
+struct RouteListParams
+{
+    RouteTable table{RouteTable::Main}; ///< Routing table to query
+    std::string vrfs_name;              ///< VRF name (empty = default VRF)
+};
+
 /**
  * @brief Parameters for adding or replacing an IPv4 route.
  *
@@ -229,6 +252,8 @@ struct RouteAddParams
         RouteProtocol::Static};             ///< Route originator to record
     RouteScope scope{RouteScope::Universe}; ///< Route scope
     RouteType type{RouteType::Unicast};     ///< Route type
+    std::string vrfs_name;                  ///< VRF name (empty = default VRF)
+    std::vector<RouteInterface> interfaces; ///< Interface list for bulk-add
 };
 
 /**
@@ -246,6 +271,7 @@ struct RouteDelParams
     bool has_gateway{};        ///< True when @c gateway is a match criterion
     std::string if_name;       ///< Egress interface to match (empty = any)
     RouteTable table{RouteTable::Main}; ///< Routing table to modify
+    std::string vrfs_name;     ///< VRF name (empty = default VRF)
 };
 
 // ---------------------------------------------------------------------------
