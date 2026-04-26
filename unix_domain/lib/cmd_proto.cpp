@@ -526,15 +526,30 @@ Command make_route_del(const RouteDelParams& p)
         }
     }
 
+    // VRF_NAME: omit when empty (default VRF).
+    if (!p.vrfs_name.empty())
+    {
+        Field f;
+        f.field_id = FieldId::VRF_NAME;
+        f.data.assign(p.vrfs_name.begin(), p.vrfs_name.end());
+        cmd.fields.push_back(std::move(f));
+    }
+
     return cmd;
 }
 
 /// @brief @copybrief cmdproto::make_route_list
-Command make_route_list()
+Command make_route_list(const std::string& vrfs_name)
 {
     Command cmd;
     cmd.cmd_id = CmdId::ROUTE_LIST;
-    // No fields: server returns the full routing table.
+    if (!vrfs_name.empty())
+    {
+        Field f;
+        f.field_id = FieldId::VRF_NAME;
+        f.data.assign(vrfs_name.begin(), vrfs_name.end());
+        cmd.fields.push_back(std::move(f));
+    }
     return cmd;
 }
 
@@ -625,6 +640,11 @@ parse_route_del(const Command& cmd)
         std::copy(gw->data.begin(), gw->data.end(), p.gateway.begin());
     }
     // When absent, p.gateway remains all-zero ("match any").
+
+    // VRF_NAME — optional, variable-length UTF-8.
+    const Field* vrf = find_field(cmd, FieldId::VRF_NAME);
+    if (vrf)
+        p.vrfs_name.assign(vrf->data.begin(), vrf->data.end());
 
     return p;
 }
@@ -781,7 +801,7 @@ std::expected<void, std::error_code> handle_route_del(const RouteDelParams& p)
     np.dst = p.dst_addr;
     np.prefix_len = p.prefix_len;
     np.table = netlink::RouteTable::Main;
-    np.vrfs_name = {};
+    np.vrfs_name = p.vrfs_name;
 
     if (p.gateway != zero)
     {
@@ -803,7 +823,8 @@ std::expected<void, std::error_code> handle_route_del(const RouteDelParams& p)
 }
 
 /// @brief @copybrief cmdproto::handle_route_list
-std::expected<std::vector<RouteEntry>, std::error_code> handle_route_list()
+std::expected<std::vector<RouteEntry>, std::error_code>
+handle_route_list(const std::string& vrfs_name)
 {
     std::expected<std::vector<netlink::RouteEntry>, std::error_code> nl_routes;
 
@@ -812,7 +833,7 @@ std::expected<std::vector<RouteEntry>, std::error_code> handle_route_list()
         // hw ASIC
         auto params = std::make_shared<netlink::RouteListParams>();
         params->table = netlink::RouteTable::Main;
-        params->vrfs_name = {};
+        params->vrfs_name = vrfs_name;
         nl_routes = g_callbacks.route_list(std::move(params));
     }
     else

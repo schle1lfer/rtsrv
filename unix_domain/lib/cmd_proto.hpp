@@ -86,6 +86,7 @@ enum class FieldId : std::uint8_t
         0x03, ///< Next-hop gateway IPv4 address (4 bytes, network byte order)
     IF_NAME = 0x04, ///< Egress interface name (variable-length UTF-8 string)
     METRIC = 0x05,  ///< Route metric (2 bytes, uint16_t big-endian)
+    VRF_NAME = 0x06, ///< VRF name (variable-length UTF-8 string)
 };
 
 // ---------------------------------------------------------------------------
@@ -179,6 +180,7 @@ struct RouteDelParams
     Ipv4Addr dst_addr{};       ///< Destination network address
     std::uint8_t prefix_len{}; ///< CIDR prefix length (0–32)
     Ipv4Addr gateway{};        ///< Gateway to match (all-zero = any)
+    std::string vrfs_name;     ///< VRF name (empty = default VRF)
 };
 
 // ---------------------------------------------------------------------------
@@ -361,8 +363,8 @@ decode_commands(std::span<const std::uint8_t> raw);
 /// @brief Builds a ROUTE_DEL Command from the given parameters.
 [[nodiscard]] Command make_route_del(const RouteDelParams& p);
 
-/// @brief Builds a ROUTE_LIST Command (no fields).
-[[nodiscard]] Command make_route_list();
+/// @brief Builds a ROUTE_LIST Command with an optional VRF name.
+[[nodiscard]] Command make_route_list(const std::string& vrfs_name = {});
 
 // ---------------------------------------------------------------------------
 // Typed-parameter extractors
@@ -499,7 +501,7 @@ handle_route_del(const RouteDelParams& p);
  * @return Populated route list on success, or an error code.
  */
 [[nodiscard]] std::expected<std::vector<RouteEntry>, std::error_code>
-handle_route_list();
+handle_route_list(const std::string& vrfs_name = {});
 
 // ---------------------------------------------------------------------------
 // Binary ROUTE_ADD payload — encode / decode / handle

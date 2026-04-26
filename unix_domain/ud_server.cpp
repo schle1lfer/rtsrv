@@ -227,9 +227,17 @@ dispatch_route_del(const cmdproto::Command& cmd)
 static std::expected<std::vector<std::uint8_t>, std::error_code>
 dispatch_route_list(const cmdproto::Command& cmd)
 {
-    (void)cmd;
+    std::string vrfs_name;
+    for (const auto& f : cmd.fields)
+    {
+        if (f.field_id == cmdproto::FieldId::VRF_NAME)
+        {
+            vrfs_name.assign(f.data.begin(), f.data.end());
+            break;
+        }
+    }
 
-    auto routes = cmdproto::handle_route_list();
+    auto routes = cmdproto::handle_route_list(vrfs_name);
     if (!routes)
         return std::unexpected(routes.error());
 

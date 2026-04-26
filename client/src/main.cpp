@@ -4000,6 +4000,9 @@ int main(int argc, char* argv[])
             if (route.nexthop().empty())
                 continue;
 
+            if (singleReq.vrfs_name.empty())
+                singleReq.vrfs_name = route.vrf_name();
+
             // Check the adjacency table; probe the nexthop with an ICMP echo
             // request if it has not yet been resolved to a MAC address.
             if (!neighborHasIp(startupNeighCtx, route.nexthop()))
@@ -4193,8 +4196,25 @@ int main(int argc, char* argv[])
                      glResult->message(),
                      glResult->interfaces_size());
 
+        // ── Step 2b: GetAllRoutes (to obtain VRF name) ───────────────────────
+        std::string vrfsName;
+        auto arResult2 = client.getAllRoutes();
+        if (arResult2)
+        {
+            for (const auto& route : arResult2->routes())
+            {
+                if (route.interface_type() == "nni" && !route.vrf_name().empty())
+                {
+                    vrfsName = route.vrf_name();
+                    break;
+                }
+            }
+        }
+        std::println("[add-del-list] VRF name: '{}'", vrfsName);
+
         // ── Step 3: Build SingleRouteRequest (nni interfaces only) ───────────
         cmdproto::SingleRouteRequest singleReq;
+        singleReq.vrfs_name = vrfsName;
 
         for (const auto& li : glResult->interfaces())
         {
@@ -4267,13 +4287,14 @@ int main(int argc, char* argv[])
                     delParams.dst_addr = pfx.addr;
                     delParams.prefix_len = pfx.mask_len;
                     delParams.gateway = iface.nexthop_addr_ipv4;
+                    delParams.vrfs_name = vrfsName;
                     vrfClient.submitDelete(delParams);
                 }
             }
 
             // ── ROUTE_LIST ───────────────────────────────────────────────────
             std::println("[add-del-list] [LIST] requesting route table…");
-            vrfClient.submitList();
+            vrfClient.submitList(vrfsName);
         }
         else
         {

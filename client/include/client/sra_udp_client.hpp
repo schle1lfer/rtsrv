@@ -31,9 +31,11 @@
 namespace sra
 {
 
-/// @brief Tag type for a ROUTE_LIST request (carries no parameters).
+/// @brief Tag type for a ROUTE_LIST request.
 struct RouteListRequest
-{};
+{
+    std::string vrfs_name; ///< VRF name (empty = default VRF)
+};
 
 /**
  * @brief Runs route exchanges (add / delete / list) in a background thread.
@@ -104,14 +106,16 @@ public:
      * @brief Enqueues a ROUTE_LIST request for async delivery.
      *
      * Thread-safe; may be called from any thread.  Returns immediately.
+     *
+     * @param vrfs_name  VRF name to query (empty = default VRF).
      */
-    void submitList();
+    void submitList(std::string vrfs_name = {});
 
 private:
     void threadFunc();
     void processAddRequest(int fd, const cmdproto::SingleRouteRequest& req);
     void processDeleteRequest(int fd, const cmdproto::RouteDelParams& params);
-    void processListRequest(int fd);
+    void processListRequest(int fd, const RouteListRequest& req);
 
     std::string socketPath_;
     int ioTimeoutMs_;

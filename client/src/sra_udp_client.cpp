@@ -236,11 +236,11 @@ void SraUdpClient::submitDelete(cmdproto::RouteDelParams params)
     queueCv_.notify_one();
 }
 
-void SraUdpClient::submitList()
+void SraUdpClient::submitList(std::string vrfs_name)
 {
     {
         std::lock_guard lock(queueMutex_);
-        queue_.push(Request{RouteListRequest{}});
+        queue_.push(Request{RouteListRequest{std::move(vrfs_name)}});
     }
     queueCv_.notify_one();
 }
@@ -292,7 +292,7 @@ void SraUdpClient::threadFunc()
                 else if constexpr (std::is_same_v<T, cmdproto::RouteDelParams>)
                     processDeleteRequest(conn.fd(), r);
                 else if constexpr (std::is_same_v<T, RouteListRequest>)
-                    processListRequest(conn.fd());
+                    processListRequest(conn.fd(), r);
             },
             req);
     }
@@ -640,16 +640,18 @@ void SraUdpClient::processDeleteRequest(int fd, const cmdproto::RouteDelParams& 
 // processListRequest — ROUTE_LIST
 // ---------------------------------------------------------------------------
 
-void SraUdpClient::processListRequest(int fd)
+void SraUdpClient::processListRequest(int fd, const RouteListRequest& req)
 {
     static std::uint16_t s_msg_id =
         0xC000; // separate counter for list commands
     const std::uint16_t msg_id = s_msg_id++;
 
-    std::println("[SraUdpClient] ROUTE_LIST msg_id={}", msg_id);
+    std::println("[SraUdpClient] ROUTE_LIST msg_id={} vrf='{}'",
+                 msg_id,
+                 req.vrfs_name);
 
     // ── [1] Encode cmdproto ROUTE_LIST command ───────────────────────────────
-    auto cmd_bytes = cmdproto::encode_command(cmdproto::make_route_list());
+    auto cmd_bytes = cmdproto::encode_command(cmdproto::make_route_list(req.vrfs_name));
     if (!cmd_bytes)
     {
         std::println(stderr,
