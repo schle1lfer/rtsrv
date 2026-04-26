@@ -4,7 +4,7 @@
  *
  * Compiled into both lib/net.so (shared) and lib/net.ar (static).
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 

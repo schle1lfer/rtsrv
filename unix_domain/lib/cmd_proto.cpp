@@ -4,7 +4,7 @@
  *
  * Compiled into both lib/cmd_proto.so (shared) and lib/cmd_proto.ar (static).
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 

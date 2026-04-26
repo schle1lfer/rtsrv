@@ -13,7 +13,7 @@
  * | msg_id   | uint16_t  | 2    | Request/response correlation  |
  * | payload  | uint8_t[] | var  | Type-specific data            |
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 

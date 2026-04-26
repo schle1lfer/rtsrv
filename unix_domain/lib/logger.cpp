@@ -6,7 +6,7 @@
  * interleaved messages from the server's receiver and processor threads
  * remain readable.
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 

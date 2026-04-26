@@ -35,7 +35,7 @@
  * }
  * @endcode
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 

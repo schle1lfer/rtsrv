@@ -26,7 +26,7 @@
  *  - 0x7E in payload  → 0x7D 0x5E
  *  - 0x7D in payload  → 0x7D 0x5D
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 

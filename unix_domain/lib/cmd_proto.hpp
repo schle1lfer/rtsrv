@@ -40,7 +40,7 @@
  * | IF_NAME    | 0x04  | var     | Egress interface name (UTF-8)       |
  * | METRIC     | 0x05  | 2 bytes | Route metric (uint16_t big-endian)  |
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 

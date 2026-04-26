@@ -4,7 +4,7 @@
  *
  * Compiled into both lib/ud_proto.so (shared) and lib/ud_proto.ar (static).
  *
- * @author  Generated
+ * 
  * @date    2026
  */
 
