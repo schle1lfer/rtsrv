@@ -83,6 +83,16 @@ VrfTable::findByNexthop(const std::string& gateway) const
     return result;
 }
 
+std::vector<std::string> VrfTable::nexthops() const
+{
+    std::shared_lock lock(mutex_);
+    std::vector<std::string> result;
+    result.reserve(byNexthop_.size());
+    for (const auto& [gw, _] : byNexthop_)
+        result.push_back(gw);
+    return result;
+}
+
 std::vector<srmd::v1::VrfRoute> VrfTable::all() const
 {
     std::shared_lock lock(mutex_);

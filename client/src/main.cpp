@@ -3990,34 +3990,24 @@ int main(int argc, char* argv[])
                      "nexthop event handler armed",
                      vrfTable.size());
 
-        cmdproto::SingleRouteRequest singleReq;
         int nniCount = 0;
 
-        for (const auto& route : arResult->routes())
+        for (const auto& gateway : vrfTable.nexthops())
         {
-            if (route.interface_type() != "nni")
-                continue;
-            if (route.nexthop().empty())
-                continue;
-
-            if (singleReq.vrfs_name.empty())
-                singleReq.vrfs_name = route.vrf_name();
-
-            // Check the adjacency table; probe the nexthop with an ICMP echo
-            // request if it has not yet been resolved to a MAC address.
-            if (!neighborHasIp(startupNeighCtx, route.nexthop()))
+            // Check adjacency; probe the nexthop if not yet resolved to a MAC.
+            if (!neighborHasIp(startupNeighCtx, gateway))
             {
                 std::println("[run] nexthop '{}' absent from adjacency table — "
                              "sending ICMP echo request",
-                             route.nexthop());
-                sendIcmpEchoRequest(route.nexthop());
+                             gateway);
+                sendIcmpEchoRequest(gateway);
             }
 
             // Look up nexthop_id from the kernel nexthop table by gateway IP.
             uint32_t nexthopId = 0;
             for (const auto& [id, nh] : startupNhCtx.nexthops)
             {
-                if (nh.gateway == route.nexthop())
+                if (nh.gateway == gateway)
                 {
                     nexthopId = id;
                     break;
@@ -4027,72 +4017,90 @@ int main(int argc, char* argv[])
             // Parse nexthop address into binary form.
             struct in_addr nhAddr
             {};
-            if (::inet_pton(AF_INET, route.nexthop().c_str(), &nhAddr) != 1)
+            if (::inet_pton(AF_INET, gateway.c_str(), &nhAddr) != 1)
             {
                 std::println(std::cerr,
                              "[run] invalid nexthop address '{}' — skipping",
-                             route.nexthop());
+                             gateway);
                 continue;
             }
             const auto* nhBytes =
                 reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
-            cmdproto::Interface iface{};
-            // Interface name (null-padded fixed array).
-            const std::string& ifn = route.interface_name();
-            for (std::size_t k = 0;
-                 k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
-                 ++k)
+            // Build a SingleRouteRequest for this nexthop's nni routes only.
+            cmdproto::SingleRouteRequest req;
+            const auto routes = vrfTable.findByNexthop(gateway);
+            for (const auto& route : routes)
             {
-                iface.iface_name[k] = ifn[k];
-            }
-            iface.nexthop_addr_ipv4 = {
-                nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-            iface.nexthop_id_ipv4 = nexthopId;
+                if (route.interface_type() != "nni")
+                    continue;
+                if (route.nexthop().empty())
+                    continue;
 
-            // Convert each prefix string "A.B.C.D/N" to PrefixIpv4.
-            for (const auto& pfx : route.prefixes())
+                if (req.vrfs_name.empty())
+                    req.vrfs_name = route.vrf_name();
+
+                cmdproto::Interface iface{};
+                const std::string& ifn = route.interface_name();
+                for (std::size_t k = 0;
+                     k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+                     ++k)
+                {
+                    iface.iface_name[k] = ifn[k];
+                }
+                iface.nexthop_addr_ipv4 = {
+                    nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
+                iface.nexthop_id_ipv4 = nexthopId;
+
+                for (const auto& pfx : route.prefixes())
+                {
+                    const std::string& pfxStr = pfx.prefix();
+                    const auto slash = pfxStr.rfind('/');
+                    if (slash == std::string::npos)
+                        continue;
+                    const std::string addrStr = pfxStr.substr(0, slash);
+                    const auto maskLen = static_cast<std::uint8_t>(
+                        std::stoul(pfxStr.substr(slash + 1)));
+
+                    struct in_addr pfxAddr
+                    {};
+                    if (::inet_pton(AF_INET, addrStr.c_str(), &pfxAddr) != 1)
+                        continue;
+                    const auto* pfxBytes =
+                        reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
+
+                    iface.prefixes.push_back(cmdproto::PrefixIpv4{
+                        {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]},
+                        maskLen});
+                }
+
+                std::println("[run] nni interface: iface='{}' nexthop='{}' "
+                             "nexthop_id={} prefixes={}",
+                             route.interface_name(),
+                             gateway,
+                             nexthopId,
+                             iface.prefixes.size());
+
+                req.interfaces.push_back(std::move(iface));
+                ++nniCount;
+            }
+
+            if (req.interfaces.empty())
             {
-                const std::string& pfxStr = pfx.prefix();
-                const auto slash = pfxStr.rfind('/');
-                if (slash == std::string::npos)
-                    continue;
-                const std::string addrStr = pfxStr.substr(0, slash);
-                const auto maskLen = static_cast<std::uint8_t>(
-                    std::stoul(pfxStr.substr(slash + 1)));
-
-                struct in_addr pfxAddr
-                {};
-                if (::inet_pton(AF_INET, addrStr.c_str(), &pfxAddr) != 1)
-                    continue;
-                const auto* pfxBytes =
-                    reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
-
-                iface.prefixes.push_back(cmdproto::PrefixIpv4{
-                    {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]},
-                    maskLen});
+                std::println(
+                    "[run] nexthop '{}' has no nni interfaces — skip", gateway);
+                continue;
             }
 
-            std::println("[run] nni interface: iface='{}' nexthop='{}' "
-                         "nexthop_id={} prefixes={}",
-                         route.interface_name(),
-                         route.nexthop(),
-                         nexthopId,
-                         iface.prefixes.size());
-
-            singleReq.interfaces.push_back(std::move(iface));
-            ++nniCount;
-        }
-
-        if (nniCount > 0)
-        {
             std::println(
                 "[run] Submitting SingleRouteRequest ({} nni interface(s)) "
-                "to Unix socket…",
-                nniCount);
-            vrfClient.submitAdd(std::move(singleReq));
+                "for nexthop '{}' to Unix socket…",
+                req.interfaces.size(),
+                gateway);
+            vrfClient.submitAdd(std::move(req));
         }
-        else
+
+        if (nniCount == 0)
         {
             std::println("[run] No nni interfaces found in GetAllRoutes "
                          "response — no route-add request sent");

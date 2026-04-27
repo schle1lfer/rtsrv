@@ -104,6 +104,11 @@ public:
     findByNexthop(const std::string& gateway) const;
 
     /**
+     * @brief Returns all unique nexthop gateway addresses present in the table.
+     */
+    [[nodiscard]] std::vector<std::string> nexthops() const;
+
+    /**
      * @brief Returns a snapshot of every stored VrfRoute entry.
      */
     [[nodiscard]] std::vector<srmd::v1::VrfRoute> all() const;
