@@ -289,10 +289,10 @@ void SraUdpClient::threadFunc()
                 using T = std::decay_t<decltype(r)>;
                 if constexpr (std::is_same_v<T, cmdproto::SingleRouteRequest>)
                     processAddRequest(conn.fd(), r);
-                else if constexpr (std::is_same_v<T, cmdproto::RouteDelParams>)
-                    processDeleteRequest(conn.fd(), r);
-                else if constexpr (std::is_same_v<T, RouteListRequest>)
-                    processListRequest(conn.fd(), r);
+                //else if constexpr (std::is_same_v<T, cmdproto::RouteDelParams>)
+                //    processDeleteRequest(conn.fd(), r);
+                //else if constexpr (std::is_same_v<T, RouteListRequest>)
+                //    processListRequest(conn.fd(), r);
             },
             req);
     }

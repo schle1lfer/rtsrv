@@ -60,7 +60,7 @@ inline constexpr std::size_t MIN_PAYLOAD = HEADER_SIZE + CRC_SIZE;
 
 /// @brief Maximum application-data bytes per packet for batch transfers (4 KB).
 /// Canonical constexpr constant — value is asserted in ud_proto.cpp.
-inline constexpr std::size_t MAX_DATA_PER_PACKET = 4096;
+inline constexpr std::size_t MAX_DATA_PER_PACKET = 100*1024; //4096
 
 // ---------------------------------------------------------------------------
 // Error codes

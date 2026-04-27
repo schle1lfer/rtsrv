@@ -238,6 +238,19 @@ install(
     DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/srmd"
 )
 
+# srmd::route_sot_v3_hwasic-1k.json
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/route_sot_v3_hwasic-1k.json"
+    DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/srmd"
+)
+
+# srmd::route_sot_v3_hwasic-15k.json
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/route_sot_v3_hwasic-15k.json"
+    DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/srmd"
+)
+
+
 # srmd::switch_config.json
 install(
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/config/switch_config.json"

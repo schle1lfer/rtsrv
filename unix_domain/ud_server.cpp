@@ -372,10 +372,10 @@ static void handle_connection(net::Socket conn)
                 result = dispatch_route_add(cmd);
                 break;
             case cmdproto::CmdId::ROUTE_DEL:
-                result = dispatch_route_del(cmd);
+                //result = dispatch_route_del(cmd);
                 break;
             case cmdproto::CmdId::ROUTE_LIST:
-                result = dispatch_route_list(cmd);
+                //result = dispatch_route_list(cmd);
                 break;
             default:
                 std::println("[ud_server] unsupported cmd_id=0x{:02x}",

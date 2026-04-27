@@ -19,8 +19,8 @@
 
 // Canonical constexpr-equivalent constant: maximum data bytes per batch packet
 // (4 KB).
-static_assert(udproto::MAX_DATA_PER_PACKET == 4096,
-              "MAX_DATA_PER_PACKET must be 4096 bytes (4 KB)");
+static_assert(udproto::MAX_DATA_PER_PACKET == 1024*100,
+              "MAX_DATA_PER_PACKET must be 4096 bytes (100 KB)");
 
 namespace udproto
 {
