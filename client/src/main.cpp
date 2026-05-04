@@ -1321,6 +1321,15 @@ static void demoSigHandler(int /*signo*/)
     g_demo_stop = 1;
 }
 
+/** @brief Stop flag for the 'add-del-list' daemon command (set by signal handler). */
+static volatile sig_atomic_t g_add_del_list_stop = 0;
+
+/** @brief SIGINT/SIGTERM handler for the 'add-del-list' command. */
+static void addDelListSigHandler(int /*signo*/)
+{
+    g_add_del_list_stop = 1;
+}
+
 /**
  * @brief Runs the netlink /32 OSPF route watcher with gRPC forwarding.
  *
@@ -4166,6 +4175,16 @@ int main(int argc, char* argv[])
 
         std::println("[add-del-list] socket={} — starting", socketPath);
 
+        // Install signal handler so CTRL+C triggers a clean shutdown instead
+        // of leaving the process stuck in StartupGuard::~StartupGuard().
+        {
+            struct sigaction sa{};
+            sa.sa_handler = addDelListSigHandler;
+            sigemptyset(&sa.sa_mask);
+            sigaction(SIGINT, &sa, nullptr);
+            sigaction(SIGTERM, &sa, nullptr);
+        }
+
         sra::SraUdpClient vrfClient(socketPath);
         vrfClient.start();
 
@@ -4315,6 +4334,15 @@ int main(int argc, char* argv[])
         {
             std::println("[add-del-list] no interfaces to submit");
         }
+
+        // Keep the process (and the SraUdpClient connection) alive until
+        // CTRL+C so routes remain programmed in hardware.
+        std::println("[add-del-list] running — press Ctrl-C to stop");
+        while (!g_add_del_list_stop)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::println("[add-del-list] shutdown signal received — stopping");
 
         vrfClient.stop();
         return EXIT_SUCCESS;
