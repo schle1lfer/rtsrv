@@ -177,6 +177,33 @@ std::uint16_t read_be16(std::span<const std::uint8_t> buf, std::size_t offset)
         static_cast<std::uint16_t>(buf[offset + 1]));
 }
 
+/**
+ * @brief Appends @p v as four big-endian bytes to @p out.
+ * @param out Destination byte vector.
+ * @param v   Value to serialise.
+ */
+void write_be32(std::vector<std::uint8_t>& out, std::uint32_t v)
+{
+    out.push_back(static_cast<std::uint8_t>(v >> 24));
+    out.push_back(static_cast<std::uint8_t>(v >> 16));
+    out.push_back(static_cast<std::uint8_t>(v >> 8));
+    out.push_back(static_cast<std::uint8_t>(v));
+}
+
+/**
+ * @brief Reads a big-endian uint32 from @p buf at @p offset.
+ * @param buf    Source byte span.
+ * @param offset Byte offset of the highest byte.
+ * @return Deserialized 32-bit value.
+ */
+std::uint32_t read_be32(std::span<const std::uint8_t> buf, std::size_t offset)
+{
+    return (static_cast<std::uint32_t>(buf[offset]) << 24) |
+           (static_cast<std::uint32_t>(buf[offset + 1]) << 16) |
+           (static_cast<std::uint32_t>(buf[offset + 2]) << 8) |
+           static_cast<std::uint32_t>(buf[offset + 3]);
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -353,17 +380,17 @@ decode_message(std::span<const std::uint8_t> raw)
 std::expected<std::vector<std::uint8_t>, std::error_code>
 encode_exchange(const ExchangeData& ed)
 {
-    // data_length covers: num_commands(2) + data_length(2) + commands(N) +
+    // data_length covers: num_commands(4) + data_length(4) + commands(N) +
     // crc(2)
-    const auto num_cmds = static_cast<std::uint16_t>(ed.commands.size());
+    const auto num_cmds = static_cast<std::uint32_t>(ed.commands.size());
     const auto data_length =
-        static_cast<std::uint16_t>(EXCHANGE_MIN_SIZE + ed.commands.size());
+        static_cast<std::uint32_t>(EXCHANGE_MIN_SIZE + ed.commands.size());
 
     std::vector<std::uint8_t> out;
     out.reserve(data_length);
 
-    write_be16(out, num_cmds);
-    write_be16(out, data_length);
+    write_be32(out, num_cmds);
+    write_be32(out, data_length);
     out.insert(out.end(), ed.commands.begin(), ed.commands.end());
 
     // CRC covers everything written so far.
@@ -387,8 +414,8 @@ decode_exchange(std::span<const std::uint8_t> raw)
         return std::unexpected(make_error_code(ExchangeError::InvalidData));
     }
 
-    // Field: data_length — must equal the total buffer size.
-    const auto data_length = read_be16(raw, 2);
+    // Field: data_length at offset 4 — must equal the total buffer size.
+    const auto data_length = read_be32(raw, 4);
     if (static_cast<std::size_t>(data_length) != raw.size())
     {
         return std::unexpected(make_error_code(ExchangeError::LengthMismatch));
@@ -402,8 +429,8 @@ decode_exchange(std::span<const std::uint8_t> raw)
         return std::unexpected(make_error_code(ExchangeError::CrcMismatch));
     }
 
-    // Field: num_commands — must match the number of command bytes present.
-    const auto num_commands = read_be16(raw, 0);
+    // Field: num_commands at offset 0 — must match the command blob byte size.
+    const auto num_commands = read_be32(raw, 0);
     const std::size_t commands_len =
         raw.size() - EXCHANGE_MIN_SIZE; // bytes between header and crc
     if (static_cast<std::size_t>(num_commands) != commands_len)
@@ -413,7 +440,7 @@ decode_exchange(std::span<const std::uint8_t> raw)
 
     ExchangeData ed;
     ed.num_commands = num_commands;
-    ed.commands.assign(raw.begin() + 4, raw.begin() + 4 + commands_len);
+    ed.commands.assign(raw.begin() + 8, raw.begin() + 8 + commands_len);
 
     logger::log(logger::INFO,
                 "routeproto",

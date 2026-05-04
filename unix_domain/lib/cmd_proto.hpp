@@ -13,7 +13,7 @@
  * | Field    | Type     | Size | Notes                                   |
  * |----------|----------|------|-----------------------------------------|
  * | cmd_id   | uint8_t  | 1    | Command identifier (see CmdId enum)     |
- * | data_len | uint16_t | 2    | Total byte length of all field entries  |
+ * | data_len | uint32_t | 4    | Total byte length of all field entries  |
  * | fields   | Field[]  | var  | Zero or more field entries              |
  *
  * Each field entry inside @c data_len bytes:
@@ -125,7 +125,7 @@ namespace cmdproto
 using Ipv4Addr = std::array<std::uint8_t, 4>;
 
 /// @brief Byte size of the per-command header (cmd_id + data_len).
-inline constexpr std::size_t CMD_HEADER_SIZE = 3; // cmd_id(1) + data_len(2)
+inline constexpr std::size_t CMD_HEADER_SIZE = 5; // cmd_id(1) + data_len(4)
 
 /// @brief Byte size of the per-field header (field_id + field_len).
 inline constexpr std::size_t FIELD_HEADER_SIZE =

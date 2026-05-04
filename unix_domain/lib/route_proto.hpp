@@ -117,22 +117,22 @@ namespace routeproto
  * ## Wire layout (big-endian)
  * | Field        | Type      | Size | Notes                              |
  * |--------------|-----------|------|------------------------------------|
- * | num_commands | uint16_t  | 2    | Total number of commands           |
- * | data_length  | uint16_t  | 2    | Total byte length of this block    |
- * | commands     | uint8_t[] | N    | One byte per command               |
+ * | num_commands | uint32_t  | 4    | Byte length of the commands blob   |
+ * | data_length  | uint32_t  | 4    | Total byte length of this block    |
+ * | commands     | uint8_t[] | N    | Encoded command bytes              |
  * | crc          | uint16_t  | 2    | CRC-16/IBM over all preceding bytes|
  *
- * @note  data_length must equal 2 + 2 + N + 2 = 6 + N, where N == num_commands.
+ * @note  data_length must equal 4 + 4 + N + 2 = 10 + N, where N == num_commands.
  */
 struct ExchangeData
 {
-    std::uint16_t num_commands{};       ///< Number of entries in @c commands
+    std::uint32_t num_commands{};       ///< Byte length of @c commands on the wire
     std::vector<std::uint8_t> commands; ///< Routing command bytes
 };
 
 /// @brief Minimum encoded size of an ExchangeData block (no commands).
 inline constexpr std::size_t EXCHANGE_MIN_SIZE =
-    6; // num_commands(2)+data_length(2)+crc(2)
+    10; // num_commands(4)+data_length(4)+crc(2)
 
 /**
  * @brief Serialises an ExchangeData block into raw bytes.

@@ -260,7 +260,7 @@ encode_command(const Command& cmd)
     {
         out.reserve(CMD_HEADER_SIZE + cmd.raw_payload.size());
         out.push_back(static_cast<std::uint8_t>(cmd.cmd_id));
-        write_be16(out, static_cast<std::uint16_t>(cmd.raw_payload.size()));
+        write_be32(out, static_cast<std::uint32_t>(cmd.raw_payload.size()));
         out.insert(out.end(), cmd.raw_payload.begin(), cmd.raw_payload.end());
 
         logger::log(logger::DEBUG,
@@ -281,9 +281,9 @@ encode_command(const Command& cmd)
 
     out.reserve(CMD_HEADER_SIZE + fields_size);
 
-    // Command header: cmd_id (1) + data_len (2).
+    // Command header: cmd_id (1) + data_len (4).
     out.push_back(static_cast<std::uint8_t>(cmd.cmd_id));
-    write_be16(out, static_cast<std::uint16_t>(fields_size));
+    write_be32(out, static_cast<std::uint32_t>(fields_size));
 
     logger::log(
         logger::DEBUG,
@@ -340,7 +340,7 @@ decode_command(std::span<const std::uint8_t> raw)
         return std::unexpected(make_error_code(CmdError::UnknownCommand));
     }
 
-    const auto data_len = read_be16(raw, 1);
+    const auto data_len = read_be32(raw, 1);
 
     // Ensure the buffer holds the declared payload.
     if (raw.size() < CMD_HEADER_SIZE + data_len)
@@ -424,7 +424,7 @@ decode_commands(std::span<const std::uint8_t> raw)
 
         // Advance by the exact byte size this command consumed.
         const std::size_t consumed =
-            CMD_HEADER_SIZE + read_be16(raw, pos + 1); // re-read data_len
+            CMD_HEADER_SIZE + read_be32(raw, pos + 1); // re-read data_len
 
         pos += consumed;
         result.push_back(std::move(*res));
