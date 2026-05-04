@@ -173,6 +173,32 @@ public:
                               const srmd::v1::GetAllRoutesRequest* req,
                               srmd::v1::GetAllRoutesResponse* resp) override;
 
+    /**
+     * @brief Returns all SOT nodes except the calling client's own node.
+     *
+     * Identifies the caller via gRPC peer IP and excludes its entry, then
+     * returns the remaining nodes as compact NodeInfo messages.
+     * Returns STATUS_CODE_PERMISSION_DENIED when the caller is not in SOT.
+     */
+    grpc::Status
+    GetRemainingNodes(grpc::ServerContext* ctx,
+                      const srmd::v1::GetRemainingNodesRequest* req,
+                      srmd::v1::GetRemainingNodesResponse* resp) override;
+
+    /**
+     * @brief Returns the interface list for an arbitrary SOT node by its IP.
+     *
+     * The caller must be registered in the SOT (authorisation).  The target
+     * node is identified by GetLoopbacksByNodeIpRequest::node_ip (management
+     * IP) rather than the gRPC peer.
+     * Returns STATUS_CODE_PERMISSION_DENIED when the caller is not in SOT,
+     * or STATUS_CODE_NOT_FOUND when node_ip / loopback are unmatched.
+     */
+    grpc::Status GetLoopbacksByNodeIp(
+        grpc::ServerContext* ctx,
+        const srmd::v1::GetLoopbacksByNodeIpRequest* req,
+        srmd::v1::GetLoopbacksResponse* resp) override;
+
 private:
     /**
      * @brief Returns the current Unix epoch time in microseconds.

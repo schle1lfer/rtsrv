@@ -4335,6 +4335,131 @@ int main(int argc, char* argv[])
             std::println("[add-del-list] no interfaces to submit");
         }
 
+        // ── Step 4: GetRemainingNodes ────────────────────────────────────────
+        std::println("[add-del-list] fetching remaining nodes from srmd…");
+        auto rnResult = client.getRemainingNodes();
+        if (!rnResult)
+        {
+            std::println("[add-del-list] GetRemainingNodes failed: {}",
+                         rnResult.error());
+        }
+        else
+        {
+            std::println("[add-del-list] remaining nodes: {}",
+                         rnResult->nodes_size());
+            for (const auto& node : rnResult->nodes())
+            {
+                std::println(
+                    "[add-del-list]   hostname='{}' management_ip='{}' "
+                    "loopback_ipv4='{}' loopback_ipv6='{}'",
+                    node.hostname(),
+                    node.management_ip(),
+                    node.loopback_ipv4(),
+                    node.loopback_ipv6());
+            }
+
+            // ── Step 5: For each remaining node fetch interfaces and
+            //            submit a ROUTE_ADD ─────────────────────────────────
+            for (const auto& node : rnResult->nodes())
+            {
+                const std::string& nodeIp = node.management_ip();
+                const std::string& nodeLb = node.loopback_ipv4();
+
+                if (nodeLb.empty())
+                {
+                    std::println(
+                        "[add-del-list]   node '{}' ({}): no IPv4 loopback, "
+                        "skipping",
+                        node.hostname(), nodeIp);
+                    continue;
+                }
+
+                std::println(
+                    "[add-del-list] GetLoopbacksByNodeIp: node_ip='{}' "
+                    "loopback='{}'…",
+                    nodeIp, nodeLb);
+                auto nodeGl = client.getLoopbacksByNodeIp(nodeIp, nodeLb);
+                if (!nodeGl)
+                {
+                    std::println("[add-del-list]   failed: {}",
+                                 nodeGl.error());
+                    continue;
+                }
+
+                std::println("[add-del-list]   {} interface(s)",
+                             nodeGl->interfaces_size());
+
+                cmdproto::SingleRouteRequest nodeReq;
+                nodeReq.vrfs_name = vrfsName;
+
+                for (const auto& li : nodeGl->interfaces())
+                {
+                    if (li.type() != "nni")
+                        continue;
+                    if (li.nexthop().empty())
+                        continue;
+
+                    struct in_addr nhAddr{};
+                    if (::inet_pton(AF_INET, li.nexthop().c_str(),
+                                    &nhAddr) != 1)
+                        continue;
+                    const auto* nhBytes =
+                        reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+
+                    cmdproto::Interface entry{};
+                    const std::string& ifn = li.name();
+                    for (std::size_t k = 0;
+                         k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+                         ++k)
+                        entry.iface_name[k] = ifn[k];
+                    entry.nexthop_addr_ipv4 = {
+                        nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
+                    entry.nexthop_id_ipv4 = 0;
+
+                    for (const auto& pfx : li.prefixes())
+                    {
+                        const std::string& pfxStr = pfx.prefix();
+                        const auto slash = pfxStr.rfind('/');
+                        if (slash == std::string::npos)
+                            continue;
+                        struct in_addr pfxAddr{};
+                        if (::inet_pton(AF_INET,
+                                        pfxStr.substr(0, slash).c_str(),
+                                        &pfxAddr) != 1)
+                            continue;
+                        const auto* pb = reinterpret_cast<const std::uint8_t*>(
+                            &pfxAddr.s_addr);
+                        const auto maskLen = static_cast<std::uint8_t>(
+                            std::stoul(pfxStr.substr(slash + 1)));
+                        entry.prefixes.push_back(cmdproto::PrefixIpv4{
+                            {pb[0], pb[1], pb[2], pb[3]}, maskLen});
+                    }
+
+                    std::println(
+                        "[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
+                        ifn, li.nexthop(), entry.prefixes.size());
+
+                    nodeReq.interfaces.push_back(std::move(entry));
+                }
+
+                if (!nodeReq.interfaces.empty())
+                {
+                    std::println(
+                        "[add-del-list] [ADD] node '{}': submitting {} "
+                        "interface(s) to ud_server…",
+                        node.hostname(), nodeReq.interfaces.size());
+                    vrfClient.submitAdd(std::move(nodeReq));
+                }
+                else
+                {
+                    std::println(
+                        "[add-del-list]   node '{}': no nni interfaces to "
+                        "submit",
+                        node.hostname());
+                }
+            }
+        }
+
         // Keep the process (and the SraUdpClient connection) alive until
         // CTRL+C so routes remain programmed in hardware.
         std::println("[add-del-list] running — press Ctrl-C to stop");

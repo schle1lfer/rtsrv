@@ -366,6 +366,58 @@ message GetAllRoutesResponse
 }
 
 // ---------------------------------------------------------------------------
+// GetRemainingNodes – all SOT nodes except the calling client's own node
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Compact description of a single SOT node returned in
+ *        GetRemainingNodesResponse.
+ */
+message NodeInfo
+{
+    string management_ip = 1; ///< Management IPv4 address (SOT map key).
+    string hostname = 2;      ///< Device hostname.
+    string loopback_ipv4 = 3; ///< Primary IPv4 loopback (router-ID).
+    string loopback_ipv6 = 4; ///< Primary IPv6 loopback.
+}
+
+/**
+ * @brief Request to retrieve all SOT nodes except the calling client's own.
+ *
+ * No fields required – the server identifies the caller via gRPC peer IP.
+ */
+message GetRemainingNodesRequest {}
+
+/**
+ * @brief Response from GetRemainingNodes.
+ */
+message GetRemainingNodesResponse
+{
+    StatusCode code = 1;        ///< Operation outcome.
+    string message = 2;         ///< Human-readable detail.
+    repeated NodeInfo nodes = 3; ///< All SOT nodes except the caller's own.
+}
+
+// ---------------------------------------------------------------------------
+// GetLoopbacksByNodeIp – GetLoopbacks for an arbitrary SOT node by its IP
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Request to retrieve the interface list for a specific SOT node
+ *        identified by its management IP rather than the caller's own IP.
+ *
+ * The server looks up @c node_ip in the SOT nodes_by_loopback map, matches
+ * @c loopback against that node's loopbacks.ipv4 / loopbacks.ipv6 field,
+ * and returns the corresponding VRF interface list.
+ * The calling client must itself be registered in the SOT (authorisation).
+ */
+message GetLoopbacksByNodeIpRequest
+{
+    string node_ip = 1;  ///< Management IP of the target node (SOT map key).
+    string loopback = 2; ///< Loopback address to query (IPv4 or IPv6 string).
+}
+
+// ---------------------------------------------------------------------------
 // RequestLoopback – SOT-backed loopback lookup by client IP
 // ---------------------------------------------------------------------------
 
@@ -517,4 +569,26 @@ service SwitchRouteManager
      * Returns STATUS_CODE_NOT_FOUND when the client IP is not in the SOT.
      */
     rpc GetAllRoutes(GetAllRoutesRequest) returns (GetAllRoutesResponse);
+
+    /**
+     * @brief Return all SOT nodes except the calling client's own node.
+     *
+     * The server identifies the caller via gRPC peer IP, excludes that node
+     * from the SOT list, and returns the rest as NodeInfo entries.
+     * Returns STATUS_CODE_PERMISSION_DENIED when the client IP is not in SOT.
+     */
+    rpc GetRemainingNodes(GetRemainingNodesRequest)
+        returns (GetRemainingNodesResponse);
+
+    /**
+     * @brief Look up the interface list for an arbitrary SOT node by IP.
+     *
+     * Equivalent to GetLoopbacks but the target node is identified by its
+     * management IP in the request rather than the gRPC peer IP.  The
+     * calling client must still be registered in the SOT.
+     * Returns STATUS_CODE_PERMISSION_DENIED when the caller is not in SOT,
+     * or STATUS_CODE_NOT_FOUND when node_ip / loopback are not matched.
+     */
+    rpc GetLoopbacksByNodeIp(GetLoopbacksByNodeIpRequest)
+        returns (GetLoopbacksResponse);
 }

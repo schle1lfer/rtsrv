@@ -372,4 +372,51 @@ RouteClient::getAllRoutes()
     return resp;
 }
 
+// ---------------------------------------------------------------------------
+// GetRemainingNodes
+// ---------------------------------------------------------------------------
+
+std::expected<srmd::v1::GetRemainingNodesResponse, std::string>
+RouteClient::getRemainingNodes()
+{
+    srmd::v1::GetRemainingNodesRequest req;
+    srmd::v1::GetRemainingNodesResponse resp;
+    auto ctx = makeContext();
+    const grpc::Status status = stub_->GetRemainingNodes(ctx.get(), req, &resp);
+    if (!status.ok())
+        return std::unexpected(statusToError(status));
+    if (resp.code() != srmd::v1::STATUS_CODE_OK)
+        return std::unexpected(
+            std::format("GetRemainingNodes failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
+    return resp;
+}
+
+// ---------------------------------------------------------------------------
+// GetLoopbacksByNodeIp
+// ---------------------------------------------------------------------------
+
+std::expected<srmd::v1::GetLoopbacksResponse, std::string>
+RouteClient::getLoopbacksByNodeIp(const std::string& nodeIp,
+                                   const std::string& loopback)
+{
+    srmd::v1::GetLoopbacksByNodeIpRequest req;
+    req.set_node_ip(nodeIp);
+    req.set_loopback(loopback);
+
+    srmd::v1::GetLoopbacksResponse resp;
+    auto ctx = makeContext();
+    const grpc::Status status =
+        stub_->GetLoopbacksByNodeIp(ctx.get(), req, &resp);
+    if (!status.ok())
+        return std::unexpected(statusToError(status));
+    if (resp.code() != srmd::v1::STATUS_CODE_OK)
+        return std::unexpected(
+            std::format("GetLoopbacksByNodeIp failed ({}): {}",
+                        srmd::v1::StatusCode_Name(resp.code()),
+                        resp.message()));
+    return resp;
+}
+
 } // namespace sra

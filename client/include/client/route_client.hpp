@@ -194,6 +194,35 @@ public:
     [[nodiscard]] std::expected<srmd::v1::GetAllRoutesResponse, std::string>
     getAllRoutes();
 
+    /**
+     * @brief Calls GetRemainingNodes to retrieve all SOT nodes except this
+     * client's own.
+     *
+     * The server identifies the caller via gRPC peer IP, excludes that node,
+     * and returns the rest as NodeInfo entries.
+     *
+     * @return Populated GetRemainingNodesResponse on success, or an error
+     *         string.
+     */
+    [[nodiscard]] std::expected<srmd::v1::GetRemainingNodesResponse,
+                                std::string>
+    getRemainingNodes();
+
+    /**
+     * @brief Calls GetLoopbacksByNodeIp to retrieve the interface list for an
+     * arbitrary SOT node identified by its management IP.
+     *
+     * Equivalent to getLoopbacks() but targets a specific node rather than
+     * the calling client's own node.
+     *
+     * @param nodeIp   Management IP of the target node (SOT map key).
+     * @param loopback Loopback address to query (IPv4 or IPv6 string).
+     * @return Populated GetLoopbacksResponse on success, or an error string.
+     */
+    [[nodiscard]] std::expected<srmd::v1::GetLoopbacksResponse, std::string>
+    getLoopbacksByNodeIp(const std::string& nodeIp,
+                         const std::string& loopback);
+
 private:
     /**
      * @brief Builds and returns a ClientContext with the configured deadline.
