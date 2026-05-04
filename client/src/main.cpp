@@ -3513,8 +3513,14 @@ int main(int argc, char* argv[])
                 netlink_nexthop_close(g_startup_nexthop_fd);
                 g_startup_nexthop_fd = -1;
             }
-            // Zero thread IDs before joining so a late signal delivery
-            // cannot pthread_kill() an already-joined (invalid) thread.
+            // Wake any thread still blocked in recv() before zeroing their
+            // IDs.  Without this, a normal exit from a command (e.g.
+            // add-del-list) reaches join() with the TIDs already cleared,
+            // making interruptBackgroundThreads() a no-op from then on and
+            // leaving the netlink threads stuck forever.
+            interruptBackgroundThreads();
+            // Zero thread IDs *after* the interrupt so that a concurrent
+            // signal delivery cannot pthread_kill() an already-joined thread.
             g_startup_route_tid = 0;
             g_startup_neigh_tid = 0;
             g_startup_nexthop_tid = 0;
