@@ -97,7 +97,7 @@ int prepare_route_add_remain_lb(
     sra::SraUdpClient& vrfClient,
     const std::string& loopback_ipv4,
     std::expected<srmd::v1::GetNodePrefixesResponse, std::string> &prefixes,
-    std::vector<const sra::KernelRoute*>& ospf32);
+    const std::vector<const sra::KernelRoute*>& ospf32);
 
 // ---------------------------------------------------------------------------
 // Output helpers
@@ -4231,6 +4231,8 @@ int main(int argc, char* argv[])
 
     if (command == "add-del-list")
     {
+        std::vector<const sra::KernelRoute*> ospf32;
+        
         const std::string socketPath =
             args.empty() ? "/tmp/ud_server.sock" : args[0];
 
@@ -4397,7 +4399,7 @@ int main(int argc, char* argv[])
         }
 
         // ── Step 4: List current OSPF /32 routes from kernel routing table ──
-        std::vector<const sra::KernelRoute*> ospf32;
+    
         std::println("[add-del-list] reading OSPF /32 routes from kernel…");
         try
         {
@@ -4550,7 +4552,7 @@ int prepare_route_add_remain_lb(
     sra::SraUdpClient& vrfClient,
     const std::string& loopback_ipv4,
     std::expected<srmd::v1::GetNodePrefixesResponse, std::string> &prefixes,
-    std::vector<const sra::KernelRoute*>& ospf32)
+    const std::vector<const sra::KernelRoute*>& ospf32)
 {
     cmdproto::SingleRouteRequest singleReq;
     singleReq.vrfs_name = "RemainLoopbaks";
@@ -4571,7 +4573,7 @@ int prepare_route_add_remain_lb(
             kr->metric,
             kr->table);
 
-        if (kr->destination.contains(loopback_ipv4) && )
+        if (kr->destination.contains(loopback_ipv4) && !kr->interfaceName.empty())
         {
             std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
             std::println(
