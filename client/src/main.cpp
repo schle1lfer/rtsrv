@@ -4433,40 +4433,46 @@ int main(int argc, char* argv[])
             }
         }
 
-        // ── Step 6: List current OSPF /32 routes from srmd ──────────────────
-        std::println("[add-del-list] listing OSPF /32 routes from srmd…");
-        auto lrResult = client.listRoutes();
-        if (!lrResult)
+        // ── Step 6: List current OSPF /32 routes from kernel routing table ──
+        std::println("[add-del-list] reading OSPF /32 routes from kernel…");
+        try
         {
-            std::println("[add-del-list] listRoutes failed: {}",
-                         lrResult.error());
-        }
-        else
-        {
-            std::vector<srmd::v1::Route> ospf32;
-            for (const auto& r : *lrResult)
+            sra::RoutingManager rm;
+            auto routesResult = rm.listRoutes(AF_INET, RT_TABLE_UNSPEC);
+            if (!routesResult)
             {
-                if (r.protocol() != srmd::v1::ROUTE_PROTOCOL_OSPF)
-                    continue;
-                const auto& dst = r.destination();
-                if (dst.size() < 3 ||
-                    dst.substr(dst.size() - 3) != "/32")
-                    continue;
-                ospf32.push_back(r);
+                std::println("[add-del-list] listRoutes (kernel) failed: {}",
+                             routesResult.error());
             }
+            else
+            {
+                std::vector<const sra::KernelRoute*> ospf32;
+                for (const auto& kr : *routesResult)
+                {
+                    if (kr.prefixLen == 32 &&
+                        kr.protocol == RTPROT_OSPF &&
+                        kr.type == RTN_UNICAST)
+                        ospf32.push_back(&kr);
+                }
 
-            std::println("[add-del-list] OSPF /32 routes: {}",
-                         ospf32.size());
-            for (const auto& r : ospf32)
-            {
-                std::println(
-                    "[add-del-list]   dst={} via={} dev={} metric={} id={}",
-                    r.destination(),
-                    r.gateway().empty() ? "(none)" : r.gateway(),
-                    r.interface_name().empty() ? "?" : r.interface_name(),
-                    r.metric(),
-                    r.id().size() >= 8 ? r.id().substr(0, 8) + "…" : r.id());
+                std::println("[add-del-list] OSPF /32 routes: {}",
+                             ospf32.size());
+                for (const auto* kr : ospf32)
+                {
+                    std::println(
+                        "[add-del-list]   dst={} via={} dev={} metric={}"
+                        " table={} proto=ospf",
+                        kr->destination,
+                        kr->gateway.empty() ? "(none)" : kr->gateway,
+                        kr->interfaceName.empty() ? "?" : kr->interfaceName,
+                        kr->metric,
+                        kr->table);
+                }
             }
+        }
+        catch (const std::exception& e)
+        {
+            std::println("[add-del-list] RoutingManager exception: {}", e.what());
         }
 
         // ── Step 7: OSPF /32 NetLink monitor (background thread) ────────────
