@@ -1331,6 +1331,13 @@ static volatile sig_atomic_t g_add_del_list_stop = 0;
  *  Closed by the signal handler to unblock netlink_run(). */
 static volatile int g_add_del_list_nl_fd = -1;
 
+/** @brief pthread handle for the OSPF netlink monitor thread.
+ *  Set after thread creation so the signal handler can pthread_kill() it.
+ *  close() alone does not unblock a blocking recv() in another thread on
+ *  Linux; pthread_kill(SIGINT) delivers EINTR so netlink_run() retries
+ *  recv() on the now-closed fd and gets EBADF, causing a clean exit. */
+static volatile pthread_t g_add_del_list_nl_tid = 0;
+
 /** @brief SIGINT/SIGTERM handler for the 'add-del-list' command. */
 static void addDelListSigHandler(int /*signo*/)
 {
@@ -1341,6 +1348,9 @@ static void addDelListSigHandler(int /*signo*/)
         g_add_del_list_nl_fd = -1;
         netlink_close(fd);
     }
+    const pthread_t tid = g_add_del_list_nl_tid;
+    if (tid && tid != ::pthread_self())
+        ::pthread_kill(tid, SIGINT);
 }
 
 /**
@@ -4482,7 +4492,7 @@ int main(int argc, char* argv[])
         }
 
         // ── Step 7: Prepare ROUTE_ADD for Remaining Loopbacks ────────────────
-        int prepare_route_add_remain_lb(rnResult,ospf32);
+        prepare_route_add_remain_lb(rnResult, ospf32);
 
         // ── Step 8: OSPF /32 NetLink monitor (background thread) ────────────
         std::println("[add-del-list] starting OSPF /32 netlink monitor…");
@@ -4501,6 +4511,7 @@ int main(int argc, char* argv[])
                 ospfNlThread = std::thread([nlFd]() {
                     netlink_run(nlFd, addDelListOspfCb, nullptr);
                 });
+                g_add_del_list_nl_tid = ospfNlThread.native_handle();
                 std::println("[add-del-list] OSPF /32 netlink monitor active "
                              "(fd={})",
                              nlFd);
@@ -4516,7 +4527,9 @@ int main(int argc, char* argv[])
         }
         std::println("[add-del-list] shutdown signal received — stopping");
 
-        // Signal handler already closed g_add_del_list_nl_fd; join thread.
+        // Signal handler already closed g_add_del_list_nl_fd and sent SIGINT
+        // to the monitor thread; join it now that it has exited netlink_run().
+        g_add_del_list_nl_tid = 0;
         if (ospfNlThread.joinable())
             ospfNlThread.join();
 
