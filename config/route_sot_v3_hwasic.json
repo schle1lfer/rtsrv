@@ -38,12 +38,12 @@
                 ]
               },
               "Ethernet46": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.1/30",
                 "weight": 100
               },
               "Ethernet47": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.5/30",
                 "weight": 100
               }
@@ -68,16 +68,23 @@
                 "nexthop": "",
                 "weight": 100,
                 "description": "VM_pool#100",
-                "prefixes": []
+                "prefixes": [
+                  {
+                    "prefix": "172.16.0.0/16",
+                    "weight": 100,
+                    "role": "server_network",
+                    "description": "VM_pool#100"
+                  }
+                ]
               },
               "Ethernet46": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.9/30",
                 "weight": 100
                 
               },
               "Ethernet47": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.13/30",
                 "weight": 100
               }
@@ -124,12 +131,12 @@
                 ]
               },
               "Ethernet46": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.17/30",
                 "weight": 100
               },
               "Ethernet47": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.21/30",
                 "weight": 100
               }
@@ -149,17 +156,17 @@
           "ipv4": {
             "interfaces": {
               "Ethernet45": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.2/30",
                 "weight": 100
               },
               "Ethernet46": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.10/30",
                 "weight": 100
               },
               "Ethernet47": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.18/30",
                 "weight": 100
               }
@@ -179,17 +186,17 @@
           "ipv4": {
             "interfaces": {
               "Ethernet45": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.6/30",
                 "weight": 100
               },
               "Ethernet46": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.14/30",
                 "weight": 100
               },
               "Ethernet47": {
-                "type": "nni",
+                "type": "p2p",
                 "local_address": "192.168.0.22/30",
                 "weight": 100
               }

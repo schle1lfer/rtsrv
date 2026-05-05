@@ -93,6 +93,9 @@
 
 namespace po = boost::program_options;
 
+int prepare_route_add_remain_lb(std::expected<srmd::v1::GetRemainingNodesResponse, std::string>& rl,
+std::vector<const sra::KernelRoute*>& ospf32);
+
 // ---------------------------------------------------------------------------
 // Output helpers
 // ---------------------------------------------------------------------------
@@ -4380,60 +4383,8 @@ int main(int argc, char* argv[])
             std::println("[add-del-list] no interfaces to submit");
         }
 
-        // ── Step 4: GetRemainingNodes ────────────────────────────────────────
-        std::println("[add-del-list] fetching remaining nodes from srmd…");
-        auto rnResult = client.getRemainingNodes();
-        if (!rnResult)
-        {
-            std::println("[add-del-list] GetRemainingNodes failed: {}",
-                         rnResult.error());
-        }
-        else
-        {
-            std::println("[add-del-list] remaining nodes: {}",
-                         rnResult->nodes_size());
-            for (const auto& node : rnResult->nodes())
-            {
-                std::println(
-                    "[add-del-list]   hostname='{}' management_ip='{}' "
-                    "loopback_ipv4='{}' loopback_ipv6='{}'",
-                    node.hostname(),
-                    node.management_ip(),
-                    node.loopback_ipv4(),
-                    node.loopback_ipv6());
-            }
-
-            // ── Step 5: For each remaining node fetch and log all prefixes ───
-            for (const auto& node : rnResult->nodes())
-            {
-                const std::string& nodeIp = node.management_ip();
-
-                std::println(
-                    "[add-del-list] GetLoopbacksByNodeIp: node='{}' "
-                    "node_ip='{}'…",
-                    node.hostname(), nodeIp);
-                auto nodeGl = client.getLoopbacksByNodeIp(nodeIp);
-                if (!nodeGl)
-                {
-                    std::println("[add-del-list]   failed: {}",
-                                 nodeGl.error());
-                    continue;
-                }
-
-                std::println("[add-del-list]   {} prefix(es):",
-                             nodeGl->prefixes_size());
-                for (const auto& pfx : nodeGl->prefixes())
-                {
-                    std::println(
-                        "[add-del-list]     prefix='{}' weight={} role='{}'"
-                        " description='{}'",
-                        pfx.prefix(), pfx.weight(), pfx.role(),
-                        pfx.description());
-                }
-            }
-        }
-
-        // ── Step 6: List current OSPF /32 routes from kernel routing table ──
+        // ── Step 4: List current OSPF /32 routes from kernel routing table ──
+        std::vector<const sra::KernelRoute*> ospf32;
         std::println("[add-del-list] reading OSPF /32 routes from kernel…");
         try
         {
@@ -4446,7 +4397,6 @@ int main(int argc, char* argv[])
             }
             else
             {
-                std::vector<const sra::KernelRoute*> ospf32;
                 for (const auto& kr : *routesResult)
                 {
                     if (kr.prefixLen == 32 &&
@@ -4475,7 +4425,66 @@ int main(int argc, char* argv[])
             std::println("[add-del-list] RoutingManager exception: {}", e.what());
         }
 
-        // ── Step 7: OSPF /32 NetLink monitor (background thread) ────────────
+        // ── Step 5: GetRemainingLoopbacks ────────────────────────────────────
+        std::println("[add-del-list] fetching remaining nodes from srmd…");
+        auto rnResult = client.getRemainingNodes();
+        if (!rnResult)
+        {
+            std::println("[add-del-list] GetRemainingNodes failed: {}",
+                         rnResult.error());
+        }
+        else
+        {
+            std::println("[add-del-list] remaining nodes: {}",
+                         rnResult->nodes_size());
+            for (const auto& node : rnResult->nodes())
+            {
+                std::println(
+                    "[add-del-list]   hostname='{}' management_ip='{}' "
+                    "loopback_ipv4='{}' loopback_ipv6='{}'",
+                    node.hostname(),
+                    node.management_ip(),
+                    node.loopback_ipv4(),
+                    node.loopback_ipv6());
+            }
+
+            // ── Step 6: For each remaining node fetch and log all prefixes ───
+            for (const auto& node : rnResult->nodes())
+            {
+                const std::string& nodeIp = node.management_ip();
+
+                std::println(
+                    "[add-del-list] GetLoopbacksByNodeIp: node='{}' "
+                    "node_ip='{}'…",
+                    node.hostname(), nodeIp);
+                auto nodeGl = client.getLoopbacksByNodeIp(nodeIp);
+                if (!nodeGl)
+                {
+                    std::println("[add-del-list]   failed: {}",
+                                 nodeGl.error());
+                    continue;
+                }
+
+                std::println("[add-del-list]   {} prefix(es):",
+                             nodeGl->prefixes_size());
+                for (const auto& pfx : nodeGl->prefixes())
+                {
+                    std::println(
+                        "[add-del-list]     prefix='{}' weight={} role='{}'"
+                        " description='{}'",
+                        pfx.prefix(), pfx.weight(), pfx.role(),
+                        pfx.description());
+                }
+
+                // send ROUTE_ADD
+                // todo
+            }
+        }
+
+        // ── Step 7: Prepare ROUTE_ADD for Remaining Loopbacks ────────────────
+        int prepare_route_add_remain_lb(rnResult,ospf32);
+
+        // ── Step 8: OSPF /32 NetLink monitor (background thread) ────────────
         std::println("[add-del-list] starting OSPF /32 netlink monitor…");
         std::thread ospfNlThread;
         {
@@ -4518,4 +4527,100 @@ int main(int argc, char* argv[])
     std::println(std::cerr, "Unknown command: '{}'", command);
     std::println(std::cerr, "Run 'sra --help' for usage.");
     return EXIT_FAILURE;
+}
+//std::expected<srmd::v1::GetLoopbacksResponse, std::string> glResult
+int prepare_route_add_remain_lb(std::expected<srmd::v1::GetRemainingNodesResponse, std::string>& rl,
+std::vector<const sra::KernelRoute*>& ospf32)
+{
+#if 0
+    cmdproto::SingleRouteRequest singleReq;
+    singleReq.vrfs_name = vrfsName;
+
+    for (const auto& li : glResult->interfaces())
+    {
+        if (li.type() != "nni")
+            continue;
+        if (li.nexthop().empty())
+            continue;
+
+        struct in_addr nhAddr
+        {};
+        if (::inet_pton(AF_INET, li.nexthop().c_str(), &nhAddr) != 1)
+            continue;
+        const auto* nhBytes =
+            reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+
+        cmdproto::Interface entry{};
+        const std::string& ifn = li.name();
+        for (std::size_t k = 0;
+                k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+                ++k)
+            entry.iface_name[k] = ifn[k];
+        entry.nexthop_addr_ipv4 = {
+            nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
+        entry.nexthop_id_ipv4 = 0;
+
+        for (const auto& pfx : li.prefixes())
+        {
+            const std::string& pfxStr = pfx.prefix();
+            const auto slash = pfxStr.rfind('/');
+            if (slash == std::string::npos)
+                continue;
+            struct in_addr pfxAddr
+            {};
+            if (::inet_pton(AF_INET,
+                            pfxStr.substr(0, slash).c_str(),
+                            &pfxAddr) != 1)
+                continue;
+            const auto* pb =
+                reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
+            const auto maskLen = static_cast<std::uint8_t>(
+                std::stoul(pfxStr.substr(slash + 1)));
+            entry.prefixes.push_back(cmdproto::PrefixIpv4{
+                {pb[0], pb[1], pb[2], pb[3]}, maskLen});
+        }
+
+        std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
+                        ifn,
+                        li.nexthop(),
+                        entry.prefixes.size());
+
+        singleReq.interfaces.push_back(std::move(entry));
+    }
+
+    if (!singleReq.interfaces.empty())
+    {
+        // ── ROUTE_ADD ────────────────────────────────────────────────────
+        std::println("[add-del-list] [ADD] submitting {} interface(s)"
+                        " to ud_server…",
+                        singleReq.interfaces.size());
+        auto savedInterfaces = singleReq.interfaces;
+        vrfClient.submitAdd(std::move(singleReq));
+
+        // ── ROUTE_DEL (one per prefix) ───────────────────────────────────
+        std::println("[add-del-list] [DEL] deleting each added prefix…");
+        for (const auto& iface : savedInterfaces)
+        {
+            for (const auto& pfx : iface.prefixes)
+            {
+                cmdproto::RouteDelParams delParams;
+                delParams.dst_addr = pfx.addr;
+                delParams.prefix_len = pfx.mask_len;
+                delParams.gateway = iface.nexthop_addr_ipv4;
+                delParams.if_name = std::string(iface.iface_name.data());
+                delParams.vrfs_name = vrfsName;
+                vrfClient.submitDelete(delParams);
+            }
+        }
+
+        // ── ROUTE_LIST ───────────────────────────────────────────────────
+        std::println("[add-del-list] [LIST] requesting route table…");
+        vrfClient.submitList(vrfsName);
+    }
+    else
+    {
+        std::println("[add-del-list] no interfaces to submit");
+    }
+#endif
+    return 0;
 }
