@@ -186,18 +186,19 @@ public:
                       srmd::v1::GetRemainingNodesResponse* resp) override;
 
     /**
-     * @brief Returns the interface list for an arbitrary SOT node by its IP.
+     * @brief Returns a flat list of all prefixes for an arbitrary SOT node.
      *
      * The caller must be registered in the SOT (authorisation).  The target
      * node is identified by GetLoopbacksByNodeIpRequest::node_ip (management
-     * IP) rather than the gRPC peer.
+     * IP).  Every interface (nni and uni) across all VRFs is iterated and
+     * all prefixes are collected into a single flat list.
      * Returns STATUS_CODE_PERMISSION_DENIED when the caller is not in SOT,
-     * or STATUS_CODE_NOT_FOUND when node_ip / loopback are unmatched.
+     * or STATUS_CODE_NOT_FOUND when node_ip is not in the SOT.
      */
     grpc::Status GetLoopbacksByNodeIp(
         grpc::ServerContext* ctx,
         const srmd::v1::GetLoopbacksByNodeIpRequest* req,
-        srmd::v1::GetLoopbacksResponse* resp) override;
+        srmd::v1::GetNodePrefixesResponse* resp) override;
 
 private:
     /**

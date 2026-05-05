@@ -397,15 +397,13 @@ RouteClient::getRemainingNodes()
 // GetLoopbacksByNodeIp
 // ---------------------------------------------------------------------------
 
-std::expected<srmd::v1::GetLoopbacksResponse, std::string>
-RouteClient::getLoopbacksByNodeIp(const std::string& nodeIp,
-                                   const std::string& loopback)
+std::expected<srmd::v1::GetNodePrefixesResponse, std::string>
+RouteClient::getLoopbacksByNodeIp(const std::string& nodeIp)
 {
     srmd::v1::GetLoopbacksByNodeIpRequest req;
     req.set_node_ip(nodeIp);
-    req.set_loopback(loopback);
 
-    srmd::v1::GetLoopbacksResponse resp;
+    srmd::v1::GetNodePrefixesResponse resp;
     auto ctx = makeContext();
     const grpc::Status status =
         stub_->GetLoopbacksByNodeIp(ctx.get(), req, &resp);

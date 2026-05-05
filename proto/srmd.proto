@@ -399,22 +399,32 @@ message GetRemainingNodesResponse
 }
 
 // ---------------------------------------------------------------------------
-// GetLoopbacksByNodeIp – GetLoopbacks for an arbitrary SOT node by its IP
+// GetLoopbacksByNodeIp – flat prefix list for an arbitrary SOT node by IP
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Request to retrieve the interface list for a specific SOT node
- *        identified by its management IP rather than the caller's own IP.
+ * @brief Request to retrieve all prefixes for a specific SOT node identified
+ *        by its management IP.
  *
- * The server looks up @c node_ip in the SOT nodes_by_loopback map, matches
- * @c loopback against that node's loopbacks.ipv4 / loopbacks.ipv6 field,
- * and returns the corresponding VRF interface list.
+ * The server looks up @c node_ip in the SOT, iterates every interface of
+ * every VRF (both @c nni and @c uni types), collects all prefixes, and
+ * returns them as a flat list.
  * The calling client must itself be registered in the SOT (authorisation).
  */
 message GetLoopbacksByNodeIpRequest
 {
-    string node_ip = 1;  ///< Management IP of the target node (SOT map key).
-    string loopback = 2; ///< Loopback address to query (IPv4 or IPv6 string).
+    string node_ip = 1; ///< Management IP of the target node (SOT map key).
+}
+
+/**
+ * @brief Response from GetLoopbacksByNodeIp: flat list of all prefixes
+ *        reachable via any interface (nni or uni) of the target node.
+ */
+message GetNodePrefixesResponse
+{
+    StatusCode code = 1;                    ///< Operation outcome.
+    string message = 2;                     ///< Human-readable detail.
+    repeated LoopbackPrefix prefixes = 3;   ///< All prefixes for the node.
 }
 
 // ---------------------------------------------------------------------------
@@ -581,14 +591,15 @@ service SwitchRouteManager
         returns (GetRemainingNodesResponse);
 
     /**
-     * @brief Look up the interface list for an arbitrary SOT node by IP.
+     * @brief Retrieve a flat list of all prefixes for an arbitrary SOT node.
      *
-     * Equivalent to GetLoopbacks but the target node is identified by its
-     * management IP in the request rather than the gRPC peer IP.  The
-     * calling client must still be registered in the SOT.
+     * The server looks up the target node by @c node_ip, iterates every
+     * interface (both @c nni and @c uni) across all VRFs, and returns all
+     * prefixes as a single flat list.
+     * The calling client must still be registered in the SOT.
      * Returns STATUS_CODE_PERMISSION_DENIED when the caller is not in SOT,
-     * or STATUS_CODE_NOT_FOUND when node_ip / loopback are not matched.
+     * or STATUS_CODE_NOT_FOUND when @c node_ip is not in the SOT.
      */
     rpc GetLoopbacksByNodeIp(GetLoopbacksByNodeIpRequest)
-        returns (GetLoopbacksResponse);
+        returns (GetNodePrefixesResponse);
 }

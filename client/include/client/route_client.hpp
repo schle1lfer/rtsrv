@@ -209,19 +209,18 @@ public:
     getRemainingNodes();
 
     /**
-     * @brief Calls GetLoopbacksByNodeIp to retrieve the interface list for an
-     * arbitrary SOT node identified by its management IP.
+     * @brief Calls GetLoopbacksByNodeIp to retrieve a flat list of all
+     * prefixes for an arbitrary SOT node identified by its management IP.
      *
-     * Equivalent to getLoopbacks() but targets a specific node rather than
-     * the calling client's own node.
+     * The server iterates every interface (nni and uni) across all VRFs of
+     * the target node and returns all prefixes as a single flat list.
      *
-     * @param nodeIp   Management IP of the target node (SOT map key).
-     * @param loopback Loopback address to query (IPv4 or IPv6 string).
-     * @return Populated GetLoopbacksResponse on success, or an error string.
+     * @param nodeIp  Management IP of the target node (SOT map key).
+     * @return Populated GetNodePrefixesResponse on success, or an error
+     *         string.
      */
-    [[nodiscard]] std::expected<srmd::v1::GetLoopbacksResponse, std::string>
-    getLoopbacksByNodeIp(const std::string& nodeIp,
-                         const std::string& loopback);
+    [[nodiscard]] std::expected<srmd::v1::GetNodePrefixesResponse, std::string>
+    getLoopbacksByNodeIp(const std::string& nodeIp);
 
 private:
     /**

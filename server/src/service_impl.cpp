@@ -630,17 +630,13 @@ grpc::Status SwitchRouteManagerImpl::GetRemainingNodes(
 grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
     grpc::ServerContext* ctx,
     const srmd::v1::GetLoopbacksByNodeIpRequest* req,
-    srmd::v1::GetLoopbacksResponse* resp)
+    srmd::v1::GetNodePrefixesResponse* resp)
 {
     const std::string clientIp = extractClientIp(ctx->peer());
 
     BOOST_LOG_TRIVIAL(debug) << std::format(
-        "[GetLoopbacksByNodeIp] peer='{}' clientIp='{}' node_ip='{}' "
-        "loopback='{}'",
-        ctx->peer(),
-        clientIp,
-        req->node_ip(),
-        req->loopback());
+        "[GetLoopbacksByNodeIp] peer='{}' clientIp='{}' node_ip='{}'",
+        ctx->peer(), clientIp, req->node_ip());
 
     // Authorise: caller must be registered in the SOT.
     const SotNode* clientNode = sotConfig_.findByManagementIp(clientIp);
@@ -667,74 +663,43 @@ grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
         return grpc::Status::OK;
     }
 
-    // Match requested loopback to the target node's loopbacks.
-    const std::string& requestedLb = req->loopback();
-    const bool isIpv4Match = (targetNode->loopbacks.ipv4 == requestedLb);
-    const bool isIpv6Match = (targetNode->loopbacks.ipv6 == requestedLb);
-
-    if (!isIpv4Match && !isIpv6Match)
+    // Collect all prefixes from every interface (nni and uni) across all VRFs.
+    std::size_t pfxCount = 0;
+    for (const auto& vrf : targetNode->vrfs)
     {
-        BOOST_LOG_TRIVIAL(warning) << std::format(
-            "[GetLoopbacksByNodeIp] loopback '{}' not found for node '{}' ({})",
-            requestedLb,
-            targetNode->hostname,
-            req->node_ip());
-        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
-        resp->set_message(std::format(
-            "Loopback '{}' does not match node '{}' (ipv4='{}' ipv6='{}')",
-            requestedLb,
-            targetNode->hostname,
-            targetNode->loopbacks.ipv4,
-            targetNode->loopbacks.ipv6));
-        return grpc::Status::OK;
-    }
-
-    const SotVrf* defaultVrf = targetNode->findVrf("default");
-    if (!defaultVrf)
-    {
-        resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
-        resp->set_message(std::format(
-            "VRF 'default' not found for node '{}'", targetNode->hostname));
-        return grpc::Status::OK;
-    }
-
-    const std::vector<SotInterface>& interfaces =
-        isIpv4Match ? defaultVrf->ipv4.interfaces : defaultVrf->ipv6.interfaces;
-
-    resp->set_code(srmd::v1::STATUS_CODE_OK);
-    resp->set_message(std::format(
-        "OK: node '{}' loopback '{}' ({}) – {} interface(s)",
-        targetNode->hostname,
-        requestedLb,
-        isIpv4Match ? "ipv4" : "ipv6",
-        interfaces.size()));
-
-    for (const auto& iface : interfaces)
-    {
-        auto* pbIface = resp->add_interfaces();
-        pbIface->set_name(iface.name);
-        pbIface->set_type(iface.type);
-        pbIface->set_local_address(iface.local_address);
-        pbIface->set_nexthop(iface.nexthop);
-        pbIface->set_weight(iface.weight);
-        pbIface->set_description(iface.description);
-
-        for (const auto& pfx : iface.prefixes)
+        for (const auto& iface : vrf.ipv4.interfaces)
         {
-            auto* pbPfx = pbIface->add_prefixes();
-            pbPfx->set_prefix(pfx.prefix);
-            pbPfx->set_weight(pfx.weight);
-            pbPfx->set_role(pfx.role);
-            pbPfx->set_description(pfx.description);
+            for (const auto& pfx : iface.prefixes)
+            {
+                auto* pbPfx = resp->add_prefixes();
+                pbPfx->set_prefix(pfx.prefix);
+                pbPfx->set_weight(pfx.weight);
+                pbPfx->set_role(pfx.role);
+                pbPfx->set_description(pfx.description);
+                ++pfxCount;
+            }
+        }
+        for (const auto& iface : vrf.ipv6.interfaces)
+        {
+            for (const auto& pfx : iface.prefixes)
+            {
+                auto* pbPfx = resp->add_prefixes();
+                pbPfx->set_prefix(pfx.prefix);
+                pbPfx->set_weight(pfx.weight);
+                pbPfx->set_role(pfx.role);
+                pbPfx->set_description(pfx.description);
+                ++pfxCount;
+            }
         }
     }
 
+    resp->set_code(srmd::v1::STATUS_CODE_OK);
+    resp->set_message(std::format("OK: node '{}' – {} prefix(es)",
+                                  targetNode->hostname, pfxCount));
+
     BOOST_LOG_TRIVIAL(info) << std::format(
-        "[GetLoopbacksByNodeIp] node='{}' loopback='{}' ({}) → {} interface(s)",
-        targetNode->hostname,
-        requestedLb,
-        isIpv4Match ? "ipv4" : "ipv6",
-        interfaces.size());
+        "[GetLoopbacksByNodeIp] node='{}' ({}) → {} prefix(es)",
+        targetNode->hostname, req->node_ip(), pfxCount);
 
     return grpc::Status::OK;
 }

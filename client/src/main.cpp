@@ -4358,27 +4358,16 @@ int main(int argc, char* argv[])
                     node.loopback_ipv6());
             }
 
-            // ── Step 5: For each remaining node fetch interfaces and
-            //            submit a ROUTE_ADD ─────────────────────────────────
+            // ── Step 5: For each remaining node fetch and log all prefixes ───
             for (const auto& node : rnResult->nodes())
             {
                 const std::string& nodeIp = node.management_ip();
-                const std::string& nodeLb = node.loopback_ipv4();
-
-                if (nodeLb.empty())
-                {
-                    std::println(
-                        "[add-del-list]   node '{}' ({}): no IPv4 loopback, "
-                        "skipping",
-                        node.hostname(), nodeIp);
-                    continue;
-                }
 
                 std::println(
-                    "[add-del-list] GetLoopbacksByNodeIp: node_ip='{}' "
-                    "loopback='{}'…",
-                    nodeIp, nodeLb);
-                auto nodeGl = client.getLoopbacksByNodeIp(nodeIp, nodeLb);
+                    "[add-del-list] GetLoopbacksByNodeIp: node='{}' "
+                    "node_ip='{}'…",
+                    node.hostname(), nodeIp);
+                auto nodeGl = client.getLoopbacksByNodeIp(nodeIp);
                 if (!nodeGl)
                 {
                     std::println("[add-del-list]   failed: {}",
@@ -4386,76 +4375,15 @@ int main(int argc, char* argv[])
                     continue;
                 }
 
-                std::println("[add-del-list]   {} interface(s)",
-                             nodeGl->interfaces_size());
-
-                cmdproto::SingleRouteRequest nodeReq;
-                nodeReq.vrfs_name = vrfsName;
-
-                for (const auto& li : nodeGl->interfaces())
-                {
-                    if (li.type() != "nni")
-                        continue;
-                    if (li.nexthop().empty())
-                        continue;
-
-                    struct in_addr nhAddr{};
-                    if (::inet_pton(AF_INET, li.nexthop().c_str(),
-                                    &nhAddr) != 1)
-                        continue;
-                    const auto* nhBytes =
-                        reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
-
-                    cmdproto::Interface entry{};
-                    const std::string& ifn = li.name();
-                    for (std::size_t k = 0;
-                         k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
-                         ++k)
-                        entry.iface_name[k] = ifn[k];
-                    entry.nexthop_addr_ipv4 = {
-                        nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-                    entry.nexthop_id_ipv4 = 0;
-
-                    for (const auto& pfx : li.prefixes())
-                    {
-                        const std::string& pfxStr = pfx.prefix();
-                        const auto slash = pfxStr.rfind('/');
-                        if (slash == std::string::npos)
-                            continue;
-                        struct in_addr pfxAddr{};
-                        if (::inet_pton(AF_INET,
-                                        pfxStr.substr(0, slash).c_str(),
-                                        &pfxAddr) != 1)
-                            continue;
-                        const auto* pb = reinterpret_cast<const std::uint8_t*>(
-                            &pfxAddr.s_addr);
-                        const auto maskLen = static_cast<std::uint8_t>(
-                            std::stoul(pfxStr.substr(slash + 1)));
-                        entry.prefixes.push_back(cmdproto::PrefixIpv4{
-                            {pb[0], pb[1], pb[2], pb[3]}, maskLen});
-                    }
-
-                    std::println(
-                        "[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
-                        ifn, li.nexthop(), entry.prefixes.size());
-
-                    nodeReq.interfaces.push_back(std::move(entry));
-                }
-
-                if (!nodeReq.interfaces.empty())
+                std::println("[add-del-list]   {} prefix(es):",
+                             nodeGl->prefixes_size());
+                for (const auto& pfx : nodeGl->prefixes())
                 {
                     std::println(
-                        "[add-del-list] [ADD] node '{}': submitting {} "
-                        "interface(s) to ud_server…",
-                        node.hostname(), nodeReq.interfaces.size());
-                    vrfClient.submitAdd(std::move(nodeReq));
-                }
-                else
-                {
-                    std::println(
-                        "[add-del-list]   node '{}': no nni interfaces to "
-                        "submit",
-                        node.hostname());
+                        "[add-del-list]     prefix='{}' weight={} role='{}'"
+                        " description='{}'",
+                        pfx.prefix(), pfx.weight(), pfx.role(),
+                        pfx.description());
                 }
             }
         }
