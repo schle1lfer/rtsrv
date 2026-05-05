@@ -1324,10 +1324,55 @@ static void demoSigHandler(int /*signo*/)
 /** @brief Stop flag for the 'add-del-list' daemon command (set by signal handler). */
 static volatile sig_atomic_t g_add_del_list_stop = 0;
 
+/** @brief Netlink fd used by the add-del-list OSPF monitor thread.
+ *  Closed by the signal handler to unblock netlink_run(). */
+static volatile int g_add_del_list_nl_fd = -1;
+
 /** @brief SIGINT/SIGTERM handler for the 'add-del-list' command. */
 static void addDelListSigHandler(int /*signo*/)
 {
     g_add_del_list_stop = 1;
+    const int fd = g_add_del_list_nl_fd;
+    if (fd >= 0)
+    {
+        g_add_del_list_nl_fd = -1;
+        netlink_close(fd);
+    }
+}
+
+/**
+ * @brief Netlink callback for /32 OSPF route events in add-del-list mode.
+ *
+ * Invoked by netlink_run() for every IPv4 /32 unicast route event.
+ * Events with a protocol other than RTPROT_OSPF are silently ignored so
+ * that only OSPF host-routes produce log output.
+ *
+ * @param event      NETLINK_ROUTE_ADDED, _CHANGED, or _REMOVED.
+ * @param route      Parsed /32 route descriptor; valid for this call only.
+ * @param user_data  Unused (nullptr).
+ */
+static void addDelListOspfCb(netlink_event_t event,
+                              const netlink_route32_t* route,
+                              void* /*user_data*/)
+{
+    if (route->protocol != RTPROT_OSPF)
+        return;
+
+    const char* evLabel = (event == NETLINK_ROUTE_ADDED)   ? "ADD"
+                        : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
+                                                           : "CHG";
+    char dst[INET_ADDRSTRLEN];
+    char gw[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &route->dst, dst, sizeof(dst));
+    if (route->gateway.s_addr != 0)
+        inet_ntop(AF_INET, &route->gateway, gw, sizeof(gw));
+
+    std::println("[add-del-list] [OSPF/32] {} {}/32 via {} dev {} metric {}",
+                 evLabel,
+                 dst,
+                 gw[0] ? gw : "(none)",
+                 route->ifname[0] ? route->ifname : "?",
+                 route->metric);
 }
 
 /**
@@ -4388,6 +4433,65 @@ int main(int argc, char* argv[])
             }
         }
 
+        // ── Step 6: List current OSPF /32 routes from srmd ──────────────────
+        std::println("[add-del-list] listing OSPF /32 routes from srmd…");
+        auto lrResult = client.listRoutes();
+        if (!lrResult)
+        {
+            std::println("[add-del-list] listRoutes failed: {}",
+                         lrResult.error());
+        }
+        else
+        {
+            std::vector<srmd::v1::Route> ospf32;
+            for (const auto& r : *lrResult)
+            {
+                if (r.protocol() != srmd::v1::ROUTE_PROTOCOL_OSPF)
+                    continue;
+                const auto& dst = r.destination();
+                if (dst.size() < 3 ||
+                    dst.substr(dst.size() - 3) != "/32")
+                    continue;
+                ospf32.push_back(r);
+            }
+
+            std::println("[add-del-list] OSPF /32 routes: {}",
+                         ospf32.size());
+            for (const auto& r : ospf32)
+            {
+                std::println(
+                    "[add-del-list]   dst={} via={} dev={} metric={} id={}",
+                    r.destination(),
+                    r.gateway().empty() ? "(none)" : r.gateway(),
+                    r.interface_name().empty() ? "?" : r.interface_name(),
+                    r.metric(),
+                    r.id().size() >= 8 ? r.id().substr(0, 8) + "…" : r.id());
+            }
+        }
+
+        // ── Step 7: OSPF /32 NetLink monitor (background thread) ────────────
+        std::println("[add-del-list] starting OSPF /32 netlink monitor…");
+        std::thread ospfNlThread;
+        {
+            const int nlFd = netlink_init();
+            if (nlFd < 0)
+            {
+                std::println("[add-del-list] netlink_init failed: {} — "
+                             "OSPF monitor disabled",
+                             std::strerror(errno));
+            }
+            else
+            {
+                g_add_del_list_nl_fd = nlFd;
+                ospfNlThread = std::thread([nlFd]() {
+                    netlink_run(nlFd, addDelListOspfCb, nullptr);
+                });
+                std::println("[add-del-list] OSPF /32 netlink monitor active "
+                             "(fd={})",
+                             nlFd);
+            }
+        }
+
         // Keep the process (and the SraUdpClient connection) alive until
         // CTRL+C so routes remain programmed in hardware.
         std::println("[add-del-list] running — press Ctrl-C to stop");
@@ -4396,6 +4500,10 @@ int main(int argc, char* argv[])
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         std::println("[add-del-list] shutdown signal received — stopping");
+
+        // Signal handler already closed g_add_del_list_nl_fd; join thread.
+        if (ospfNlThread.joinable())
+            ospfNlThread.join();
 
         vrfClient.stop();
         return EXIT_SUCCESS;
