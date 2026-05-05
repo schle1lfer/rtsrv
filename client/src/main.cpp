@@ -93,8 +93,11 @@
 
 namespace po = boost::program_options;
 
-int prepare_route_add_remain_lb(std::expected<srmd::v1::GetRemainingNodesResponse, std::string>& rl,
-std::vector<const sra::KernelRoute*>& ospf32);
+int prepare_route_add_remain_lb(
+    sra::SraUdpClient& vrfClient,
+    const std::string& loopback_ipv4,
+    std::expected<srmd::v1::GetNodePrefixesResponse, std::string> &prefixes,
+    std::vector<const sra::KernelRoute*>& ospf32);
 
 // ---------------------------------------------------------------------------
 // Output helpers
@@ -4487,12 +4490,10 @@ int main(int argc, char* argv[])
                 }
 
                 // send ROUTE_ADD
-                // todo
+                // ── Step 7: Prepare ROUTE_ADD for Remaining Loopbacks ────────────────
+                prepare_route_add_remain_lb(vrfClient,node.loopback_ipv4(), nodeGl, ospf32);
             }
         }
-
-        // ── Step 7: Prepare ROUTE_ADD for Remaining Loopbacks ────────────────
-        prepare_route_add_remain_lb(rnResult, ospf32);
 
         // ── Step 8: OSPF /32 NetLink monitor (background thread) ────────────
         std::println("[add-del-list] starting OSPF /32 netlink monitor…");
@@ -4542,65 +4543,94 @@ int main(int argc, char* argv[])
     return EXIT_FAILURE;
 }
 //std::expected<srmd::v1::GetLoopbacksResponse, std::string> glResult
-int prepare_route_add_remain_lb(std::expected<srmd::v1::GetRemainingNodesResponse, std::string>& rl,
-std::vector<const sra::KernelRoute*>& ospf32)
+
+// dst=2.2.2.2/32 via=192.168.0.2 dev=Ethernet46 metric=20 table=254 proto=ospf
+// 
+int prepare_route_add_remain_lb(
+    sra::SraUdpClient& vrfClient,
+    const std::string& loopback_ipv4,
+    std::expected<srmd::v1::GetNodePrefixesResponse, std::string> &prefixes,
+    std::vector<const sra::KernelRoute*>& ospf32)
 {
-#if 0
     cmdproto::SingleRouteRequest singleReq;
-    singleReq.vrfs_name = vrfsName;
+    singleReq.vrfs_name = "RemainLoopbaks";
 
-    for (const auto& li : glResult->interfaces())
+    std::println("\r\n START for {}\r\n", loopback_ipv4);
+
+
+    std::println("[add-del-list] OSPF /32 routes: {}",
+        ospf32.size());
+    for (const auto* kr : ospf32)
     {
-        if (li.type() != "nni")
-            continue;
-        if (li.nexthop().empty())
-            continue;
+        std::println(
+            "[add-del-list]   dst={} via={} dev={} metric={}"
+            " table={} proto=ospf",
+            kr->destination,
+            kr->gateway.empty() ? "(none)" : kr->gateway,
+            kr->interfaceName.empty() ? "?" : kr->interfaceName,
+            kr->metric,
+            kr->table);
 
-        struct in_addr nhAddr
-        {};
-        if (::inet_pton(AF_INET, li.nexthop().c_str(), &nhAddr) != 1)
-            continue;
-        const auto* nhBytes =
-            reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
-
-        cmdproto::Interface entry{};
-        const std::string& ifn = li.name();
-        for (std::size_t k = 0;
-                k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
-                ++k)
-            entry.iface_name[k] = ifn[k];
-        entry.nexthop_addr_ipv4 = {
-            nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-        entry.nexthop_id_ipv4 = 0;
-
-        for (const auto& pfx : li.prefixes())
+        if (kr->destination.contains(loopback_ipv4) && )
         {
-            const std::string& pfxStr = pfx.prefix();
-            const auto slash = pfxStr.rfind('/');
-            if (slash == std::string::npos)
-                continue;
-            struct in_addr pfxAddr
+            std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
+            std::println(
+            "[add-del-list] prepare_route_add_remain_lb prepare ROUTE_ADD for {}", loopback_ipv4
+            );
+
+            struct in_addr nhAddr
             {};
-            if (::inet_pton(AF_INET,
-                            pfxStr.substr(0, slash).c_str(),
-                            &pfxAddr) != 1)
+            if (::inet_pton(AF_INET, kr->gateway.c_str(), &nhAddr) != 1)
                 continue;
-            const auto* pb =
-                reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
-            const auto maskLen = static_cast<std::uint8_t>(
-                std::stoul(pfxStr.substr(slash + 1)));
-            entry.prefixes.push_back(cmdproto::PrefixIpv4{
-                {pb[0], pb[1], pb[2], pb[3]}, maskLen});
+            const auto* nhBytes =
+                reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+
+            cmdproto::Interface entry{};
+            const std::string& ifn = kr->interfaceName;
+            for (std::size_t k = 0;
+                    k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+                    ++k)
+                entry.iface_name[k] = ifn[k];
+            entry.nexthop_addr_ipv4 = {
+                nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
+            entry.nexthop_id_ipv4 = 0;
+
+            for (const auto& pfx : prefixes->prefixes())
+            {
+                const std::string& pfxStr = pfx.prefix();
+                const auto slash = pfxStr.rfind('/');
+                if (slash == std::string::npos)
+                    continue;
+                struct in_addr pfxAddr
+                {};
+                if (::inet_pton(AF_INET,
+                                pfxStr.substr(0, slash).c_str(),
+                                &pfxAddr) != 1)
+                    continue;
+                const auto* pb =
+                    reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
+                const auto maskLen = static_cast<std::uint8_t>(
+                    std::stoul(pfxStr.substr(slash + 1)));
+                entry.prefixes.push_back(cmdproto::PrefixIpv4{
+                    {pb[0], pb[1], pb[2], pb[3]}, maskLen});
+            }
+
+            std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
+                            ifn,
+                            kr->gateway,
+                            entry.prefixes.size());
+
+            singleReq.interfaces.push_back(std::move(entry));
         }
+        //else
+        //{
+        //    std::println(
+        //    "[add-del-list] prepare_route_add_remain_lb NOT found {} loopback", loopback_ipv4
+        //    );
+        //}
 
-        std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
-                        ifn,
-                        li.nexthop(),
-                        entry.prefixes.size());
-
-        singleReq.interfaces.push_back(std::move(entry));
     }
-
+#if 1
     if (!singleReq.interfaces.empty())
     {
         // ── ROUTE_ADD ────────────────────────────────────────────────────
@@ -4609,31 +4639,13 @@ std::vector<const sra::KernelRoute*>& ospf32)
                         singleReq.interfaces.size());
         auto savedInterfaces = singleReq.interfaces;
         vrfClient.submitAdd(std::move(singleReq));
-
-        // ── ROUTE_DEL (one per prefix) ───────────────────────────────────
-        std::println("[add-del-list] [DEL] deleting each added prefix…");
-        for (const auto& iface : savedInterfaces)
-        {
-            for (const auto& pfx : iface.prefixes)
-            {
-                cmdproto::RouteDelParams delParams;
-                delParams.dst_addr = pfx.addr;
-                delParams.prefix_len = pfx.mask_len;
-                delParams.gateway = iface.nexthop_addr_ipv4;
-                delParams.if_name = std::string(iface.iface_name.data());
-                delParams.vrfs_name = vrfsName;
-                vrfClient.submitDelete(delParams);
-            }
-        }
-
-        // ── ROUTE_LIST ───────────────────────────────────────────────────
-        std::println("[add-del-list] [LIST] requesting route table…");
-        vrfClient.submitList(vrfsName);
     }
     else
     {
         std::println("[add-del-list] no interfaces to submit");
     }
 #endif
+
+    std::println("\r\n END for {}\r\n", loopback_ipv4);
     return 0;
 }
