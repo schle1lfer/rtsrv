@@ -4489,20 +4489,35 @@ int main(int argc, char* argv[])
                          ospf32.size());
             for (const auto* kr : ospf32)
             {
+                const bool isEcmp = kr->nexthops.size() > 1;
+                const bool isNhid = kr->nexthops.empty() && kr->nhid != 0;
+
                 std::println(
-                    "[add-del-list] id={} metric={} table={} proto=ospf",
+                    "[add-del-list] dst={} nhid={} metric={} table={} proto=ospf"
+                    "  type={}",
+                    kr->destination,
                     kr->nhid,
                     kr->metric,
-                    kr->table);
+                    kr->table,
+                    isEcmp ? "ecmp" : (isNhid ? "single-path(nhid)" : "single-path"));
 
-                for (const auto& nh : kr->nexthops)
+                if (isNhid)
                 {
-                    std::println(
-                        "\t\t\tnexthops: gw={} iface={} iface_idx={} weight={}",
-                        nh.gateway,
-                        nh.interfaceName,
-                        nh.interfaceIndex,
-                        nh.weight);
+                    // nexthop data lives in the kernel nexthop table under nhid;
+                    // it is not inlined in the route message
+                    std::println("\t\t\tnexthop: nhid={} (not resolved)", kr->nhid);
+                }
+                else
+                {
+                    for (const auto& nh : kr->nexthops)
+                    {
+                        std::println(
+                            "\t\t\tnexthop: gw={} iface={} iface_idx={} weight={}",
+                            nh.gateway,
+                            nh.interfaceName,
+                            nh.interfaceIndex,
+                            nh.weight);
+                    }
                 }
             }
         }
