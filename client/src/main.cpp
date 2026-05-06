@@ -4487,13 +4487,22 @@ int main(int argc, char* argv[])
                 for (const auto* kr : ospf32)
                 {
                     std::println(
-                        "[add-del-list]   dst={} via={} dev={} metric={}"
-                        " table={} proto=ospf",
-                        kr->destination,
-                        kr->gateway.empty() ? "(none)" : kr->gateway,
-                        kr->interfaceName.empty() ? "?" : kr->interfaceName,
+                        "[add-del-list] id={} metric={} table={} proto=ospf",
+                        kr->nhid,
                         kr->metric,
                         kr->table);
+                    
+                    for(const auto nh : kr->nexthops)
+                    {
+                        std::println(
+                        "\t\t\tnexthops: gw={} iface={} iface_idx={} weight={}",
+                        nh.gateway,
+                        nh.interfaceName,
+                        nh.interfaceIndex,
+                        nh.weight
+                        );
+                    }
+
                 }
             }
         }

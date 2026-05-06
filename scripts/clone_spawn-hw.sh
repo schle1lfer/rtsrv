@@ -38,6 +38,8 @@ device_index=0
 for ip in "${IPS[@]}"; do
     echo -ne ">>> Coping to $ip...\n"
 
+    ssh-keygen -f "/home/${USER}/.ssh/known_hosts" -R "${ip}"
+
     # instalations
     for dir in "${SRC_DIRS[@]}"; do
         echo -ne ">>> Coping $dir...\n"
