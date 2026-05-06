@@ -9,6 +9,7 @@
 
 #include "client/grpc_proc.hpp"
 
+#include <print>
 #include <stdexcept>
 
 namespace sra
@@ -134,6 +135,46 @@ std::size_t GrpcProc::storedResponseCount() const
 // Internal – thread entry point
 // ---------------------------------------------------------------------------
 
+// Build an error ResponsePayload that matches the variant index of the
+// request so callers can std::get<> the right type and check !result.
+static ResponsePayload makeErrorPayload(const RequestPayload& req,
+                                        const std::string& msg)
+{
+    return std::visit(
+        [&](const auto& params) -> ResponsePayload {
+            using P = std::decay_t<decltype(params)>;
+            if constexpr (std::is_same_v<P, EchoParams>)
+                return EchoResult(std::unexpected(msg));
+            else if constexpr (std::is_same_v<P, HeartbeatParams>)
+                return HeartbeatResult(std::unexpected(msg));
+            else if constexpr (std::is_same_v<P, AddRouteParams>)
+                return ResponsePayload(std::in_place_index<2>,
+                                       AddRouteResult(std::unexpected(msg)));
+            else if constexpr (std::is_same_v<P, RemoveRouteParams>)
+                return RemoveRouteResult(std::unexpected(msg));
+            else if constexpr (std::is_same_v<P, GetRouteParams>)
+                return ResponsePayload(std::in_place_index<4>,
+                                       GetRouteResult(std::unexpected(msg)));
+            else if constexpr (std::is_same_v<P, ListRoutesParams>)
+                return ListRoutesResult(std::unexpected(msg));
+            else if constexpr (std::is_same_v<P, SetLoopbackParams>)
+                return ResponsePayload(std::in_place_index<6>,
+                                       SetLoopbackResult(std::unexpected(msg)));
+            else if constexpr (std::is_same_v<P, GetLoopbackParams>)
+                return ResponsePayload(std::in_place_index<7>,
+                                       GetLoopbackResult(std::unexpected(msg)));
+            else if constexpr (std::is_same_v<P, GetLoopbacksParams>)
+                return GetLoopbacksResult(std::unexpected(msg));
+            else if constexpr (std::is_same_v<P, RequestLoopbackParams>)
+                return ResponsePayload(std::in_place_index<9>,
+                                       RequestLoopbackResult(std::unexpected(msg)));
+            else if constexpr (std::is_same_v<P, GetAllRoutesParams>)
+                return ResponsePayload(std::in_place_index<10>,
+                                       GetAllRoutesResult(std::unexpected(msg)));
+        },
+        req);
+}
+
 void GrpcProc::threadFunc()
 {
     while (true)
@@ -157,7 +198,25 @@ void GrpcProc::threadFunc()
         }
 
         // ── Execute the RPC ─────────────────────────────────────────────────
-        ResponsePayload result = dispatch(req);
+        ResponsePayload result;
+        try
+        {
+            result = dispatch(req);
+        }
+        catch (const std::exception& ex)
+        {
+            std::println(std::cerr,
+                         "[GrpcProc] RPC exception (id={}): {}",
+                         req.id, ex.what());
+            result = makeErrorPayload(req.payload, ex.what());
+        }
+        catch (...)
+        {
+            std::println(std::cerr,
+                         "[GrpcProc] RPC unknown exception (id={})",
+                         req.id);
+            result = makeErrorPayload(req.payload, "unknown exception");
+        }
 
         // ── Store the response ──────────────────────────────────────────────
         {
