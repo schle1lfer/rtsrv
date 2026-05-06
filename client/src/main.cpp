@@ -4455,54 +4455,56 @@ int main(int argc, char* argv[])
         }
 
         // ── Step 4: List current OSPF /32 routes from kernel routing table ──
-    
+
         std::println("[add-del-list] reading OSPF /32 routes from kernel…");
+        // Declared here so its lifetime covers all uses of ospf32 (which stores
+        // raw pointers into the vector elements).
+        std::expected<std::vector<sra::KernelRoute>, std::string> routesResult;
         try
         {
             sra::RoutingManager rm;
-            auto routesResult = rm.listRoutes(AF_INET, RT_TABLE_UNSPEC);
-            if (!routesResult)
-            {
-                std::println("[add-del-list] listRoutes (kernel) failed: {}",
-                             routesResult.error());
-            }
-            else
-            {
-                for (const auto& kr : *routesResult)
-                {
-                    if (kr.prefixLen == 32 &&
-                        kr.protocol == RTPROT_OSPF &&
-                        kr.type == RTN_UNICAST)
-                        ospf32.push_back(&kr);
-                }
-
-                std::println("[add-del-list] OSPF /32 routes: {}",
-                             ospf32.size());
-                for (const auto* kr : ospf32)
-                {
-                    std::println(
-                        "[add-del-list] id={} metric={} table={} proto=ospf",
-                        kr->nhid,
-                        kr->metric,
-                        kr->table);
-                    
-                    for(const auto nh : kr->nexthops)
-                    {
-                        std::println(
-                        "\t\t\tnexthops: gw={} iface={} iface_idx={} weight={}",
-                        nh.gateway,
-                        nh.interfaceName,
-                        nh.interfaceIndex,
-                        nh.weight
-                        );
-                    }
-
-                }
-            }
+            routesResult = rm.listRoutes(AF_INET, RT_TABLE_UNSPEC);
         }
         catch (const std::exception& e)
         {
             std::println("[add-del-list] RoutingManager exception: {}", e.what());
+        }
+
+        if (!routesResult)
+        {
+            std::println("[add-del-list] listRoutes (kernel) failed: {}",
+                         routesResult.error());
+        }
+        else
+        {
+            for (const auto& kr : *routesResult)
+            {
+                if (kr.prefixLen == 32 &&
+                    kr.protocol == RTPROT_OSPF &&
+                    kr.type == RTN_UNICAST)
+                    ospf32.push_back(&kr);
+            }
+
+            std::println("[add-del-list] OSPF /32 routes: {}",
+                         ospf32.size());
+            for (const auto* kr : ospf32)
+            {
+                std::println(
+                    "[add-del-list] id={} metric={} table={} proto=ospf",
+                    kr->nhid,
+                    kr->metric,
+                    kr->table);
+
+                for (const auto& nh : kr->nexthops)
+                {
+                    std::println(
+                        "\t\t\tnexthops: gw={} iface={} iface_idx={} weight={}",
+                        nh.gateway,
+                        nh.interfaceName,
+                        nh.interfaceIndex,
+                        nh.weight);
+                }
+            }
         }
 
         // ── Step 5: GetRemainingLoopbacks ────────────────────────────────────
