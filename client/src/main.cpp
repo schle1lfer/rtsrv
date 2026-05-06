@@ -4565,25 +4565,27 @@ int main(int argc, char* argv[])
                 {
                     if (!kr->destination.contains(node.loopback_ipv4()))
                         continue;
-                    if (kr->gateway.empty())
+                    const std::string krGw =
+                        kr->nexthops.empty() ? std::string{} : kr->nexthops[0].gateway;
+                    if (krGw.empty())
                         continue;
                     struct in_addr nhCheck{};
-                    if (::inet_pton(AF_INET, kr->gateway.c_str(), &nhCheck) != 1)
+                    if (::inet_pton(AF_INET, krGw.c_str(), &nhCheck) != 1)
                         continue;
-                    if (!neighborHasIp(startupNeighCtx, kr->gateway))
+                    if (!neighborHasIp(startupNeighCtx, krGw))
                     {
                         std::println("[add-del-list] nexthop '{}' for node '{}' "
                                      "not in adjacency table — sending ICMP echo "
                                      "request",
-                                     kr->gateway,
+                                     krGw,
                                      node.hostname());
-                        sendIcmpEchoRequest(kr->gateway);
+                        sendIcmpEchoRequest(krGw);
                     }
                     else
                     {
                         std::println("[add-del-list] nexthop '{}' for node '{}' "
                                      "already in adjacency table",
-                                     kr->gateway,
+                                     krGw,
                                      node.hostname());
                     }
                 }
@@ -4661,16 +4663,21 @@ int prepare_route_add_remain_lb(
         ospf32.size());
     for (const auto* kr : ospf32)
     {
+        const std::string krGw =
+            kr->nexthops.empty() ? std::string{} : kr->nexthops[0].gateway;
+        const std::string krIface =
+            kr->nexthops.empty() ? std::string{} : kr->nexthops[0].interfaceName;
+
         std::println(
             "[add-del-list]   dst={} via={} dev={} metric={}"
             " table={} proto=ospf",
             kr->destination,
-            kr->gateway.empty() ? "(none)" : kr->gateway,
-            kr->interfaceName.empty() ? "?" : kr->interfaceName,
+            krGw.empty() ? "(none)" : krGw,
+            krIface.empty() ? "?" : krIface,
             kr->metric,
             kr->table);
 
-        if (kr->destination.contains(loopback_ipv4) && !kr->interfaceName.empty())
+        if (kr->destination.contains(loopback_ipv4) && !krIface.empty())
         {
             std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
             std::println(
@@ -4679,17 +4686,16 @@ int prepare_route_add_remain_lb(
 
             struct in_addr nhAddr
             {};
-            if (::inet_pton(AF_INET, kr->gateway.c_str(), &nhAddr) != 1)
+            if (::inet_pton(AF_INET, krGw.c_str(), &nhAddr) != 1)
                 continue;
             const auto* nhBytes =
                 reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
             cmdproto::Interface entry{};
-            const std::string& ifn = kr->interfaceName;
             for (std::size_t k = 0;
-                    k < cmdproto::IFACE_NAME_SIZE && k < ifn.size();
+                    k < cmdproto::IFACE_NAME_SIZE && k < krIface.size();
                     ++k)
-                entry.iface_name[k] = ifn[k];
+                entry.iface_name[k] = krIface[k];
             entry.nexthop_addr_ipv4 = {
                 nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
             entry.nexthop_id_ipv4 = 0;
@@ -4715,8 +4721,8 @@ int prepare_route_add_remain_lb(
             }
 
             std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
-                            ifn,
-                            kr->gateway,
+                            krIface,
+                            krGw,
                             entry.prefixes.size());
 
             singleReq.interfaces.push_back(std::move(entry));
