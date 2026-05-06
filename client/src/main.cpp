@@ -4721,6 +4721,12 @@ int prepare_route_add_remain_lb(
                          kr->nhid,
                          entry.prefixes.size());
 
+            if (entry.prefixes.empty())
+            {
+                std::println("[add-del-list]   no prefixes — skipping ROUTE_ADD");
+                continue;
+            }
+
             singleReq.interfaces.push_back(std::move(entry));
         }
         //else
