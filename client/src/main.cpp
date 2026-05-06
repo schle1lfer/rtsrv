@@ -4565,10 +4565,11 @@ int main(int argc, char* argv[])
                     for (const auto& nh : kr->nexthops)
                     {
                         std::println("\t\t\tnexthop: gw={} iface={} "
-                                     "iface_idx={} weight={}",
+                                     "iface_idx={} hhid={} weight={}",
                                      nh.gateway,
                                      nh.interfaceName,
                                      nh.interfaceIndex,
+                                     nh.hhid,
                                      nh.weight);
                     }
                 }
