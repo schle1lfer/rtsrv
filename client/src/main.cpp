@@ -1397,9 +1397,13 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
 
                 /* Push to srmd so it is reflected in the server's route table.
                  */
+                const std::string firstGw =
+                    kr.nexthops.empty() ? std::string{} : kr.nexthops[0].gateway;
+                const std::string firstIface =
+                    kr.nexthops.empty() ? std::string{} : kr.nexthops[0].interfaceName;
                 auto result = client.addRoute(kr.destination,
-                                              kr.gateway,
-                                              kr.interfaceName,
+                                              firstGw,
+                                              firstIface,
                                               kr.metric,
                                               srmd::v1::ADDRESS_FAMILY_IPV4,
                                               srmd::v1::ROUTE_PROTOCOL_OSPF);
@@ -1424,11 +1428,6 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                 else if (kr.nhid != 0)
                 {
                     wr.nexthops = resolveNhid(kr.nhid, &ctx.nexthopTable);
-                }
-                else if (!kr.gateway.empty() || !kr.interfaceName.empty())
-                {
-                    wr.nexthops.push_back({kr.gateway, kr.interfaceName,
-                                           kr.interfaceIndex, 1});
                 }
                 if (result)
                 {
@@ -3491,11 +3490,6 @@ int main(int argc, char* argv[])
                         wr.nexthops.push_back(
                             {knh.gateway, knh.interfaceName,
                              knh.interfaceIndex, knh.weight});
-                }
-                else if (!kr.gateway.empty() || !kr.interfaceName.empty())
-                {
-                    wr.nexthops.push_back({kr.gateway, kr.interfaceName,
-                                           kr.interfaceIndex, 1});
                 }
                 // nhid-based routes: nexthops resolved in step 3b below.
                 startupRouteCtx.routes[kr.destination] = std::move(wr);

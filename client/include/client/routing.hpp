@@ -130,18 +130,19 @@ struct NetworkInterface
 // ---------------------------------------------------------------------------
 
 /**
- * @brief One nexthop entry from an @c RTA_MULTIPATH attribute.
+ * @brief One nexthop entry for a kernel route.
  *
- * Populated by RoutingManager::listRoutes() when the kernel encodes ECMP
- * nexthops inside a single @c RTA_MULTIPATH attribute (used by FRR/Zebra
- * for routes that do not use kernel nexthop objects).  Each element
- * corresponds to one @c struct rtnexthop entry.
+ * Used for every route nexthop: single-path routes, ECMP paths from an
+ * @c RTA_MULTIPATH attribute, and entries resolved from a kernel nexthop
+ * object (@c RTA_NH_ID).  Each element corresponds to one @c struct
+ * rtnexthop entry (or the single gateway/interface of a simple route).
  */
 struct KernelRouteNexthop
 {
-    std::string gateway;      ///< Next-hop IP address (empty if on-link).
-    std::string interfaceName; ///< Outgoing interface name (e.g. "eth0").
+    std::string gateway;        ///< Next-hop IP address (empty if on-link).
+    std::string interfaceName;  ///< Outgoing interface name (e.g. "eth0").
     uint32_t interfaceIndex{0}; ///< Outgoing interface kernel index.
+    uint32_t hhid{0};           ///< Per-nexthop handle ID (0 if absent).
     uint8_t weight{1}; ///< Actual ECMP weight (rtnh_hops + 1; 1 = equal-cost).
 };
 
@@ -156,28 +157,23 @@ struct KernelRouteNexthop
  * messages.  Field values mirror the corresponding @c struct rtmsg and
  * @c rtattr payload fields.
  *
- * ECMP handling
- * ─────────────
- * When the route uses kernel nexthop objects (FRR ≥ 7.5 with kernel ≥ 5.3),
- * @c nhid is non-zero and @c nexthops is empty; call resolveNhid() with the
- * separate nexthop table to expand the group into gateway/interface pairs.
+ * Nexthop handling
+ * ────────────────
+ * All nexthop information is stored in @c nexthops regardless of route type:
  *
- * When the route uses the legacy @c RTA_MULTIPATH attribute (older FRR or
- * routes added with @c "ip route add … nexthop … nexthop …"), @c nexthops
- * contains one @c KernelRouteNexthop per path and @c gateway / @c
- * interfaceName are empty.
- *
- * For simple (single-path) routes without nexthop objects, @c gateway and
- * @c interfaceName carry the single hop and @c nexthops is empty.
+ * - Simple single-path route: @c nexthops contains exactly one entry with the
+ *   gateway and/or interface; @c nhid is 0.
+ * - Legacy ECMP (@c RTA_MULTIPATH): @c nexthops contains one entry per path;
+ *   @c nhid is 0.
+ * - Kernel nexthop object (@c RTA_NH_ID, FRR ≥ 7.5 / kernel ≥ 5.3):
+ *   @c nhid is non-zero and @c nexthops is empty until resolved via
+ *   resolveNhid() against the separate nexthop table.
  */
 struct KernelRoute
 {
     std::string destination; ///< Destination prefix in CIDR (e.g. "10.0.0.0/8").
-    std::string gateway;     ///< Next-hop gateway (empty for ECMP / nhid routes).
-    std::string interfaceName;  ///< Outgoing interface (empty for ECMP / nhid routes).
-    uint32_t interfaceIndex{0}; ///< Outgoing interface index (0 if unknown).
-    uint32_t metric{0};         ///< Route priority; lower value wins.
-    uint32_t nhid{0};           ///< RTA_NH_ID: nexthop object ID (0 if absent).
+    uint32_t metric{0};      ///< Route priority; lower value wins.
+    uint32_t nhid{0};        ///< RTA_NH_ID: nexthop object ID (0 if absent).
     uint8_t prefixLen{0}; ///< Prefix length (duplicates the /N in destination).
     uint8_t protocol{0}; ///< Origin protocol (RTPROT_STATIC, RTPROT_ZEBRA, …).
     uint8_t type{RTN_UNICAST}; ///< Route type (RTN_UNICAST, RTN_BLACKHOLE, …).
@@ -186,8 +182,8 @@ struct KernelRoute
     int family{AF_INET}; ///< Address family: @c AF_INET or @c AF_INET6.
 
     /**
-     * @brief ECMP nexthops from @c RTA_MULTIPATH (empty for single-path and
-     *        nexthop-object routes).
+     * @brief All nexthops for this route (empty only for nhid-based routes
+     *        before resolution).
      */
     std::vector<KernelRouteNexthop> nexthops;
 };

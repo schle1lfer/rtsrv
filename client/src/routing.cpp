@@ -570,6 +570,10 @@ RoutingManager::listRoutes(int family, uint32_t table) const
         route.table = rtm->rtm_table;
 
         bool hasDst{false};
+        // Temporary storage for single-path nexthop attributes.
+        std::string spGateway;
+        std::string spIfName;
+        uint32_t spIfIndex{0};
 
         for (; RTA_OK(rta, attrLen); rta = RTA_NEXT(rta, attrLen))
         {
@@ -582,14 +586,14 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                 break;
 
             case RTA_GATEWAY:
-                route.gateway = addrToString(RTA_DATA(rta), route.family);
+                spGateway = addrToString(RTA_DATA(rta), route.family);
                 break;
 
             case RTA_OIF: {
                 uint32_t oif{};
                 std::memcpy(&oif, RTA_DATA(rta), sizeof(oif));
-                route.interfaceIndex = oif;
-                route.interfaceName = ifIndexToName(oif);
+                spIfIndex = oif;
+                spIfName  = ifIndexToName(oif);
                 break;
             }
 
@@ -649,6 +653,19 @@ RoutingManager::listRoutes(int family, uint32_t table) const
             default:
                 break;
             }
+        }
+
+        // For single-path routes (no RTA_MULTIPATH, no RTA_NH_ID) pack the
+        // gateway/interface into a single KernelRouteNexthop so all nexthop
+        // data lives uniformly in nexthops.
+        if (route.nexthops.empty() && route.nhid == 0 &&
+            (!spGateway.empty() || !spIfName.empty()))
+        {
+            KernelRouteNexthop knh;
+            knh.gateway       = std::move(spGateway);
+            knh.interfaceName = std::move(spIfName);
+            knh.interfaceIndex = spIfIndex;
+            route.nexthops.push_back(std::move(knh));
         }
 
         // Synthesise a CIDR destination string for the default route, which
