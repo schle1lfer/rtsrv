@@ -4679,28 +4679,22 @@ int prepare_route_add_remain_lb(
             kr->metric,
             kr->table);
 
-        if (kr->destination.contains(loopback_ipv4) && !krIface.empty())
+        if (kr->destination.contains(loopback_ipv4) &&
+            (kr->nhid != 0 || !krIface.empty()))
         {
             std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
             std::println(
-            "[add-del-list] prepare_route_add_remain_lb prepare ROUTE_ADD for {}", loopback_ipv4
-            );
-
-            struct in_addr nhAddr
-            {};
-            if (::inet_pton(AF_INET, krGw.c_str(), &nhAddr) != 1)
-                continue;
-            const auto* nhBytes =
-                reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+                "[add-del-list] prepare_route_add_remain_lb prepare ROUTE_ADD for {}",
+                loopback_ipv4);
 
             cmdproto::Interface entry{};
+            static constexpr std::string_view kUnneeded = "unneeded";
             for (std::size_t k = 0;
-                    k < cmdproto::IFACE_NAME_SIZE && k < krIface.size();
-                    ++k)
-                entry.iface_name[k] = krIface[k];
-            entry.nexthop_addr_ipv4 = {
-                nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-            entry.nexthop_id_ipv4 = 0;
+                 k < cmdproto::IFACE_NAME_SIZE && k < kUnneeded.size();
+                 ++k)
+                entry.iface_name[k] = kUnneeded[k];
+            entry.nexthop_addr_ipv4 = {0, 0, 0, 0};
+            entry.nexthop_id_ipv4   = kr->nhid;
 
             for (const auto& pfx : prefixes->prefixes())
             {
@@ -4722,10 +4716,10 @@ int prepare_route_add_remain_lb(
                     {pb[0], pb[1], pb[2], pb[3]}, maskLen});
             }
 
-            std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
-                            krIface,
-                            krGw,
-                            entry.prefixes.size());
+            std::println("[add-del-list]   iface='unneeded' nexthop=0.0.0.0"
+                         " nhid={} prefixes={}",
+                         kr->nhid,
+                         entry.prefixes.size());
 
             singleReq.interfaces.push_back(std::move(entry));
         }
