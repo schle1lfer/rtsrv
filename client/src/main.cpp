@@ -656,6 +656,48 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
     }
 }
 
+/** @brief One member of a nexthop group, with its raw kernel weight. */
+struct NhGroupMember
+{
+    uint32_t id{0};    ///< Nexthop ID of this group member
+    uint8_t weight{0}; ///< Raw kernel weight; actual weight = weight + 1
+};
+
+/**
+ * @brief A single row in the dynamic nexthop table.
+ *
+ * All fields mirror the corresponding @c netlink_nexthop_t members so the
+ * table carries the complete nhmsg header and every NHA_* attribute.
+ */
+struct NexthopEntry
+{
+    /* ── From struct nhmsg ─────────────────────────────────────────────── */
+    uint32_t id{0};      ///< NHA_ID: unique nexthop identifier
+    uint8_t family{0};   ///< nh_family: AF_INET/AF_INET6/AF_UNSPEC
+    uint8_t scope{0};    ///< nh_scope: RT_SCOPE_*
+    uint8_t protocol{0}; ///< nh_protocol: RTPROT_*
+    uint32_t flags{0};   ///< nh_flags: RTNH_F_* bitmask
+    /* ── NHA_OIF ───────────────────────────────────────────────────────── */
+    uint32_t oif{0};      ///< Output interface index (0 = absent)
+    std::string oif_name; ///< Resolved interface name
+    /* ── NHA_GATEWAY ───────────────────────────────────────────────────── */
+    std::string gateway; ///< Gateway address string ("" = absent)
+    /* ── NHA_BLACKHOLE ─────────────────────────────────────────────────── */
+    uint8_t blackhole{0}; ///< 1 if this is a blackhole nexthop
+    /* ── NHA_FDB ───────────────────────────────────────────────────────── */
+    uint8_t fdb{0}; ///< 1 if nexthop is offloaded to FDB
+    /* ── NHA_MASTER ────────────────────────────────────────────────────── */
+    uint32_t master{0};      ///< Master device index (0 = absent)
+    std::string master_name; ///< Resolved master device name
+    /* ── NHA_GROUP ─────────────────────────────────────────────────────── */
+    bool is_group{false};                    ///< True when NHA_GROUP is present
+    std::vector<NhGroupMember> group_members; ///< Group member IDs and weights
+    /* ── NHA_GROUP_TYPE ────────────────────────────────────────────────── */
+    uint16_t group_type{0}; ///< 0=mpath (ECMP), 1=resilient
+    /* ── NHA_ENCAP_TYPE ────────────────────────────────────────────────── */
+    uint16_t encap_type{0}; ///< Encapsulation type (LWTUNNEL_ENCAP_*)
+};
+
 /** @brief One resolved nexthop entry inside a WatchRoute. */
 struct NhInfo
 {
@@ -727,6 +769,13 @@ static std::string protoLabel(uint8_t proto)
 /* Forward declarations for helpers defined later in this file. */
 static std::string familyLabel(uint8_t family);
 static std::string scopeLabel(uint8_t scope);
+static std::vector<NhInfo> resolveNhid(
+    uint32_t nhid, const std::map<uint32_t, NexthopEntry>* nexthops);
+// Populate-only nexthop callback — accepts std::map<uint32_t,NexthopEntry>*
+// as user_data; defined after NexthopEntry (no NexthopCtx needed).
+static void nlNhDumpToMapCb(netlink_nexthop_event_t event,
+                             const netlink_nexthop_t* nh,
+                             void* user_data);
 
 /**
  * @brief Pretty-prints the dynamic /32 OSPF route table.
@@ -855,6 +904,7 @@ struct WatchCtx
     std::string loopback; ///< Node's own loopback IP for GetLoopbacks
     sra::UdpTableServer*
         udpServer; ///< UDP publisher (port 9003); may be nullptr
+    std::map<uint32_t, NexthopEntry> nexthopTable; ///< nhid → entry for resolving ECMP
 };
 
 /**
@@ -916,6 +966,29 @@ static void nlWatchCb(netlink_event_t event,
 
     const srmd::v1::RouteProtocol proto = mapRtProtocol(route->protocol);
 
+    /* Helper: build a WatchRoute from this netlink message, resolving nhid
+     * from the context's nexthop table when available. */
+    auto makeWatchRoute = [&](const std::string& srmdId) -> WatchRoute {
+        WatchRoute wr;
+        wr.dest     = dest;
+        wr.nhid     = route->nhid;
+        wr.metric   = route->metric;
+        wr.table    = route->table;
+        wr.protocol = route->protocol;
+        wr.srmdId   = srmdId;
+        wr.family   = route->family;
+        wr.dst_len  = route->dst_len;
+        wr.tos      = route->tos;
+        wr.scope    = route->scope;
+        wr.type     = route->type;
+        wr.flags    = route->flags;
+        if (route->nhid != 0)
+            wr.nexthops = resolveNhid(route->nhid, &ctx->nexthopTable);
+        if (wr.nexthops.empty() && (!gw.empty() || !iface.empty()))
+            wr.nexthops.push_back({gw, iface, route->ifindex, 1});
+        return wr;
+    };
+
     // only for OSPF now
     if (proto == srmd::v1::ROUTE_PROTOCOL_OSPF)
     {
@@ -935,23 +1008,7 @@ static void nlWatchCb(netlink_event_t event,
 
             if (result)
             {
-                WatchRoute wr;
-                wr.dest = dest;
-                wr.nhid = route->nhid;
-                wr.metric = route->metric;
-                wr.table = route->table;
-                wr.protocol = route->protocol;
-                wr.srmdId = result->id();
-                wr.family = route->family;
-                wr.dst_len = route->dst_len;
-                wr.tos = route->tos;
-                wr.scope = route->scope;
-                wr.type = route->type;
-                wr.flags = route->flags;
-                if (!gw.empty() || !iface.empty())
-                    wr.nexthops.push_back({gw, iface,
-                                           route->ifindex, 1});
-                ctx->routes[key] = std::move(wr);
+                ctx->routes[key] = makeWatchRoute(result->id());
                 std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
                              ts,
                              dest,
@@ -1016,22 +1073,7 @@ static void nlWatchCb(netlink_event_t event,
             else
             {
                 /* Track with empty srmdId so REMOVED events still clean up. */
-                WatchRoute wr;
-                wr.dest = dest;
-                wr.nhid = route->nhid;
-                wr.metric = route->metric;
-                wr.table = route->table;
-                wr.protocol = route->protocol;
-                wr.family = route->family;
-                wr.dst_len = route->dst_len;
-                wr.tos = route->tos;
-                wr.scope = route->scope;
-                wr.type = route->type;
-                wr.flags = route->flags;
-                if (!gw.empty() || !iface.empty())
-                    wr.nexthops.push_back({gw, iface,
-                                           route->ifindex, 1});
-                ctx->routes[key] = std::move(wr);
+                ctx->routes[key] = makeWatchRoute({});
                 std::println("{} [ADDED]   {} → gRPC FAILED: {}",
                              ts,
                              dest,
@@ -1064,23 +1106,7 @@ static void nlWatchCb(netlink_event_t event,
 
             if (result)
             {
-                WatchRoute wr;
-                wr.dest = dest;
-                wr.nhid = route->nhid;
-                wr.metric = route->metric;
-                wr.table = route->table;
-                wr.protocol = route->protocol;
-                wr.srmdId = result->id();
-                wr.family = route->family;
-                wr.dst_len = route->dst_len;
-                wr.tos = route->tos;
-                wr.scope = route->scope;
-                wr.type = route->type;
-                wr.flags = route->flags;
-                if (!gw.empty() || !iface.empty())
-                    wr.nexthops.push_back({gw, iface,
-                                           route->ifindex, 1});
-                ctx->routes[key] = std::move(wr);
+                ctx->routes[key] = makeWatchRoute(result->id());
                 std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
                              ts,
                              dest,
@@ -1091,22 +1117,7 @@ static void nlWatchCb(netlink_event_t event,
             }
             else
             {
-                WatchRoute wr;
-                wr.dest = dest;
-                wr.nhid = route->nhid;
-                wr.metric = route->metric;
-                wr.table = route->table;
-                wr.protocol = route->protocol;
-                wr.family = route->family;
-                wr.dst_len = route->dst_len;
-                wr.tos = route->tos;
-                wr.scope = route->scope;
-                wr.type = route->type;
-                wr.flags = route->flags;
-                if (!gw.empty() || !iface.empty())
-                    wr.nexthops.push_back({gw, iface,
-                                           route->ifindex, 1});
-                ctx->routes[key] = std::move(wr);
+                ctx->routes[key] = makeWatchRoute({});
                 std::println("{} [CHANGED] {} → gRPC FAILED: {}",
                              ts,
                              dest,
@@ -1403,9 +1414,22 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                 wr.dst_len = kr.prefixLen;
                 wr.scope = kr.scope;
                 wr.type = kr.type;
-                if (!kr.gateway.empty() || !kr.interfaceName.empty())
+                if (!kr.nexthops.empty())
+                {
+                    for (const auto& knh : kr.nexthops)
+                        wr.nexthops.push_back(
+                            {knh.gateway, knh.interfaceName,
+                             knh.interfaceIndex, knh.weight});
+                }
+                else if (kr.nhid != 0)
+                {
+                    wr.nexthops = resolveNhid(kr.nhid, &ctx.nexthopTable);
+                }
+                else if (!kr.gateway.empty() || !kr.interfaceName.empty())
+                {
                     wr.nexthops.push_back({kr.gateway, kr.interfaceName,
                                            kr.interfaceIndex, 1});
+                }
                 if (result)
                 {
                     wr.srmdId = result->id();
@@ -1435,6 +1459,22 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
         std::println(std::cerr,
                      "[Startup] Warning: RoutingManager init failed: {}",
                      e.what());
+    }
+
+    // ── Step 1b: Dump kernel nexthop table for nhid resolution ───────────
+    {
+        int nhfd = netlink_nexthop_init();
+        if (nhfd >= 0)
+        {
+            netlink_nexthop_dump(nhfd, nlNhDumpToMapCb, &ctx.nexthopTable);
+            netlink_nexthop_close(nhfd);
+        }
+    }
+    // Re-resolve any nhid-based routes now that the nexthop table is ready.
+    for (auto& [key, wr] : ctx.routes)
+    {
+        if (wr.nhid != 0 && wr.nexthops.empty())
+            wr.nexthops = resolveNhid(wr.nhid, &ctx.nexthopTable);
     }
 
     // ── Step 2: Publish initial route table via UDP (port 9003) ─────────
@@ -2088,48 +2128,6 @@ static std::string rtnhFlagsLabel(uint32_t flags)
     return s;
 }
 
-/** @brief One member of a nexthop group, with its raw kernel weight. */
-struct NhGroupMember
-{
-    uint32_t id{0};      ///< Nexthop ID of this group member
-    uint8_t weight{0};   ///< Raw kernel weight; actual weight = weight + 1
-};
-
-/**
- * @brief A single row in the dynamic nexthop table.
- *
- * All fields mirror the corresponding @c netlink_nexthop_t members so the
- * table carries the complete nhmsg header and every NHA_* attribute.
- */
-struct NexthopEntry
-{
-    /* ── From struct nhmsg ─────────────────────────────────────────────── */
-    uint32_t id{0};      ///< NHA_ID: unique nexthop identifier
-    uint8_t family{0};   ///< nh_family: AF_INET/AF_INET6/AF_UNSPEC
-    uint8_t scope{0};    ///< nh_scope: RT_SCOPE_*
-    uint8_t protocol{0}; ///< nh_protocol: RTPROT_*
-    uint32_t flags{0};   ///< nh_flags: RTNH_F_* bitmask
-    /* ── NHA_OIF ───────────────────────────────────────────────────────── */
-    uint32_t oif{0};      ///< Output interface index (0 = absent)
-    std::string oif_name; ///< Resolved interface name
-    /* ── NHA_GATEWAY ───────────────────────────────────────────────────── */
-    std::string gateway; ///< Gateway address string ("" = absent)
-    /* ── NHA_BLACKHOLE ─────────────────────────────────────────────────── */
-    uint8_t blackhole{0}; ///< 1 if this is a blackhole nexthop
-    /* ── NHA_FDB ───────────────────────────────────────────────────────── */
-    uint8_t fdb{0}; ///< 1 if nexthop is offloaded to FDB
-    /* ── NHA_MASTER ────────────────────────────────────────────────────── */
-    uint32_t master{0};      ///< Master device index (0 = absent)
-    std::string master_name; ///< Resolved master device name
-    /* ── NHA_GROUP ─────────────────────────────────────────────────────── */
-    bool is_group{false};                  ///< True when NHA_GROUP is present
-    std::vector<NhGroupMember> group_members; ///< Group member IDs and weights
-    /* ── NHA_GROUP_TYPE ────────────────────────────────────────────────── */
-    uint16_t group_type{0}; ///< 0=mpath (ECMP), 1=resilient
-    /* ── NHA_ENCAP_TYPE ────────────────────────────────────────────────── */
-    uint16_t encap_type{0}; ///< Encapsulation type (LWTUNNEL_ENCAP_*)
-};
-
 /** @brief Formats a nexthop group member list as "id,id,…" for display. */
 static std::string formatGroupIds(const std::vector<NhGroupMember>& members)
 {
@@ -2143,6 +2141,44 @@ static std::string formatGroupIds(const std::vector<NhGroupMember>& members)
         s += std::to_string(m.id);
     }
     return s;
+}
+
+/**
+ * @brief Populate-only netlink nexthop callback that writes directly into a
+ *        @c std::map<uint32_t,NexthopEntry>.
+ *
+ * Used when a full NexthopCtx is not available (e.g., the one-shot dump in
+ * cmdNetlinkWatch).  Passed as user_data should be a pointer to the map.
+ */
+static void nlNhDumpToMapCb(netlink_nexthop_event_t event,
+                             const netlink_nexthop_t* nh,
+                             void* user_data)
+{
+    auto* tbl = static_cast<std::map<uint32_t, NexthopEntry>*>(user_data);
+    if (event == NETLINK_NEXTHOP_REMOVED)
+    {
+        tbl->erase(nh->id);
+        return;
+    }
+    NexthopEntry e;
+    e.id         = nh->id;
+    e.family     = nh->family;
+    e.scope      = nh->scope;
+    e.protocol   = nh->protocol;
+    e.flags      = nh->flags;
+    e.oif        = nh->oif;
+    e.oif_name   = nh->oif_name;
+    e.gateway    = nh->gateway;
+    e.blackhole  = nh->blackhole;
+    e.fdb        = nh->fdb;
+    e.master     = nh->master;
+    e.master_name = nh->master_name;
+    e.is_group   = (nh->group_count > 0);
+    for (uint32_t i = 0; i < nh->group_count; ++i)
+        e.group_members.push_back({nh->group[i].id, nh->group[i].weight});
+    e.group_type  = nh->group_type;
+    e.encap_type  = nh->encap_type;
+    (*tbl)[nh->id] = std::move(e);
 }
 
 /**
@@ -3449,9 +3485,19 @@ int main(int argc, char* argv[])
                 wr.dst_len = kr.prefixLen;
                 wr.scope = kr.scope;
                 wr.type = kr.type;
-                if (!kr.gateway.empty() || !kr.interfaceName.empty())
+                if (!kr.nexthops.empty())
+                {
+                    for (const auto& knh : kr.nexthops)
+                        wr.nexthops.push_back(
+                            {knh.gateway, knh.interfaceName,
+                             knh.interfaceIndex, knh.weight});
+                }
+                else if (!kr.gateway.empty() || !kr.interfaceName.empty())
+                {
                     wr.nexthops.push_back({kr.gateway, kr.interfaceName,
                                            kr.interfaceIndex, 1});
+                }
+                // nhid-based routes: nexthops resolved in step 3b below.
                 startupRouteCtx.routes[kr.destination] = std::move(wr);
             }
         }
