@@ -13,7 +13,7 @@
  * | msg_id   | uint16_t  | 2    | Request/response correlation  |
  * | payload  | uint8_t[] | var  | Type-specific data            |
  *
- * 
+ *
  * @date    2026
  */
 
@@ -122,11 +122,12 @@ namespace routeproto
  * | commands     | uint8_t[] | N    | Encoded command bytes              |
  * | crc          | uint16_t  | 2    | CRC-16/IBM over all preceding bytes|
  *
- * @note  data_length must equal 4 + 4 + N + 2 = 10 + N, where N == num_commands.
+ * @note  data_length must equal 4 + 4 + N + 2 = 10 + N, where N ==
+ * num_commands.
  */
 struct ExchangeData
 {
-    std::uint32_t num_commands{};       ///< Byte length of @c commands on the wire
+    std::uint32_t num_commands{}; ///< Byte length of @c commands on the wire
     std::vector<std::uint8_t> commands; ///< Routing command bytes
 };
 

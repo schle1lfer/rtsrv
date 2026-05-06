@@ -135,8 +135,8 @@ struct ExNhInfo
  */
 struct ExRoute
 {
-    std::string dest;    ///< e.g. "10.0.0.1/32"
-    uint32_t nhid{0};    ///< nexthop object ID (0 when inline)
+    std::string dest; ///< e.g. "10.0.0.1/32"
+    uint32_t nhid{0}; ///< nexthop object ID (0 when inline)
     uint32_t metric{0};
     uint32_t table{254}; ///< RT_TABLE_MAIN
     std::string protocol;
@@ -323,7 +323,7 @@ int main()
     std::vector<ExNeighbor> neighbors = {
         {"inet", "192.168.0.2", "aa:bb:cc:dd:ee:01", "Ethernet46", "reachable"},
         {"inet", "192.168.0.6", "aa:bb:cc:dd:ee:02", "Ethernet47", "reachable"},
-        {"inet6", "fe80::1",    "aa:bb:cc:dd:ee:03", "Ethernet46", "stale"},
+        {"inet6", "fe80::1", "aa:bb:cc:dd:ee:03", "Ethernet46", "stale"},
     };
     udp.setNeighborData(serializeNeighbors(neighbors));
 
@@ -334,32 +334,32 @@ int main()
     // scenario from FRR zebra.
     std::vector<ExNexthop> nexthops = {
         {
-            .id       = 354,
-            .family   = "inet",
-            .gateway  = "192.168.0.2",
-            .oif      = "Ethernet46",
+            .id = 354,
+            .family = "inet",
+            .gateway = "192.168.0.2",
+            .oif = "Ethernet46",
             .protocol = "zebra",
-            .scope    = "global",
-            .flags    = "0x0",
+            .scope = "global",
+            .flags = "0x0",
         },
         {
-            .id       = 364,
-            .family   = "inet",
-            .gateway  = "192.168.0.6",
-            .oif      = "Ethernet47",
+            .id = 364,
+            .family = "inet",
+            .gateway = "192.168.0.6",
+            .oif = "Ethernet47",
             .protocol = "zebra",
-            .scope    = "global",
-            .flags    = "0x0",
+            .scope = "global",
+            .flags = "0x0",
         },
         {
-            .id          = 363,
-            .family      = "-",
-            .protocol    = "zebra",
-            .scope       = "-",
-            .flags       = "0x0",
-            .is_group    = true,
+            .id = 363,
+            .family = "-",
+            .protocol = "zebra",
+            .scope = "-",
+            .flags = "0x0",
+            .is_group = true,
             .group_members = {{354, 0}, {364, 0}}, // weight 0 → actual 1
-            .group_type  = "mpath",
+            .group_type = "mpath",
         },
     };
     udp.setNexthopData(serializeNexthops(nexthops));
@@ -370,33 +370,35 @@ int main()
     // Inline simple route for 3.3.3.3/32 (no nexthop object).
     std::vector<ExRoute> routes = {
         {
-            .dest     = "2.2.2.2/32",
-            .nhid     = 363,
-            .metric   = 20,
-            .table    = 254,
+            .dest = "2.2.2.2/32",
+            .nhid = 363,
+            .metric = 20,
+            .table = 254,
             .protocol = "ospf",
-            .family   = "inet",
-            .dst_len  = 32,
-            .scope    = "global",
-            .srmd_id  = "(pending)",
-            .nexthops = {
-                {"192.168.0.2", "Ethernet46", 46, 1},
-                {"192.168.0.6", "Ethernet47", 47, 1},
-            },
+            .family = "inet",
+            .dst_len = 32,
+            .scope = "global",
+            .srmd_id = "(pending)",
+            .nexthops =
+                {
+                    {"192.168.0.2", "Ethernet46", 46, 1},
+                    {"192.168.0.6", "Ethernet47", 47, 1},
+                },
         },
         {
-            .dest     = "3.3.3.3/32",
-            .nhid     = 0,
-            .metric   = 20,
-            .table    = 254,
+            .dest = "3.3.3.3/32",
+            .nhid = 0,
+            .metric = 20,
+            .table = 254,
             .protocol = "ospf",
-            .family   = "inet",
-            .dst_len  = 32,
-            .scope    = "global",
-            .srmd_id  = "(pending)",
-            .nexthops = {
-                {"10.0.0.1", "eth0", 2, 1},
-            },
+            .family = "inet",
+            .dst_len = 32,
+            .scope = "global",
+            .srmd_id = "(pending)",
+            .nexthops =
+                {
+                    {"10.0.0.1", "eth0", 2, 1},
+                },
         },
     };
     udp.setRouteData(serializeRoutes(routes));
@@ -429,9 +431,11 @@ int main()
             std::println("[event] NEIGH ADDED 192.168.1.10 on Ethernet48 "
                          "(pushed to port {} subscribers)",
                          sra::UDP_PORT_NEIGHBORS);
-            neighbors.push_back(
-                {"inet", "192.168.1.10", "de:ad:be:ef:00:01", "Ethernet48",
-                 "reachable"});
+            neighbors.push_back({"inet",
+                                 "192.168.1.10",
+                                 "de:ad:be:ef:00:01",
+                                 "Ethernet48",
+                                 "reachable"});
             udp.setNeighborData(serializeNeighbors(neighbors));
         }
         else if (cycle == 1)
@@ -442,23 +446,23 @@ int main()
                          "group id=371 (pushed to port {} subscribers)",
                          sra::UDP_PORT_NEXTHOPS);
             nexthops.push_back({
-                .id       = 370,
-                .family   = "inet",
-                .gateway  = "192.168.1.10",
-                .oif      = "Ethernet48",
+                .id = 370,
+                .family = "inet",
+                .gateway = "192.168.1.10",
+                .oif = "Ethernet48",
                 .protocol = "zebra",
-                .scope    = "global",
-                .flags    = "0x0",
+                .scope = "global",
+                .flags = "0x0",
             });
             nexthops.push_back({
-                .id           = 371,
-                .family       = "-",
-                .protocol     = "zebra",
-                .scope        = "-",
-                .flags        = "0x0",
-                .is_group     = true,
+                .id = 371,
+                .family = "-",
+                .protocol = "zebra",
+                .scope = "-",
+                .flags = "0x0",
+                .is_group = true,
                 .group_members = {{354, 0}, {370, 0}},
-                .group_type   = "mpath",
+                .group_type = "mpath",
             });
             udp.setNexthopData(serializeNexthops(nexthops));
         }
@@ -469,19 +473,20 @@ int main()
                          "(pushed to port {} subscribers)",
                          sra::UDP_PORT_ROUTES);
             routes.push_back({
-                .dest     = "4.4.4.4/32",
-                .nhid     = 371,
-                .metric   = 20,
-                .table    = 254,
+                .dest = "4.4.4.4/32",
+                .nhid = 371,
+                .metric = 20,
+                .table = 254,
                 .protocol = "ospf",
-                .family   = "inet",
-                .dst_len  = 32,
-                .scope    = "global",
-                .srmd_id  = "(pending)",
-                .nexthops = {
-                    {"192.168.0.2",  "Ethernet46", 46, 1},
-                    {"192.168.1.10", "Ethernet48", 48, 1},
-                },
+                .family = "inet",
+                .dst_len = 32,
+                .scope = "global",
+                .srmd_id = "(pending)",
+                .nexthops =
+                    {
+                        {"192.168.0.2", "Ethernet46", 46, 1},
+                        {"192.168.1.10", "Ethernet48", 48, 1},
+                    },
             });
             udp.setRouteData(serializeRoutes(routes));
         }

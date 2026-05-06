@@ -265,9 +265,8 @@ void SraUdpClient::threadFunc()
         return;
     }
     net::Socket conn = std::move(*conn_result);
-    std::println("[SraUdpClient] connected fd={} path='{}'",
-                 conn.fd(),
-                 socketPath_);
+    std::println(
+        "[SraUdpClient] connected fd={} path='{}'", conn.fd(), socketPath_);
 
     while (true)
     {
@@ -289,10 +288,11 @@ void SraUdpClient::threadFunc()
                 using T = std::decay_t<decltype(r)>;
                 if constexpr (std::is_same_v<T, cmdproto::SingleRouteRequest>)
                     processAddRequest(conn.fd(), r);
-                //else if constexpr (std::is_same_v<T, cmdproto::RouteDelParams>)
-                //    processDeleteRequest(conn.fd(), r);
-                //else if constexpr (std::is_same_v<T, RouteListRequest>)
-                //    processListRequest(conn.fd(), r);
+                // else if constexpr (std::is_same_v<T,
+                // cmdproto::RouteDelParams>)
+                //     processDeleteRequest(conn.fd(), r);
+                // else if constexpr (std::is_same_v<T, RouteListRequest>)
+                //     processListRequest(conn.fd(), r);
             },
             req);
     }
@@ -305,7 +305,8 @@ void SraUdpClient::threadFunc()
 // processAddRequest — ROUTE_ADD binary payload
 // ---------------------------------------------------------------------------
 
-void SraUdpClient::processAddRequest(int fd, const cmdproto::SingleRouteRequest& req)
+void SraUdpClient::processAddRequest(int fd,
+                                     const cmdproto::SingleRouteRequest& req)
 {
     static std::uint16_t s_msg_id = 1;
     const std::uint16_t msg_id = s_msg_id++;
@@ -509,7 +510,8 @@ void SraUdpClient::processAddRequest(int fd, const cmdproto::SingleRouteRequest&
 // processDeleteRequest — ROUTE_DEL TLV
 // ---------------------------------------------------------------------------
 
-void SraUdpClient::processDeleteRequest(int fd, const cmdproto::RouteDelParams& params)
+void SraUdpClient::processDeleteRequest(int fd,
+                                        const cmdproto::RouteDelParams& params)
 {
     static std::uint16_t s_msg_id =
         0x8000; // separate counter to distinguish add/del
@@ -646,12 +648,12 @@ void SraUdpClient::processListRequest(int fd, const RouteListRequest& req)
         0xC000; // separate counter for list commands
     const std::uint16_t msg_id = s_msg_id++;
 
-    std::println("[SraUdpClient] ROUTE_LIST msg_id={} vrf='{}'",
-                 msg_id,
-                 req.vrfs_name);
+    std::println(
+        "[SraUdpClient] ROUTE_LIST msg_id={} vrf='{}'", msg_id, req.vrfs_name);
 
     // ── [1] Encode cmdproto ROUTE_LIST command ───────────────────────────────
-    auto cmd_bytes = cmdproto::encode_command(cmdproto::make_route_list(req.vrfs_name));
+    auto cmd_bytes =
+        cmdproto::encode_command(cmdproto::make_route_list(req.vrfs_name));
     if (!cmd_bytes)
     {
         std::println(stderr,

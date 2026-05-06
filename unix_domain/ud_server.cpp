@@ -372,10 +372,10 @@ static void handle_connection(net::Socket conn)
                 result = dispatch_route_add(cmd);
                 break;
             case cmdproto::CmdId::ROUTE_DEL:
-                //result = dispatch_route_del(cmd);
+                // result = dispatch_route_del(cmd);
                 break;
             case cmdproto::CmdId::ROUTE_LIST:
-                //result = dispatch_route_list(cmd);
+                // result = dispatch_route_list(cmd);
                 break;
             default:
                 std::println("[ud_server] unsupported cmd_id=0x{:02x}",
@@ -475,12 +475,11 @@ log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
 static std::expected<std::vector<netlink::RouteEntry>, std::error_code>
 log_route_list(std::shared_ptr<netlink::RouteListParams> p)
 {
-    logger::log(
-        logger::INFO,
-        "cmdproto: LIST CB",
-        std::format("log_route_list: vrf='{}' table={}",
-                    p->vrfs_name,
-                    static_cast<unsigned>(p->table)));
+    logger::log(logger::INFO,
+                "cmdproto: LIST CB",
+                std::format("log_route_list: vrf='{}' table={}",
+                            p->vrfs_name,
+                            static_cast<unsigned>(p->table)));
     // p goes out of scope — RouteListParams is freed here.
     return std::vector<netlink::RouteEntry>{};
 }

@@ -5,7 +5,7 @@
  * Provides RAII socket handles, address reuse, non-blocking mode,
  * and send/receive helpers over AF_UNIX stream sockets.
  *
- * 
+ *
  * @date    2026
  */
 

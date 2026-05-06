@@ -4,7 +4,7 @@
  *
  * Compiled into both lib/ud_proto.so (shared) and lib/ud_proto.ar (static).
  *
- * 
+ *
  * @date    2026
  */
 
@@ -19,7 +19,7 @@
 
 // Canonical constexpr-equivalent constant: maximum data bytes per batch packet
 // (4 KB).
-static_assert(udproto::MAX_DATA_PER_PACKET == 1024*100,
+static_assert(udproto::MAX_DATA_PER_PACKET == 1024 * 100,
               "MAX_DATA_PER_PACKET must be 4096 bytes (100 KB)");
 
 namespace udproto

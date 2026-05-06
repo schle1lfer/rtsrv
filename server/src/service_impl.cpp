@@ -610,15 +610,14 @@ grpc::Status SwitchRouteManagerImpl::GetRemainingNodes(
     }
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
-    resp->set_message(std::format(
-        "OK: {} remaining node(s) (excluding '{}')",
-        count,
-        clientNode->hostname));
+    resp->set_message(std::format("OK: {} remaining node(s) (excluding '{}')",
+                                  count,
+                                  clientNode->hostname));
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[GetRemainingNodes] node='{}' → {} remaining node(s)",
-        clientNode->hostname,
-        count);
+    BOOST_LOG_TRIVIAL(info)
+        << std::format("[GetRemainingNodes] node='{}' → {} remaining node(s)",
+                       clientNode->hostname,
+                       count);
 
     return grpc::Status::OK;
 }
@@ -636,7 +635,9 @@ grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
 
     BOOST_LOG_TRIVIAL(debug) << std::format(
         "[GetLoopbacksByNodeIp] peer='{}' clientIp='{}' node_ip='{}'",
-        ctx->peer(), clientIp, req->node_ip());
+        ctx->peer(),
+        clientIp,
+        req->node_ip());
 
     // Authorise: caller must be registered in the SOT.
     const SotNode* clientNode = sotConfig_.findByManagementIp(clientIp);
@@ -694,12 +695,14 @@ grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
     }
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
-    resp->set_message(std::format("OK: node '{}' – {} prefix(es)",
-                                  targetNode->hostname, pfxCount));
+    resp->set_message(std::format(
+        "OK: node '{}' – {} prefix(es)", targetNode->hostname, pfxCount));
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[GetLoopbacksByNodeIp] node='{}' ({}) → {} prefix(es)",
-        targetNode->hostname, req->node_ip(), pfxCount);
+    BOOST_LOG_TRIVIAL(info)
+        << std::format("[GetLoopbacksByNodeIp] node='{}' ({}) → {} prefix(es)",
+                       targetNode->hostname,
+                       req->node_ip(),
+                       pfxCount);
 
     return grpc::Status::OK;
 }

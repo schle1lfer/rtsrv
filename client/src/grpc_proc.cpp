@@ -166,11 +166,13 @@ static ResponsePayload makeErrorPayload(const RequestPayload& req,
             else if constexpr (std::is_same_v<P, GetLoopbacksParams>)
                 return GetLoopbacksResult(std::unexpected(msg));
             else if constexpr (std::is_same_v<P, RequestLoopbackParams>)
-                return ResponsePayload(std::in_place_index<9>,
-                                       RequestLoopbackResult(std::unexpected(msg)));
+                return ResponsePayload(
+                    std::in_place_index<9>,
+                    RequestLoopbackResult(std::unexpected(msg)));
             else if constexpr (std::is_same_v<P, GetAllRoutesParams>)
-                return ResponsePayload(std::in_place_index<10>,
-                                       GetAllRoutesResult(std::unexpected(msg)));
+                return ResponsePayload(
+                    std::in_place_index<10>,
+                    GetAllRoutesResult(std::unexpected(msg)));
         },
         req);
 }
@@ -207,14 +209,14 @@ void GrpcProc::threadFunc()
         {
             std::println(std::cerr,
                          "[GrpcProc] RPC exception (id={}): {}",
-                         req.id, ex.what());
+                         req.id,
+                         ex.what());
             result = makeErrorPayload(req.payload, ex.what());
         }
         catch (...)
         {
-            std::println(std::cerr,
-                         "[GrpcProc] RPC unknown exception (id={})",
-                         req.id);
+            std::println(
+                std::cerr, "[GrpcProc] RPC unknown exception (id={})", req.id);
             result = makeErrorPayload(req.payload, "unknown exception");
         }
 

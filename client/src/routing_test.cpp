@@ -96,11 +96,16 @@ static constexpr uint32_t kMetricReplaced = 200;
 static void printRoute(const sra::KernelRoute& route, int indent = 10)
 {
     const std::string pad(static_cast<std::size_t>(indent), ' ');
-    const std::string gw = route.nexthops.empty() ? "-"
-        : (route.nexthops[0].gateway.empty() ? "-" : route.nexthops[0].gateway);
-    const std::string dev = route.nexthops.empty() ? "-"
-        : (route.nexthops[0].interfaceName.empty() ? "-"
-                                                    : route.nexthops[0].interfaceName);
+    const std::string gw =
+        route.nexthops.empty()
+            ? "-"
+            : (route.nexthops[0].gateway.empty() ? "-"
+                                                 : route.nexthops[0].gateway);
+    const std::string dev = route.nexthops.empty()
+                                ? "-"
+                                : (route.nexthops[0].interfaceName.empty()
+                                       ? "-"
+                                       : route.nexthops[0].interfaceName);
     std::println("{}dst={:<18} gw={:<15} dev={:<10} metric={:>6}  "
                  "table={:>3}  proto={}",
                  pad,

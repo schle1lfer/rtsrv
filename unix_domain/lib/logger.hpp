@@ -31,7 +31,7 @@
  *  - @c --loglevel=1  →  emit everything (DEBUG through EMERG)
  *  - @c --loglevel=7  →  emit EMERG only
  *
- * 
+ *
  * @date    2026
  */
 

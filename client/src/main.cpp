@@ -96,7 +96,7 @@ namespace po = boost::program_options;
 int prepare_route_add_remain_lb(
     sra::SraUdpClient& vrfClient,
     const std::string& loopback_ipv4,
-    std::expected<srmd::v1::GetNodePrefixesResponse, std::string> &prefixes,
+    std::expected<srmd::v1::GetNodePrefixesResponse, std::string>& prefixes,
     const std::vector<const sra::KernelRoute*>& ospf32);
 
 // ---------------------------------------------------------------------------
@@ -690,7 +690,7 @@ struct NexthopEntry
     uint32_t master{0};      ///< Master device index (0 = absent)
     std::string master_name; ///< Resolved master device name
     /* ── NHA_GROUP ─────────────────────────────────────────────────────── */
-    bool is_group{false};                    ///< True when NHA_GROUP is present
+    bool is_group{false}; ///< True when NHA_GROUP is present
     std::vector<NhGroupMember> group_members; ///< Group member IDs and weights
     /* ── NHA_GROUP_TYPE ────────────────────────────────────────────────── */
     uint16_t group_type{0}; ///< 0=mpath (ECMP), 1=resilient
@@ -717,13 +717,13 @@ struct NhInfo
 struct WatchRoute
 {
     /* ── Destination ───────────────────────────────────────────────────── */
-    std::string dest;    ///< Destination prefix (e.g. "10.0.0.1/32").
+    std::string dest; ///< Destination prefix (e.g. "10.0.0.1/32").
     /* ── Nexthop resolution ─────────────────────────────────────────────── */
-    uint32_t nhid{0};              ///< RTA_NH_ID nexthop object ID (0 = none).
-    std::vector<NhInfo> nexthops;  ///< Resolved nexthops (gateway, dev, weight).
+    uint32_t nhid{0};             ///< RTA_NH_ID nexthop object ID (0 = none).
+    std::vector<NhInfo> nexthops; ///< Resolved nexthops (gateway, dev, weight).
     /* ── Route attributes ──────────────────────────────────────────────── */
-    uint32_t metric{0};  ///< RTA_PRIORITY: route metric / preference.
-    uint32_t table{0};   ///< RTA_TABLE / rtm_table: routing table ID.
+    uint32_t metric{0}; ///< RTA_PRIORITY: route metric / preference.
+    uint32_t table{0};  ///< RTA_TABLE / rtm_table: routing table ID.
     /* ── From struct rtmsg ─────────────────────────────────────────────── */
     uint8_t protocol{0}; ///< rtm_protocol: RTPROT_OSPF, RTPROT_ZEBRA, …
     /* ── gRPC tracking ─────────────────────────────────────────────────── */
@@ -769,13 +769,13 @@ static std::string protoLabel(uint8_t proto)
 /* Forward declarations for helpers defined later in this file. */
 static std::string familyLabel(uint8_t family);
 static std::string scopeLabel(uint8_t scope);
-static std::vector<NhInfo> resolveNhid(
-    uint32_t nhid, const std::map<uint32_t, NexthopEntry>* nexthops);
+static std::vector<NhInfo>
+resolveNhid(uint32_t nhid, const std::map<uint32_t, NexthopEntry>* nexthops);
 // Populate-only nexthop callback — accepts std::map<uint32_t,NexthopEntry>*
 // as user_data; defined after NexthopEntry (no NexthopCtx needed).
 static void nlNhDumpToMapCb(netlink_nexthop_event_t event,
-                             const netlink_nexthop_t* nh,
-                             void* user_data);
+                            const netlink_nexthop_t* nh,
+                            void* user_data);
 
 /**
  * @brief Pretty-prints the dynamic /32 OSPF route table.
@@ -833,10 +833,11 @@ static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
             {
                 const std::string gw =
                     nh.gateway.empty() ? "-" : "via " + nh.gateway;
-                const std::string dev =
-                    nh.dev.empty() ? "-" : "dev " + nh.dev;
+                const std::string dev = nh.dev.empty() ? "-" : "dev " + nh.dev;
                 std::println("    nexthop {}  {}  weight {}",
-                             gw, dev, static_cast<unsigned>(nh.weight));
+                             gw,
+                             dev,
+                             static_cast<unsigned>(nh.weight));
             }
         }
     }
@@ -900,11 +901,13 @@ serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
 struct WatchCtx
 {
     sra::RouteClient* client;
-    std::map<std::string, WatchRoute> routes; ///< dest → WatchRoute (one per dest)
+    std::map<std::string, WatchRoute>
+        routes;           ///< dest → WatchRoute (one per dest)
     std::string loopback; ///< Node's own loopback IP for GetLoopbacks
     sra::UdpTableServer*
         udpServer; ///< UDP publisher (port 9003); may be nullptr
-    std::map<uint32_t, NexthopEntry> nexthopTable; ///< nhid → entry for resolving ECMP
+    std::map<uint32_t, NexthopEntry>
+        nexthopTable; ///< nhid → entry for resolving ECMP
 };
 
 /**
@@ -970,18 +973,18 @@ static void nlWatchCb(netlink_event_t event,
      * from the context's nexthop table when available. */
     auto makeWatchRoute = [&](const std::string& srmdId) -> WatchRoute {
         WatchRoute wr;
-        wr.dest     = dest;
-        wr.nhid     = route->nhid;
-        wr.metric   = route->metric;
-        wr.table    = route->table;
+        wr.dest = dest;
+        wr.nhid = route->nhid;
+        wr.metric = route->metric;
+        wr.table = route->table;
         wr.protocol = route->protocol;
-        wr.srmdId   = srmdId;
-        wr.family   = route->family;
-        wr.dst_len  = route->dst_len;
-        wr.tos      = route->tos;
-        wr.scope    = route->scope;
-        wr.type     = route->type;
-        wr.flags    = route->flags;
+        wr.srmdId = srmdId;
+        wr.family = route->family;
+        wr.dst_len = route->dst_len;
+        wr.tos = route->tos;
+        wr.scope = route->scope;
+        wr.type = route->type;
+        wr.flags = route->flags;
         if (route->nhid != 0)
             wr.nexthops = resolveNhid(route->nhid, &ctx->nexthopTable);
         if (wr.nexthops.empty() && (!gw.empty() || !iface.empty()))
@@ -1086,13 +1089,17 @@ static void nlWatchCb(netlink_event_t event,
         {
             /* Remove the existing entry for this destination from srmd. */
             auto existing = ctx->routes.find(key);
-            if (existing != ctx->routes.end() && !existing->second.srmdId.empty())
+            if (existing != ctx->routes.end() &&
+                !existing->second.srmdId.empty())
             {
-                auto rmResult = ctx->client->removeRoute(existing->second.srmdId);
+                auto rmResult =
+                    ctx->client->removeRoute(existing->second.srmdId);
                 if (!rmResult)
                 {
                     std::println("{} [CHANGED] {} stale-remove failed: {}",
-                                 ts, dest, rmResult.error());
+                                 ts,
+                                 dest,
+                                 rmResult.error());
                 }
                 ctx->routes.erase(existing);
             }
@@ -1131,8 +1138,8 @@ static void nlWatchCb(netlink_event_t event,
             auto it = ctx->routes.find(key);
             if (it == ctx->routes.end())
             {
-                std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
-                             ts, dest);
+                std::println(
+                    "{} [REMOVED] {} (not tracked – no gRPC call)", ts, dest);
                 std::cout.flush();
                 return;
             }
@@ -1142,8 +1149,8 @@ static void nlWatchCb(netlink_event_t event,
 
             if (id.empty())
             {
-                std::println("{} [REMOVED] {} (no server ID – no gRPC call)",
-                             ts, dest);
+                std::println(
+                    "{} [REMOVED] {} (no server ID – no gRPC call)", ts, dest);
             }
             else
             {
@@ -1151,12 +1158,16 @@ static void nlWatchCb(netlink_event_t event,
                 if (result)
                 {
                     std::println("{} [REMOVED] {} id={}",
-                                 ts, dest, id.substr(0, 8) + "…");
+                                 ts,
+                                 dest,
+                                 id.substr(0, 8) + "…");
                 }
                 else
                 {
                     std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                                 ts, dest, result.error());
+                                 ts,
+                                 dest,
+                                 result.error());
                 }
             }
         }
@@ -1282,7 +1293,8 @@ static void demoSigHandler(int /*signo*/)
     g_demo_stop = 1;
 }
 
-/** @brief Stop flag for the 'add-del-list' daemon command (set by signal handler). */
+/** @brief Stop flag for the 'add-del-list' daemon command (set by signal
+ * handler). */
 static volatile sig_atomic_t g_add_del_list_stop = 0;
 
 /** @brief Netlink fd used by the add-del-list OSPF monitor thread.
@@ -1323,15 +1335,15 @@ static void addDelListSigHandler(int /*signo*/)
  * @param user_data  Unused (nullptr).
  */
 static void addDelListOspfCb(netlink_event_t event,
-                              const netlink_route32_t* route,
-                              void* /*user_data*/)
+                             const netlink_route32_t* route,
+                             void* /*user_data*/)
 {
     if (route->protocol != RTPROT_OSPF)
         return;
 
-    const char* evLabel = (event == NETLINK_ROUTE_ADDED)   ? "ADD"
-                        : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
-                                                           : "CHG";
+    const char* evLabel = (event == NETLINK_ROUTE_ADDED)     ? "ADD"
+                          : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
+                                                             : "CHG";
     char dst[INET_ADDRSTRLEN];
     char gw[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &route->dst, dst, sizeof(dst));
@@ -1397,10 +1409,12 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
 
                 /* Push to srmd so it is reflected in the server's route table.
                  */
-                const std::string firstGw =
-                    kr.nexthops.empty() ? std::string{} : kr.nexthops[0].gateway;
+                const std::string firstGw = kr.nexthops.empty()
+                                                ? std::string{}
+                                                : kr.nexthops[0].gateway;
                 const std::string firstIface =
-                    kr.nexthops.empty() ? std::string{} : kr.nexthops[0].interfaceName;
+                    kr.nexthops.empty() ? std::string{}
+                                        : kr.nexthops[0].interfaceName;
                 auto result = client.addRoute(kr.destination,
                                               firstGw,
                                               firstIface,
@@ -1421,9 +1435,10 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                 if (!kr.nexthops.empty())
                 {
                     for (const auto& knh : kr.nexthops)
-                        wr.nexthops.push_back(
-                            {knh.gateway, knh.interfaceName,
-                             knh.interfaceIndex, knh.weight});
+                        wr.nexthops.push_back({knh.gateway,
+                                               knh.interfaceName,
+                                               knh.interfaceIndex,
+                                               knh.weight});
                 }
                 else if (kr.nhid != 0)
                 {
@@ -2150,8 +2165,8 @@ static std::string formatGroupIds(const std::vector<NhGroupMember>& members)
  * cmdNetlinkWatch).  Passed as user_data should be a pointer to the map.
  */
 static void nlNhDumpToMapCb(netlink_nexthop_event_t event,
-                             const netlink_nexthop_t* nh,
-                             void* user_data)
+                            const netlink_nexthop_t* nh,
+                            void* user_data)
 {
     auto* tbl = static_cast<std::map<uint32_t, NexthopEntry>*>(user_data);
     if (event == NETLINK_NEXTHOP_REMOVED)
@@ -2160,23 +2175,23 @@ static void nlNhDumpToMapCb(netlink_nexthop_event_t event,
         return;
     }
     NexthopEntry e;
-    e.id         = nh->id;
-    e.family     = nh->family;
-    e.scope      = nh->scope;
-    e.protocol   = nh->protocol;
-    e.flags      = nh->flags;
-    e.oif        = nh->oif;
-    e.oif_name   = nh->oif_name;
-    e.gateway    = nh->gateway;
-    e.blackhole  = nh->blackhole;
-    e.fdb        = nh->fdb;
-    e.master     = nh->master;
+    e.id = nh->id;
+    e.family = nh->family;
+    e.scope = nh->scope;
+    e.protocol = nh->protocol;
+    e.flags = nh->flags;
+    e.oif = nh->oif;
+    e.oif_name = nh->oif_name;
+    e.gateway = nh->gateway;
+    e.blackhole = nh->blackhole;
+    e.fdb = nh->fdb;
+    e.master = nh->master;
     e.master_name = nh->master_name;
-    e.is_group   = (nh->group_count > 0);
+    e.is_group = (nh->group_count > 0);
     for (uint32_t i = 0; i < nh->group_count; ++i)
         e.group_members.push_back({nh->group[i].id, nh->group[i].weight});
-    e.group_type  = nh->group_type;
-    e.encap_type  = nh->encap_type;
+    e.group_type = nh->group_type;
+    e.encap_type = nh->encap_type;
     (*tbl)[nh->id] = std::move(e);
 }
 
@@ -2241,15 +2256,49 @@ static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
         std::println(
             "│ {:>{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ "
             "{:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │",
-            id, cI, fam, cF, scp, cO, pro, cP, flg, cL, oif, cN,
-            gw, cG, grpFlag, cQ, grpIds, cR, gtp, cT, bh, cB, fdb, cD,
-            mst, cM);
+            id,
+            cI,
+            fam,
+            cF,
+            scp,
+            cO,
+            pro,
+            cP,
+            flg,
+            cL,
+            oif,
+            cN,
+            gw,
+            cG,
+            grpFlag,
+            cQ,
+            grpIds,
+            cR,
+            gtp,
+            cT,
+            bh,
+            cB,
+            fdb,
+            cD,
+            mst,
+            cM);
     };
 
     std::println("\n Nexthop Table  ({} entry/entries)", nexthops.size());
     std::println("{}", top);
-    printRow("ID", "Family", "Scope", "Protocol", "Flags", "OIF", "Gateway",
-             "Grp", "Group IDs", "GrpType", "BH", "FDB", "Master");
+    printRow("ID",
+             "Family",
+             "Scope",
+             "Protocol",
+             "Flags",
+             "OIF",
+             "Gateway",
+             "Grp",
+             "Group IDs",
+             "GrpType",
+             "BH",
+             "FDB",
+             "Master");
 
     if (nexthops.empty())
     {
@@ -2268,9 +2317,8 @@ static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
             nh.master_name.empty()
                 ? (nh.master ? std::to_string(nh.master) : "-")
                 : nh.master_name;
-        const std::string gtp = nh.is_group
-                                    ? (nh.group_type == 0 ? "mpath" : "resilient")
-                                    : "-";
+        const std::string gtp =
+            nh.is_group ? (nh.group_type == 0 ? "mpath" : "resilient") : "-";
         printRow(std::to_string(nh.id),
                  familyLabel(nh.family),
                  scopeLabel(nh.scope),
@@ -2314,9 +2362,8 @@ serializeNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
             nh.master_name.empty()
                 ? (nh.master ? std::to_string(nh.master) : "-")
                 : nh.master_name;
-        const std::string gtp = nh.is_group
-                                    ? (nh.group_type == 0 ? "mpath" : "resilient")
-                                    : "-";
+        const std::string gtp =
+            nh.is_group ? (nh.group_type == 0 ? "mpath" : "resilient") : "-";
         os << std::format(
             "id={} family={} scope={} proto={} flags={} oif={} gw={}"
             " is_group={} group_ids={} group_type={} encap_type={}"
@@ -2696,9 +2743,11 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
  */
 struct StartupRouteCtx
 {
-    std::map<std::string, WatchRoute> routes; ///< dest → WatchRoute (one per dst)
+    std::map<std::string, WatchRoute>
+        routes; ///< dest → WatchRoute (one per dst)
     sra::UdpTableServer* udpServer{nullptr};
-    const std::map<uint32_t, NexthopEntry>* nexthops{nullptr}; ///< read-only NH table
+    const std::map<uint32_t, NexthopEntry>* nexthops{
+        nullptr}; ///< read-only NH table
 };
 
 /**
@@ -2708,9 +2757,8 @@ struct StartupRouteCtx
  * recursively by one level.  Returns an empty vector when nhid is 0 or
  * the table is null / missing the entry.
  */
-static std::vector<NhInfo> resolveNhid(
-    uint32_t nhid,
-    const std::map<uint32_t, NexthopEntry>* nexthops)
+static std::vector<NhInfo>
+resolveNhid(uint32_t nhid, const std::map<uint32_t, NexthopEntry>* nexthops)
 {
     if (!nexthops || nhid == 0)
         return {};
@@ -2958,11 +3006,10 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
     // would fail silently and serves no useful purpose here.
     if (neighCtx && neighborHasIp(*neighCtx, gateway))
     {
-        std::println(
-            "[Nexthops] nexthop gw={} id={} in adjacency table — "
-            "sending ICMP echo request",
-            gateway,
-            nh->id);
+        std::println("[Nexthops] nexthop gw={} id={} in adjacency table — "
+                     "sending ICMP echo request",
+                     gateway,
+                     nh->id);
         sendIcmpEchoRequest(gateway);
     }
 
@@ -3487,9 +3534,10 @@ int main(int argc, char* argv[])
                 if (!kr.nexthops.empty())
                 {
                     for (const auto& knh : kr.nexthops)
-                        wr.nexthops.push_back(
-                            {knh.gateway, knh.interfaceName,
-                             knh.interfaceIndex, knh.weight});
+                        wr.nexthops.push_back({knh.gateway,
+                                               knh.interfaceName,
+                                               knh.interfaceIndex,
+                                               knh.weight});
                 }
                 // nhid-based routes: nexthops resolved in step 3b below.
                 startupRouteCtx.routes[kr.destination] = std::move(wr);
@@ -4192,8 +4240,8 @@ int main(int argc, char* argv[])
 
             if (req.interfaces.empty())
             {
-                std::println(
-                    "[run] nexthop '{}' has no nni interfaces — skip", gateway);
+                std::println("[run] nexthop '{}' has no nni interfaces — skip",
+                             gateway);
                 continue;
             }
 
@@ -4261,7 +4309,7 @@ int main(int argc, char* argv[])
     if (command == "add-del-list")
     {
         std::vector<const sra::KernelRoute*> ospf32;
-        
+
         const std::string socketPath =
             args.empty() ? "/tmp/ud_server.sock" : args[0];
 
@@ -4270,7 +4318,8 @@ int main(int argc, char* argv[])
         // Install signal handler so CTRL+C triggers a clean shutdown instead
         // of leaving the process stuck in StartupGuard::~StartupGuard().
         {
-            struct sigaction sa{};
+            struct sigaction sa
+            {};
             sa.sa_handler = addDelListSigHandler;
             sigemptyset(&sa.sa_mask);
             sigaction(SIGINT, &sa, nullptr);
@@ -4330,7 +4379,8 @@ int main(int argc, char* argv[])
             const std::string& nh = li.nexthop();
             if (nh.empty())
                 continue;
-            struct in_addr nhCheck{};
+            struct in_addr nhCheck
+            {};
             if (::inet_pton(AF_INET, nh.c_str(), &nhCheck) != 1)
                 continue;
             if (!neighborHasIp(startupNeighCtx, nh))
@@ -4355,7 +4405,8 @@ int main(int argc, char* argv[])
         {
             for (const auto& route : arResult2->routes())
             {
-                if (route.interface_type() == "nni" && !route.vrf_name().empty())
+                if (route.interface_type() == "nni" &&
+                    !route.vrf_name().empty())
                 {
                     vrfsName = route.vrf_name();
                     break;
@@ -4467,7 +4518,8 @@ int main(int argc, char* argv[])
         }
         catch (const std::exception& e)
         {
-            std::println("[add-del-list] RoutingManager exception: {}", e.what());
+            std::println("[add-del-list] RoutingManager exception: {}",
+                         e.what());
         }
 
         if (!routesResult)
@@ -4479,44 +4531,45 @@ int main(int argc, char* argv[])
         {
             for (const auto& kr : *routesResult)
             {
-                if (kr.prefixLen == 32 &&
-                    kr.protocol == RTPROT_OSPF &&
+                if (kr.prefixLen == 32 && kr.protocol == RTPROT_OSPF &&
                     kr.type == RTN_UNICAST)
                     ospf32.push_back(&kr);
             }
 
-            std::println("[add-del-list] OSPF /32 routes: {}",
-                         ospf32.size());
+            std::println("[add-del-list] OSPF /32 routes: {}", ospf32.size());
             for (const auto* kr : ospf32)
             {
                 const bool isEcmp = kr->nexthops.size() > 1;
                 const bool isNhid = kr->nexthops.empty() && kr->nhid != 0;
 
                 std::println(
-                    "[add-del-list] dst={} nhid={} metric={} table={} proto=ospf"
+                    "[add-del-list] dst={} nhid={} metric={} table={} "
+                    "proto=ospf"
                     "  type={}",
                     kr->destination,
                     kr->nhid,
                     kr->metric,
                     kr->table,
-                    isEcmp ? "ecmp" : (isNhid ? "single-path(nhid)" : "single-path"));
+                    isEcmp ? "ecmp"
+                           : (isNhid ? "single-path(nhid)" : "single-path"));
 
                 if (isNhid)
                 {
-                    // nexthop data lives in the kernel nexthop table under nhid;
-                    // it is not inlined in the route message
-                    std::println("\t\t\tnexthop: nhid={} (not resolved)", kr->nhid);
+                    // nexthop data lives in the kernel nexthop table under
+                    // nhid; it is not inlined in the route message
+                    std::println("\t\t\tnexthop: nhid={} (not resolved)",
+                                 kr->nhid);
                 }
                 else
                 {
                     for (const auto& nh : kr->nexthops)
                     {
-                        std::println(
-                            "\t\t\tnexthop: gw={} iface={} iface_idx={} weight={}",
-                            nh.gateway,
-                            nh.interfaceName,
-                            nh.interfaceIndex,
-                            nh.weight);
+                        std::println("\t\t\tnexthop: gw={} iface={} "
+                                     "iface_idx={} weight={}",
+                                     nh.gateway,
+                                     nh.interfaceName,
+                                     nh.interfaceIndex,
+                                     nh.weight);
                     }
                 }
             }
@@ -4550,15 +4603,14 @@ int main(int argc, char* argv[])
             {
                 const std::string& nodeIp = node.management_ip();
 
-                std::println(
-                    "[add-del-list] GetLoopbacksByNodeIp: node='{}' "
-                    "node_ip='{}'…",
-                    node.hostname(), nodeIp);
+                std::println("[add-del-list] GetLoopbacksByNodeIp: node='{}' "
+                             "node_ip='{}'…",
+                             node.hostname(),
+                             nodeIp);
                 auto nodeGl = client.getLoopbacksByNodeIp(nodeIp);
                 if (!nodeGl)
                 {
-                    std::println("[add-del-list]   failed: {}",
-                                 nodeGl.error());
+                    std::println("[add-del-list]   failed: {}", nodeGl.error());
                     continue;
                 }
 
@@ -4569,7 +4621,9 @@ int main(int argc, char* argv[])
                     std::println(
                         "[add-del-list]     prefix='{}' weight={} role='{}'"
                         " description='{}'",
-                        pfx.prefix(), pfx.weight(), pfx.role(),
+                        pfx.prefix(),
+                        pfx.weight(),
+                        pfx.role(),
                         pfx.description());
                 }
 
@@ -4582,34 +4636,40 @@ int main(int argc, char* argv[])
                 {
                     if (!kr->destination.contains(node.loopback_ipv4()))
                         continue;
-                    const std::string krGw =
-                        kr->nexthops.empty() ? std::string{} : kr->nexthops[0].gateway;
+                    const std::string krGw = kr->nexthops.empty()
+                                                 ? std::string{}
+                                                 : kr->nexthops[0].gateway;
                     if (krGw.empty())
                         continue;
-                    struct in_addr nhCheck{};
+                    struct in_addr nhCheck
+                    {};
                     if (::inet_pton(AF_INET, krGw.c_str(), &nhCheck) != 1)
                         continue;
                     if (!neighborHasIp(startupNeighCtx, krGw))
                     {
-                        std::println("[add-del-list] nexthop '{}' for node '{}' "
-                                     "not in adjacency table — sending ICMP echo "
-                                     "request",
-                                     krGw,
-                                     node.hostname());
+                        std::println(
+                            "[add-del-list] nexthop '{}' for node '{}' "
+                            "not in adjacency table — sending ICMP echo "
+                            "request",
+                            krGw,
+                            node.hostname());
                         sendIcmpEchoRequest(krGw);
                     }
                     else
                     {
-                        std::println("[add-del-list] nexthop '{}' for node '{}' "
-                                     "already in adjacency table",
-                                     krGw,
-                                     node.hostname());
+                        std::println(
+                            "[add-del-list] nexthop '{}' for node '{}' "
+                            "already in adjacency table",
+                            krGw,
+                            node.hostname());
                     }
                 }
 
                 // send ROUTE_ADD
-                // ── Step 7: Prepare ROUTE_ADD for Remaining Loopbacks ────────────────
-                prepare_route_add_remain_lb(vrfClient,node.loopback_ipv4(), nodeGl, ospf32);
+                // ── Step 7: Prepare ROUTE_ADD for Remaining Loopbacks
+                // ────────────────
+                prepare_route_add_remain_lb(
+                    vrfClient, node.loopback_ipv4(), nodeGl, ospf32);
             }
         }
 
@@ -4660,14 +4720,14 @@ int main(int argc, char* argv[])
     std::println(std::cerr, "Run 'sra --help' for usage.");
     return EXIT_FAILURE;
 }
-//std::expected<srmd::v1::GetLoopbacksResponse, std::string> glResult
+// std::expected<srmd::v1::GetLoopbacksResponse, std::string> glResult
 
 // dst=2.2.2.2/32 via=192.168.0.2 dev=Ethernet46 metric=20 table=254 proto=ospf
-// 
+//
 int prepare_route_add_remain_lb(
     sra::SraUdpClient& vrfClient,
     const std::string& loopback_ipv4,
-    std::expected<srmd::v1::GetNodePrefixesResponse, std::string> &prefixes,
+    std::expected<srmd::v1::GetNodePrefixesResponse, std::string>& prefixes,
     const std::vector<const sra::KernelRoute*>& ospf32)
 {
     cmdproto::SingleRouteRequest singleReq;
@@ -4675,32 +4735,30 @@ int prepare_route_add_remain_lb(
 
     std::println("\r\n START for {}\r\n", loopback_ipv4);
 
-
-    std::println("[add-del-list] OSPF /32 routes: {}",
-        ospf32.size());
+    std::println("[add-del-list] OSPF /32 routes: {}", ospf32.size());
     for (const auto* kr : ospf32)
     {
         const std::string krGw =
             kr->nexthops.empty() ? std::string{} : kr->nexthops[0].gateway;
-        const std::string krIface =
-            kr->nexthops.empty() ? std::string{} : kr->nexthops[0].interfaceName;
+        const std::string krIface = kr->nexthops.empty()
+                                        ? std::string{}
+                                        : kr->nexthops[0].interfaceName;
 
-        std::println(
-            "[add-del-list]   dst={} via={} dev={} metric={}"
-            " table={} proto=ospf",
-            kr->destination,
-            krGw.empty() ? "(none)" : krGw,
-            krIface.empty() ? "?" : krIface,
-            kr->metric,
-            kr->table);
+        std::println("[add-del-list]   dst={} via={} dev={} metric={}"
+                     " table={} proto=ospf",
+                     kr->destination,
+                     krGw.empty() ? "(none)" : krGw,
+                     krIface.empty() ? "?" : krIface,
+                     kr->metric,
+                     kr->table);
 
         if (kr->destination.contains(loopback_ipv4) &&
             (kr->nhid != 0 || !krIface.empty()))
         {
             std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
-            std::println(
-                "[add-del-list] prepare_route_add_remain_lb prepare ROUTE_ADD for {}",
-                loopback_ipv4);
+            std::println("[add-del-list] prepare_route_add_remain_lb prepare "
+                         "ROUTE_ADD for {}",
+                         loopback_ipv4);
 
             cmdproto::Interface entry{};
             static constexpr std::string_view kUnneeded = "unneeded";
@@ -4709,7 +4767,7 @@ int prepare_route_add_remain_lb(
                  ++k)
                 entry.iface_name[k] = kUnneeded[k];
             entry.nexthop_addr_ipv4 = {0, 0, 0, 0};
-            entry.nexthop_id_ipv4   = kr->nhid;
+            entry.nexthop_id_ipv4 = kr->nhid;
 
             for (const auto& pfx : prefixes->prefixes())
             {
@@ -4738,27 +4796,28 @@ int prepare_route_add_remain_lb(
 
             if (entry.prefixes.empty())
             {
-                std::println("[add-del-list]   no prefixes — skipping ROUTE_ADD");
+                std::println(
+                    "[add-del-list]   no prefixes — skipping ROUTE_ADD");
                 continue;
             }
 
             singleReq.interfaces.push_back(std::move(entry));
         }
-        //else
+        // else
         //{
-        //    std::println(
-        //    "[add-del-list] prepare_route_add_remain_lb NOT found {} loopback", loopback_ipv4
-        //    );
-        //}
-
+        //     std::println(
+        //     "[add-del-list] prepare_route_add_remain_lb NOT found {}
+        //     loopback", loopback_ipv4
+        //     );
+        // }
     }
 #if 1
     if (!singleReq.interfaces.empty())
     {
         // ── ROUTE_ADD ────────────────────────────────────────────────────
         std::println("[add-del-list] [ADD] submitting {} interface(s)"
-                        " to ud_server…",
-                        singleReq.interfaces.size());
+                     " to ud_server…",
+                     singleReq.interfaces.size());
         auto savedInterfaces = singleReq.interfaces;
         vrfClient.submitAdd(std::move(singleReq));
     }

@@ -4,7 +4,7 @@
  *
  * Compiled into both lib/cmd_proto.so (shared) and lib/cmd_proto.ar (static).
  *
- * 
+ *
  * @date    2026
  */
 
@@ -970,8 +970,8 @@ decode_route_add_payload(std::span<const std::uint8_t> raw)
         return std::unexpected(make_error_code(CmdError::InvalidCommand));
 
     SingleRouteRequest req;
-    req.vrfs_name.assign(
-        reinterpret_cast<const char*>(raw.data() + 2), vrfs_name_len);
+    req.vrfs_name.assign(reinterpret_cast<const char*>(raw.data() + 2),
+                         vrfs_name_len);
 
     std::size_t pos = 2 + vrfs_name_len;
     const auto iface_count = static_cast<std::size_t>(read_be16(raw, pos));
@@ -1125,7 +1125,8 @@ handle_route_add_payload(const SingleRouteRequest& req)
 
     if (g_callbacks.route_add)
     {
-        // hw ASIC: bundle all interfaces into one params and call callback once.
+        // hw ASIC: bundle all interfaces into one params and call callback
+        // once.
         netlink::RouteAddParams bulk;
         bulk.vrfs_name = req.vrfs_name;
         bulk.protocol = netlink::RouteProtocol::Static;
@@ -1189,17 +1190,17 @@ handle_route_add_payload(const SingleRouteRequest& req)
                 logger::log(
                     logger::INFO,
                     "cmdproto",
-                    std::format("    prefix[{:02}]  {}/{}  via {}  dev {}"
-                                "  ->  {}{}",
-                                i,
-                                fmt_ipv4(pfx.addr),
-                                static_cast<unsigned>(pfx.mask_len),
-                                fmt_ipv4(iface.nexthop_addr_ipv4),
-                                iface.iface_name.data(),
-                                ok ? "OK" : "FAIL",
-                                ok ? ""
-                                   : std::format("  ({})",
-                                                 result.error().message())));
+                    std::format(
+                        "    prefix[{:02}]  {}/{}  via {}  dev {}"
+                        "  ->  {}{}",
+                        i,
+                        fmt_ipv4(pfx.addr),
+                        static_cast<unsigned>(pfx.mask_len),
+                        fmt_ipv4(iface.nexthop_addr_ipv4),
+                        iface.iface_name.data(),
+                        ok ? "OK" : "FAIL",
+                        ok ? ""
+                           : std::format("  ({})", result.error().message())));
             }
         }
     }

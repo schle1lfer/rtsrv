@@ -171,9 +171,10 @@ struct KernelRouteNexthop
  */
 struct KernelRoute
 {
-    std::string destination; ///< Destination prefix in CIDR (e.g. "10.0.0.0/8").
-    uint32_t metric{0};      ///< Route priority; lower value wins.
-    uint32_t nhid{0};        ///< RTA_NH_ID: nexthop object ID (0 if absent).
+    std::string
+        destination;      ///< Destination prefix in CIDR (e.g. "10.0.0.0/8").
+    uint32_t metric{0};   ///< Route priority; lower value wins.
+    uint32_t nhid{0};     ///< RTA_NH_ID: nexthop object ID (0 if absent).
     uint8_t prefixLen{0}; ///< Prefix length (duplicates the /N in destination).
     uint8_t protocol{0}; ///< Origin protocol (RTPROT_STATIC, RTPROT_ZEBRA, …).
     uint8_t type{RTN_UNICAST}; ///< Route type (RTN_UNICAST, RTN_BLACKHOLE, …).

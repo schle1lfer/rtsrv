@@ -10,7 +10,7 @@
  *
  * Compiled into both lib/netlink.so (shared) and lib/netlink.ar (static).
  *
- * 
+ *
  * @date    2026
  */
 

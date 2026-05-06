@@ -195,10 +195,10 @@ public:
      * Returns STATUS_CODE_PERMISSION_DENIED when the caller is not in SOT,
      * or STATUS_CODE_NOT_FOUND when node_ip is not in the SOT.
      */
-    grpc::Status GetLoopbacksByNodeIp(
-        grpc::ServerContext* ctx,
-        const srmd::v1::GetLoopbacksByNodeIpRequest* req,
-        srmd::v1::GetNodePrefixesResponse* resp) override;
+    grpc::Status
+    GetLoopbacksByNodeIp(grpc::ServerContext* ctx,
+                         const srmd::v1::GetLoopbacksByNodeIpRequest* req,
+                         srmd::v1::GetNodePrefixesResponse* resp) override;
 
 private:
     /**

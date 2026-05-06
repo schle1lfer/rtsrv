@@ -593,7 +593,7 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                 uint32_t oif{};
                 std::memcpy(&oif, RTA_DATA(rta), sizeof(oif));
                 spIfIndex = oif;
-                spIfName  = ifIndexToName(oif);
+                spIfName = ifIndexToName(oif);
                 break;
             }
 
@@ -628,8 +628,9 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                 while (RTNH_OK(rtnh, nhrem))
                 {
                     KernelRouteNexthop knh;
-                    knh.interfaceIndex = static_cast<uint32_t>(rtnh->rtnh_ifindex);
-                    knh.interfaceName  = ifIndexToName(knh.interfaceIndex);
+                    knh.interfaceIndex =
+                        static_cast<uint32_t>(rtnh->rtnh_ifindex);
+                    knh.interfaceName = ifIndexToName(knh.interfaceIndex);
                     // rtnh_hops is (weight - 1); 0 means equal-cost weight 1.
                     knh.weight = static_cast<uint8_t>(rtnh->rtnh_hops + 1);
 
@@ -639,7 +640,8 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                     for (; RTA_OK(inner, ilen); inner = RTA_NEXT(inner, ilen))
                     {
                         if (inner->rta_type == RTA_GATEWAY)
-                            knh.gateway = addrToString(RTA_DATA(inner), route.family);
+                            knh.gateway =
+                                addrToString(RTA_DATA(inner), route.family);
                     }
 
                     route.nexthops.push_back(std::move(knh));
@@ -662,7 +664,7 @@ RoutingManager::listRoutes(int family, uint32_t table) const
             (!spGateway.empty() || !spIfName.empty()))
         {
             KernelRouteNexthop knh;
-            knh.gateway       = std::move(spGateway);
+            knh.gateway = std::move(spGateway);
             knh.interfaceName = std::move(spIfName);
             knh.interfaceIndex = spIfIndex;
             route.nexthops.push_back(std::move(knh));

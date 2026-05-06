@@ -35,7 +35,7 @@
  * }
  * @endcode
  *
- * 
+ *
  * @date    2026
  */
 
@@ -225,7 +225,8 @@ struct RouteInterface
     std::vector<RoutePrefix> prefixes; ///< Prefix list for this interface
 };
 
-/// @brief Parameters for a route-list operation, including optional VRF context.
+/// @brief Parameters for a route-list operation, including optional VRF
+/// context.
 struct RouteListParams
 {
     RouteTable table{RouteTable::Main}; ///< Routing table to query
@@ -271,7 +272,7 @@ struct RouteDelParams
     bool has_gateway{};        ///< True when @c gateway is a match criterion
     std::string if_name;       ///< Egress interface to match (empty = any)
     RouteTable table{RouteTable::Main}; ///< Routing table to modify
-    std::string vrfs_name;     ///< VRF name (empty = default VRF)
+    std::string vrfs_name;              ///< VRF name (empty = default VRF)
 };
 
 // ---------------------------------------------------------------------------

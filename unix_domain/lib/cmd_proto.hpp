@@ -40,7 +40,7 @@
  * | IF_NAME    | 0x04  | var     | Egress interface name (UTF-8)       |
  * | METRIC     | 0x05  | 2 bytes | Route metric (uint16_t big-endian)  |
  *
- * 
+ *
  * @date    2026
  */
 
@@ -84,8 +84,8 @@ enum class FieldId : std::uint8_t
     PREFIX_LEN = 0x02, ///< CIDR prefix length (1 byte, 0–32)
     GATEWAY =
         0x03, ///< Next-hop gateway IPv4 address (4 bytes, network byte order)
-    IF_NAME = 0x04, ///< Egress interface name (variable-length UTF-8 string)
-    METRIC = 0x05,  ///< Route metric (2 bytes, uint16_t big-endian)
+    IF_NAME = 0x04,  ///< Egress interface name (variable-length UTF-8 string)
+    METRIC = 0x05,   ///< Route metric (2 bytes, uint16_t big-endian)
     VRF_NAME = 0x06, ///< VRF name (variable-length UTF-8 string)
 };
 
@@ -511,7 +511,8 @@ handle_route_list(const std::string& vrfs_name = {});
 /**
  * @brief Serialises a SingleRouteRequest to its binary wire bytes.
  *
- * Produces: type(1) + vrfs_name_len(1) + vrfs_name(N) + iface_count(2) + M × interface entries.
+ * Produces: type(1) + vrfs_name_len(1) + vrfs_name(N) + iface_count(2) + M ×
+ * interface entries.
  *
  * @param req  Request to encode.
  * @return Encoded bytes on success, or an error code.
