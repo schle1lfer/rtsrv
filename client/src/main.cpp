@@ -4327,6 +4327,33 @@ int main(int argc, char* argv[])
                      glResult->message(),
                      glResult->interfaces_size());
 
+        // ── Nexthop adjacency check for Loopbacks ────────────────────────────
+        // For each interface returned by GetLoopbacks, extract the nexthop IP.
+        // If it is not yet in the adjacency (ARP) table, send an ICMP echo to
+        // trigger ARP resolution so the nexthop MAC becomes available.
+        for (const auto& li : glResult->interfaces())
+        {
+            const std::string& nh = li.nexthop();
+            if (nh.empty())
+                continue;
+            struct in_addr nhCheck{};
+            if (::inet_pton(AF_INET, nh.c_str(), &nhCheck) != 1)
+                continue;
+            if (!neighborHasIp(startupNeighCtx, nh))
+            {
+                std::println("[add-del-list] nexthop '{}' not in adjacency "
+                             "table — sending ICMP echo request",
+                             nh);
+                sendIcmpEchoRequest(nh);
+            }
+            else
+            {
+                std::println("[add-del-list] nexthop '{}' already in "
+                             "adjacency table",
+                             nh);
+            }
+        }
+
         // ── Step 2b: GetAllRoutes (to obtain VRF name) ───────────────────────
         std::string vrfsName;
         auto arResult2 = client.getAllRoutes();
@@ -4524,6 +4551,38 @@ int main(int argc, char* argv[])
                         " description='{}'",
                         pfx.prefix(), pfx.weight(), pfx.role(),
                         pfx.description());
+                }
+
+                // ── Nexthop adjacency check for LoopbacksByNodeIp ────────────
+                // The nexthop for a remaining node's prefixes is the gateway
+                // from the OSPF /32 route whose destination matches the node's
+                // loopback.  If that nexthop is not yet in the adjacency table,
+                // send an ICMP echo to trigger ARP resolution.
+                for (const auto* kr : ospf32)
+                {
+                    if (!kr->destination.contains(node.loopback_ipv4()))
+                        continue;
+                    if (kr->gateway.empty())
+                        continue;
+                    struct in_addr nhCheck{};
+                    if (::inet_pton(AF_INET, kr->gateway.c_str(), &nhCheck) != 1)
+                        continue;
+                    if (!neighborHasIp(startupNeighCtx, kr->gateway))
+                    {
+                        std::println("[add-del-list] nexthop '{}' for node '{}' "
+                                     "not in adjacency table — sending ICMP echo "
+                                     "request",
+                                     kr->gateway,
+                                     node.hostname());
+                        sendIcmpEchoRequest(kr->gateway);
+                    }
+                    else
+                    {
+                        std::println("[add-del-list] nexthop '{}' for node '{}' "
+                                     "already in adjacency table",
+                                     kr->gateway,
+                                     node.hostname());
+                    }
                 }
 
                 // send ROUTE_ADD
