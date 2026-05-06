@@ -366,6 +366,13 @@ nl_dispatch(const struct nlmsghdr* nlh, netlink_route_cb_t cb, void* user_data)
             }
             break;
 
+        case RTA_NH_ID:
+            if (RTA_PAYLOAD(rta) >= sizeof(route.nhid))
+            {
+                memcpy(&route.nhid, RTA_DATA(rta), sizeof(route.nhid));
+            }
+            break;
+
         default:
             break;
         }

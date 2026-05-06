@@ -107,6 +107,7 @@ extern "C"
         char ifname[IF_NAMESIZE]; /**< Resolved interface name, NUL-terminated.
                                    */
         uint32_t metric; /**< RTA_PRIORITY: route metric / preference. */
+        uint32_t nhid;   /**< RTA_NH_ID: nexthop object ID (0 if absent). */
     } netlink_route32_t;
 
     /* ---------------------------------------------------------------------------

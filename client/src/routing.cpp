@@ -604,6 +604,13 @@ RoutingManager::listRoutes(int family, uint32_t table) const
                 break;
             }
 
+            case RTA_NH_ID: {
+                uint32_t nhid{};
+                std::memcpy(&nhid, RTA_DATA(rta), sizeof(nhid));
+                route.nhid = nhid;
+                break;
+            }
+
             case RTA_TABLE: {
                 uint32_t tbl{};
                 std::memcpy(&tbl, RTA_DATA(rta), sizeof(tbl));

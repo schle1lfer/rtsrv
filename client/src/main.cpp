@@ -656,20 +656,30 @@ static srmd::v1::RouteProtocol mapRtProtocol(uint8_t rtProto)
     }
 }
 
+/** @brief One resolved nexthop entry inside a WatchRoute. */
+struct NhInfo
+{
+    std::string gateway; ///< Next-hop gateway IP ("" if none).
+    std::string dev;     ///< Outgoing interface name ("" if none).
+    uint32_t ifindex{0}; ///< Outgoing interface index (0 if absent).
+    uint8_t weight{1};   ///< Actual nexthop weight (1 = equal-cost default).
+};
+
 /**
  * @brief A single entry in the dynamic /32 route table.
  *
- * All fields mirror the corresponding @c netlink_route32_t members so the
- * table carries the complete netlink message payload — both the struct rtmsg
- * header fields and every extracted RTA_* attribute.
+ * One entry per destination — ECMP is represented as multiple NhInfo elements
+ * in the nexthops list.  When the route uses a kernel nexthop object the nhid
+ * field carries the object ID so callers can distinguish simple from ECMP.
  */
 struct WatchRoute
 {
-    /* ── RTA_* attributes ──────────────────────────────────────────────── */
+    /* ── Destination ───────────────────────────────────────────────────── */
     std::string dest;    ///< Destination prefix (e.g. "10.0.0.1/32").
-    std::string gateway; ///< Next-hop gateway (empty if none / 0.0.0.0).
-    std::string iface;   ///< Outgoing interface name (ifname).
-    uint32_t ifindex{0}; ///< RTA_OIF: outgoing interface index.
+    /* ── Nexthop resolution ─────────────────────────────────────────────── */
+    uint32_t nhid{0};              ///< RTA_NH_ID nexthop object ID (0 = none).
+    std::vector<NhInfo> nexthops;  ///< Resolved nexthops (gateway, dev, weight).
+    /* ── Route attributes ──────────────────────────────────────────────── */
     uint32_t metric{0};  ///< RTA_PRIORITY: route metric / preference.
     uint32_t table{0};   ///< RTA_TABLE / rtm_table: routing table ID.
     /* ── From struct rtmsg ─────────────────────────────────────────────── */
@@ -719,130 +729,81 @@ static std::string familyLabel(uint8_t family);
 static std::string scopeLabel(uint8_t scope);
 
 /**
- * @brief Pretty-prints the dynamic /32 OSPF route table using box-drawing
- * lines.
+ * @brief Pretty-prints the dynamic /32 OSPF route table.
  *
- * Columns mirror every field of @c netlink_route32_t so the operator can
- * inspect the complete netlink payload at a glance.  Column widths are fixed
- * so each redraw is perfectly aligned.  The table is keyed by the compound
- * key dest|gateway|iface so ECMP routes to the same destination appear as
- * separate rows.
+ * One block per destination — ECMP routes list their nexthops indented below
+ * the main route line, matching the output of "ip route show" with nhid:
  *
- * Columns displayed:
- *  Destination · Gateway · Interface · IfIdx · Metric · Table · Protocol ·
- * Server ID
+ * @code
+ *  OSPF /32 Route Table  (2 route(s))
+ *  ──────────────────────────────────────────────────────────────────────
+ *  2.2.2.2/32  nhid 363  proto ospf  metric 20  table 254  id abcdef12…
+ *    nexthop via 192.168.0.2  dev Ethernet46  weight 1
+ *    nexthop via 192.168.0.6  dev Ethernet47  weight 1
+ *  ──────────────────────────────────────────────────────────────────────
+ * @endcode
  *
- * @param routes  Ordered map of compound-key → WatchRoute entries.
+ * @param routes  Ordered map of destination → WatchRoute (one entry per dest).
  */
 static void printRouteTable(const std::map<std::string, WatchRoute>& routes)
 {
-    // ── Column content widths (characters, not including padding spaces) ──
-    // Destination : "255.255.255.255/32" = 18 chars  → 20
-    // Gateway     : "255.255.255.255"    = 15 chars  → 17
-    // Interface   : IFNAMSIZ-1           = 15 chars  → 15
-    // IfIdx       : up to 5 digits       →  5 (right-aligned)
-    // Metric      : up to 10 digits      →  7 (right-aligned)
-    // Table       : up to 5 digits       →  5 (right-aligned)
-    // Protocol    : "static" = 6 chars   →  8 (left-aligned)
-    // Server ID   : "abcdefgh…" = 9 ch   →  9 (left-aligned)
-    constexpr int cD = 20, cG = 17, cI = 15, cX = 5, cM = 7, cT = 5, cP = 8,
-                  cS = 9;
+    const std::string sep(72, '-');
 
-    // ── UTF-8 box-drawing helpers ─────────────────────────────────────────
-    auto hbar = [](int n) {
-        std::string s;
-        s.reserve(static_cast<std::size_t>(n) * 3); // "─" = 3 UTF-8 bytes
-        for (int i = 0; i < n; ++i)
-            s += "─";
-        return s;
-    };
-
-    // Build top / mid / bottom border rows with a cell for every column.
-    auto mkBorder = [&](const char* l, const char* j, const char* r) {
-        return std::string(l) + hbar(cD + 2) + j + hbar(cG + 2) + j +
-               hbar(cI + 2) + j + hbar(cX + 2) + j + hbar(cM + 2) + j +
-               hbar(cT + 2) + j + hbar(cP + 2) + j + hbar(cS + 2) + r;
-    };
-
-    const std::string top = mkBorder("┌", "┬", "┐");
-    const std::string mid = mkBorder("├", "┼", "┤");
-    const std::string bottom = mkBorder("└", "┴", "┘");
-
-    // ── Helper: one table row ─────────────────────────────────────────────
-    auto printRow = [&](const std::string& dst,
-                        const std::string& gw,
-                        const std::string& ifc,
-                        const std::string& ifx,
-                        const std::string& met,
-                        const std::string& tbl,
-                        const std::string& prot,
-                        const std::string& sid) {
-        std::println("│ {:<{}} │ {:<{}} │ {:<{}} │ {:>{}} │ {:>{}} │ {:>{}} │ "
-                     "{:<{}} │ {:<{}} │",
-                     dst,
-                     cD,
-                     gw,
-                     cG,
-                     ifc,
-                     cI,
-                     ifx,
-                     cX,
-                     met,
-                     cM,
-                     tbl,
-                     cT,
-                     prot,
-                     cP,
-                     sid,
-                     cS);
-    };
-
-    // ── Title ─────────────────────────────────────────────────────────────
     std::println("\n OSPF /32 Route Table  ({} route(s))", routes.size());
-    std::println("{}", top);
-    printRow("Destination",
-             "Gateway",
-             "Interface",
-             "IfIdx",
-             "Metric",
-             "Table",
-             "Protocol",
-             "Server ID");
+    std::println("{}", sep);
 
     if (routes.empty())
     {
-        std::println("{}", bottom);
+        std::println("  (empty)");
+        std::println("{}", sep);
         return;
     }
 
-    std::println("{}", mid);
-
     for (const auto& [key, r] : routes)
     {
-        const std::string gw = r.gateway.empty() ? "(none)" : r.gateway;
-        const std::string ifc = r.iface.empty() ? "(none)" : r.iface;
-        const std::string ifx =
-            r.ifindex == 0 ? "-" : std::to_string(r.ifindex);
-        const std::string met = std::to_string(r.metric);
-        const std::string tbl = r.table == 0 ? "-" : std::to_string(r.table);
-        const std::string prot = protoLabel(r.protocol);
+        const std::string nhidStr =
+            r.nhid ? std::format("nhid {}", r.nhid) : "nhid -";
         const std::string sid =
             r.srmdId.empty() ? "(pending)" : r.srmdId.substr(0, 8) + "…";
 
-        printRow(r.dest, gw, ifc, ifx, met, tbl, prot, sid);
+        std::println("  {}  {}  proto {}  metric {}  table {}  id {}",
+                     r.dest,
+                     nhidStr,
+                     protoLabel(r.protocol),
+                     r.metric,
+                     r.table ? std::to_string(r.table) : "-",
+                     sid);
+
+        if (r.nexthops.empty())
+        {
+            std::println("    (no nexthop info)");
+        }
+        else
+        {
+            for (const auto& nh : r.nexthops)
+            {
+                const std::string gw =
+                    nh.gateway.empty() ? "-" : "via " + nh.gateway;
+                const std::string dev =
+                    nh.dev.empty() ? "-" : "dev " + nh.dev;
+                std::println("    nexthop {}  {}  weight {}",
+                             gw, dev, static_cast<unsigned>(nh.weight));
+            }
+        }
     }
 
-    std::println("{}", bottom);
+    std::println("{}", sep);
 }
 
 /**
  * @brief Serializes the route table to a text snapshot for UDP delivery.
  *
- * Format (one entry per line after the header):
+ * Format:
  * @code
  *   ROUTES <count>
- *   dest=<prefix> gw=<gw> iface=<if> ifidx=<n> metric=<m> table=<t> proto=<p>
- * id=<srmd-id> …
+ *   dest=<prefix> nhid=<n> metric=<m> table=<t> proto=<p> id=<srmd-id>
+ *     nexthop gw=<gw> dev=<dev> weight=<w>
+ *     …
  * @endcode
  */
 static std::string
@@ -853,13 +814,11 @@ serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
     for (const auto& [key, r] : routes)
     {
         os << std::format(
-            "dest={} gw={} iface={} ifidx={} metric={} table={} proto={}"
+            "dest={} nhid={} metric={} table={} proto={}"
             " family={} dst_len={} tos={} scope={} type={} flags=0x{:08x}"
             " id={}\n",
             r.dest,
-            r.gateway.empty() ? "(none)" : r.gateway,
-            r.iface.empty() ? "(none)" : r.iface,
-            r.ifindex,
+            r.nhid,
             r.metric,
             r.table,
             protoLabel(r.protocol),
@@ -870,6 +829,14 @@ serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
             static_cast<unsigned>(r.type),
             r.flags,
             r.srmdId.empty() ? "(pending)" : r.srmdId);
+        for (const auto& nh : r.nexthops)
+        {
+            os << std::format("  nexthop gw={} dev={} ifidx={} weight={}\n",
+                              nh.gateway.empty() ? "(none)" : nh.gateway,
+                              nh.dev.empty() ? "(none)" : nh.dev,
+                              nh.ifindex,
+                              static_cast<unsigned>(nh.weight));
+        }
     }
     return os.str();
 }
@@ -884,7 +851,7 @@ serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
 struct WatchCtx
 {
     sra::RouteClient* client;
-    std::map<std::string, WatchRoute> routes; ///< "dest|gw|iface" → WatchRoute
+    std::map<std::string, WatchRoute> routes; ///< dest → WatchRoute (one per dest)
     std::string loopback; ///< Node's own loopback IP for GetLoopbacks
     sra::UdpTableServer*
         udpServer; ///< UDP publisher (port 9003); may be nullptr
@@ -952,9 +919,8 @@ static void nlWatchCb(netlink_event_t event,
     // only for OSPF now
     if (proto == srmd::v1::ROUTE_PROTOCOL_OSPF)
     {
-        /* Compound key: dest|gateway|iface – allows multiple routes to the
-         * same destination (ECMP) to coexist as separate table rows. */
-        const std::string key = dest + "|" + gw + "|" + iface;
+        /* Key is the destination only — one entry per /32 prefix. */
+        const std::string key = dest;
 
         /* ---- ADDED ----------------------------------------------------------
          */
@@ -969,20 +935,23 @@ static void nlWatchCb(netlink_event_t event,
 
             if (result)
             {
-                ctx->routes[key] = WatchRoute{dest,
-                                              gw,
-                                              iface,
-                                              route->ifindex,
-                                              route->metric,
-                                              route->table,
-                                              route->protocol,
-                                              result->id(),
-                                              route->family,
-                                              route->dst_len,
-                                              route->tos,
-                                              route->scope,
-                                              route->type,
-                                              route->flags};
+                WatchRoute wr;
+                wr.dest = dest;
+                wr.nhid = route->nhid;
+                wr.metric = route->metric;
+                wr.table = route->table;
+                wr.protocol = route->protocol;
+                wr.srmdId = result->id();
+                wr.family = route->family;
+                wr.dst_len = route->dst_len;
+                wr.tos = route->tos;
+                wr.scope = route->scope;
+                wr.type = route->type;
+                wr.flags = route->flags;
+                if (!gw.empty() || !iface.empty())
+                    wr.nexthops.push_back({gw, iface,
+                                           route->ifindex, 1});
+                ctx->routes[key] = std::move(wr);
                 std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
                              ts,
                              dest,
@@ -1047,20 +1016,22 @@ static void nlWatchCb(netlink_event_t event,
             else
             {
                 /* Track with empty srmdId so REMOVED events still clean up. */
-                ctx->routes[key] = WatchRoute{dest,
-                                              gw,
-                                              iface,
-                                              route->ifindex,
-                                              route->metric,
-                                              route->table,
-                                              route->protocol,
-                                              {},
-                                              route->family,
-                                              route->dst_len,
-                                              route->tos,
-                                              route->scope,
-                                              route->type,
-                                              route->flags};
+                WatchRoute wr;
+                wr.dest = dest;
+                wr.nhid = route->nhid;
+                wr.metric = route->metric;
+                wr.table = route->table;
+                wr.protocol = route->protocol;
+                wr.family = route->family;
+                wr.dst_len = route->dst_len;
+                wr.tos = route->tos;
+                wr.scope = route->scope;
+                wr.type = route->type;
+                wr.flags = route->flags;
+                if (!gw.empty() || !iface.empty())
+                    wr.nexthops.push_back({gw, iface,
+                                           route->ifindex, 1});
+                ctx->routes[key] = std::move(wr);
                 std::println("{} [ADDED]   {} → gRPC FAILED: {}",
                              ts,
                              dest,
@@ -1071,32 +1042,17 @@ static void nlWatchCb(netlink_event_t event,
          */
         else if (event == NETLINK_ROUTE_CHANGED)
         {
-            /* Remove ALL existing entries for this destination (the kernel
-             * replaces the route, so old nexthops are superseded regardless
-             * of gateway/iface).  Each entry is removed from srmd first. */
-            for (auto it = ctx->routes.begin(); it != ctx->routes.end();)
+            /* Remove the existing entry for this destination from srmd. */
+            auto existing = ctx->routes.find(key);
+            if (existing != ctx->routes.end() && !existing->second.srmdId.empty())
             {
-                if (it->second.dest == dest)
+                auto rmResult = ctx->client->removeRoute(existing->second.srmdId);
+                if (!rmResult)
                 {
-                    if (!it->second.srmdId.empty())
-                    {
-                        auto rmResult =
-                            ctx->client->removeRoute(it->second.srmdId);
-                        if (!rmResult)
-                        {
-                            std::println(
-                                "{} [CHANGED] {} stale-remove failed: {}",
-                                ts,
-                                dest,
-                                rmResult.error());
-                        }
-                    }
-                    it = ctx->routes.erase(it);
+                    std::println("{} [CHANGED] {} stale-remove failed: {}",
+                                 ts, dest, rmResult.error());
                 }
-                else
-                {
-                    ++it;
-                }
+                ctx->routes.erase(existing);
             }
 
             auto result = ctx->client->addRoute(dest,
@@ -1108,20 +1064,23 @@ static void nlWatchCb(netlink_event_t event,
 
             if (result)
             {
-                ctx->routes[key] = WatchRoute{dest,
-                                              gw,
-                                              iface,
-                                              route->ifindex,
-                                              route->metric,
-                                              route->table,
-                                              route->protocol,
-                                              result->id(),
-                                              route->family,
-                                              route->dst_len,
-                                              route->tos,
-                                              route->scope,
-                                              route->type,
-                                              route->flags};
+                WatchRoute wr;
+                wr.dest = dest;
+                wr.nhid = route->nhid;
+                wr.metric = route->metric;
+                wr.table = route->table;
+                wr.protocol = route->protocol;
+                wr.srmdId = result->id();
+                wr.family = route->family;
+                wr.dst_len = route->dst_len;
+                wr.tos = route->tos;
+                wr.scope = route->scope;
+                wr.type = route->type;
+                wr.flags = route->flags;
+                if (!gw.empty() || !iface.empty())
+                    wr.nexthops.push_back({gw, iface,
+                                           route->ifindex, 1});
+                ctx->routes[key] = std::move(wr);
                 std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
                              ts,
                              dest,
@@ -1132,20 +1091,22 @@ static void nlWatchCb(netlink_event_t event,
             }
             else
             {
-                ctx->routes[key] = WatchRoute{dest,
-                                              gw,
-                                              iface,
-                                              route->ifindex,
-                                              route->metric,
-                                              route->table,
-                                              route->protocol,
-                                              {},
-                                              route->family,
-                                              route->dst_len,
-                                              route->tos,
-                                              route->scope,
-                                              route->type,
-                                              route->flags};
+                WatchRoute wr;
+                wr.dest = dest;
+                wr.nhid = route->nhid;
+                wr.metric = route->metric;
+                wr.table = route->table;
+                wr.protocol = route->protocol;
+                wr.family = route->family;
+                wr.dst_len = route->dst_len;
+                wr.tos = route->tos;
+                wr.scope = route->scope;
+                wr.type = route->type;
+                wr.flags = route->flags;
+                if (!gw.empty() || !iface.empty())
+                    wr.nexthops.push_back({gw, iface,
+                                           route->ifindex, 1});
+                ctx->routes[key] = std::move(wr);
                 std::println("{} [CHANGED] {} → gRPC FAILED: {}",
                              ts,
                              dest,
@@ -1159,12 +1120,8 @@ static void nlWatchCb(netlink_event_t event,
             auto it = ctx->routes.find(key);
             if (it == ctx->routes.end())
             {
-                std::println("{} [REMOVED] {} via {} dev {} (not tracked – "
-                             "no gRPC call)",
-                             ts,
-                             dest,
-                             gw,
-                             iface);
+                std::println("{} [REMOVED] {} (not tracked – no gRPC call)",
+                             ts, dest);
                 std::cout.flush();
                 return;
             }
@@ -1174,34 +1131,21 @@ static void nlWatchCb(netlink_event_t event,
 
             if (id.empty())
             {
-                std::println("{} [REMOVED] {} via {} dev {} "
-                             "(no server ID – no gRPC call)",
-                             ts,
-                             dest,
-                             gw,
-                             iface);
+                std::println("{} [REMOVED] {} (no server ID – no gRPC call)",
+                             ts, dest);
             }
             else
             {
                 auto result = ctx->client->removeRoute(id);
                 if (result)
                 {
-                    std::println("{} [REMOVED] {} via {} dev {} id={}",
-                                 ts,
-                                 dest,
-                                 gw,
-                                 iface,
-                                 id.substr(0, 8) + "…");
+                    std::println("{} [REMOVED] {} id={}",
+                                 ts, dest, id.substr(0, 8) + "…");
                 }
                 else
                 {
-                    std::println("{} [REMOVED] {} via {} dev {} → "
-                                 "gRPC FAILED: {}",
-                                 ts,
-                                 dest,
-                                 gw,
-                                 iface,
-                                 result.error());
+                    std::println("{} [REMOVED] {} → gRPC FAILED: {}",
+                                 ts, dest, result.error());
                 }
             }
         }
@@ -1449,20 +1393,19 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                                               srmd::v1::ADDRESS_FAMILY_IPV4,
                                               srmd::v1::ROUTE_PROTOCOL_OSPF);
 
-                WatchRoute wr{kr.destination,
-                              kr.gateway,
-                              kr.interfaceName,
-                              kr.interfaceIndex,
-                              kr.metric,
-                              kr.table,
-                              kr.protocol,
-                              {},
-                              static_cast<uint8_t>(kr.family),
-                              kr.prefixLen,
-                              0u,
-                              kr.scope,
-                              kr.type,
-                              0u};
+                WatchRoute wr;
+                wr.dest = kr.destination;
+                wr.nhid = kr.nhid;
+                wr.metric = kr.metric;
+                wr.table = kr.table;
+                wr.protocol = kr.protocol;
+                wr.family = static_cast<uint8_t>(kr.family);
+                wr.dst_len = kr.prefixLen;
+                wr.scope = kr.scope;
+                wr.type = kr.type;
+                if (!kr.gateway.empty() || !kr.interfaceName.empty())
+                    wr.nexthops.push_back({kr.gateway, kr.interfaceName,
+                                           kr.interfaceIndex, 1});
                 if (result)
                 {
                     wr.srmdId = result->id();
@@ -1474,9 +1417,7 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                                  kr.destination,
                                  result.error());
                 }
-                const std::string key =
-                    kr.destination + "|" + kr.gateway + "|" + kr.interfaceName;
-                ctx.routes[key] = wr;
+                ctx.routes[kr.destination] = std::move(wr);
                 ++found;
             }
             std::println("[Startup] Found {} /32 OSPF route(s) in kernel.",
@@ -2147,26 +2088,12 @@ static std::string rtnhFlagsLabel(uint32_t flags)
     return s;
 }
 
-/**
- * @brief Formats a nexthop group as "id(w+1),id(w+1),…" (truncated to fit).
- */
-static std::string
-formatNhGroup(const netlink_nexthop_grp_t* grp, uint32_t count, int maxlen)
+/** @brief One member of a nexthop group, with its raw kernel weight. */
+struct NhGroupMember
 {
-    if (count == 0)
-        return "-";
-    std::string s;
-    for (uint32_t i = 0; i < count; ++i)
-    {
-        if (i > 0)
-            s += ',';
-        s += std::to_string(grp[i].id) + '(' +
-             std::to_string(static_cast<int>(grp[i].weight) + 1) + ')';
-    }
-    if (static_cast<int>(s.size()) > maxlen)
-        s = s.substr(0, static_cast<std::size_t>(maxlen - 1)) + "…";
-    return s;
-}
+    uint32_t id{0};      ///< Nexthop ID of this group member
+    uint8_t weight{0};   ///< Raw kernel weight; actual weight = weight + 1
+};
 
 /**
  * @brief A single row in the dynamic nexthop table.
@@ -2195,36 +2122,53 @@ struct NexthopEntry
     uint32_t master{0};      ///< Master device index (0 = absent)
     std::string master_name; ///< Resolved master device name
     /* ── NHA_GROUP ─────────────────────────────────────────────────────── */
-    std::string group_str;   ///< Pre-formatted group member list
-    uint32_t group_count{0}; ///< Number of members in the nexthop group
+    bool is_group{false};                  ///< True when NHA_GROUP is present
+    std::vector<NhGroupMember> group_members; ///< Group member IDs and weights
     /* ── NHA_GROUP_TYPE ────────────────────────────────────────────────── */
     uint16_t group_type{0}; ///< 0=mpath (ECMP), 1=resilient
     /* ── NHA_ENCAP_TYPE ────────────────────────────────────────────────── */
     uint16_t encap_type{0}; ///< Encapsulation type (LWTUNNEL_ENCAP_*)
 };
 
+/** @brief Formats a nexthop group member list as "id,id,…" for display. */
+static std::string formatGroupIds(const std::vector<NhGroupMember>& members)
+{
+    if (members.empty())
+        return "-";
+    std::string s;
+    for (const auto& m : members)
+    {
+        if (!s.empty())
+            s += ',';
+        s += std::to_string(m.id);
+    }
+    return s;
+}
+
 /**
  * @brief Pretty-prints the dynamic nexthop table using box-drawing lines.
  *
- * Columns mirror every field of netlink_nexthop_t.
+ * Columns: ID, Family, Scope, Protocol, Flags, OIF, Gateway,
+ *          Grp?, Group IDs, GrpType, BH, FDB, Master
  */
 static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
 {
     // ── Column widths ─────────────────────────────────────────────────────
-    // ID       : 6 digits      →  6
-    // Family   : "inet6" = 5   →  6
-    // Scope    : "nowhere" = 7 →  7
-    // Protocol : "zebra" = 5   →  8
+    // ID       : 6 digits        →  6
+    // Family   : "inet6" = 5     →  6
+    // Scope    : "nowhere" = 7   →  7
+    // Protocol : "zebra" = 5     →  8
     // Flags    : "unresolved"=10 → 12
-    // OIF      : IFNAMSIZ-1=15 → 13
-    // Gateway  : IPv6=39       → 25  (most will be IPv4)
-    // Group    : list          → 28
-    // GrpType  : "resilient"=9 →  9
-    // BH       : "yes/no"=3    →  3
-    // FDB      : "yes/no"=3    →  3
-    // Master   : IFNAMSIZ-1    → 12
+    // OIF      : IFNAMSIZ-1=15   → 13
+    // Gateway  : IPv6=39         → 25
+    // Grp?     : "yes"/"no"      →  3
+    // Group IDs: "354,364"       → 20
+    // GrpType  : "resilient"=9   →  9
+    // BH       : "yes/no"=3      →  3
+    // FDB      : "yes/no"=3      →  3
+    // Master   : IFNAMSIZ-1      → 12
     constexpr int cI = 6, cF = 6, cO = 7, cP = 8, cL = 12, cN = 13, cG = 25,
-                  cR = 28, cT = 9, cB = 3, cD = 3, cM = 12;
+                  cQ = 3, cR = 20, cT = 9, cB = 3, cD = 3, cM = 12;
 
     auto hbar = [](int n) {
         std::string s;
@@ -2237,9 +2181,9 @@ static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
     auto mkBorder = [&](const char* l, const char* j, const char* r) {
         return std::string(l) + hbar(cI + 2) + j + hbar(cF + 2) + j +
                hbar(cO + 2) + j + hbar(cP + 2) + j + hbar(cL + 2) + j +
-               hbar(cN + 2) + j + hbar(cG + 2) + j + hbar(cR + 2) + j +
-               hbar(cT + 2) + j + hbar(cB + 2) + j + hbar(cD + 2) + j +
-               hbar(cM + 2) + r;
+               hbar(cN + 2) + j + hbar(cG + 2) + j + hbar(cQ + 2) + j +
+               hbar(cR + 2) + j + hbar(cT + 2) + j + hbar(cB + 2) + j +
+               hbar(cD + 2) + j + hbar(cM + 2) + r;
     };
 
     const std::string top = mkBorder("┌", "┬", "┐");
@@ -2253,53 +2197,24 @@ static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
                         const std::string& flg,
                         const std::string& oif,
                         const std::string& gw,
-                        const std::string& grp,
+                        const std::string& grpFlag,
+                        const std::string& grpIds,
                         const std::string& gtp,
                         const std::string& bh,
                         const std::string& fdb,
                         const std::string& mst) {
-        std::println("│ {:>{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ "
-                     "{:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │",
-                     id,
-                     cI,
-                     fam,
-                     cF,
-                     scp,
-                     cO,
-                     pro,
-                     cP,
-                     flg,
-                     cL,
-                     oif,
-                     cN,
-                     gw,
-                     cG,
-                     grp,
-                     cR,
-                     gtp,
-                     cT,
-                     bh,
-                     cB,
-                     fdb,
-                     cD,
-                     mst,
-                     cM);
+        std::println(
+            "│ {:>{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ "
+            "{:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │ {:<{}} │",
+            id, cI, fam, cF, scp, cO, pro, cP, flg, cL, oif, cN,
+            gw, cG, grpFlag, cQ, grpIds, cR, gtp, cT, bh, cB, fdb, cD,
+            mst, cM);
     };
 
     std::println("\n Nexthop Table  ({} entry/entries)", nexthops.size());
     std::println("{}", top);
-    printRow("ID",
-             "Family",
-             "Scope",
-             "Protocol",
-             "Flags",
-             "OIF",
-             "Gateway",
-             "Group",
-             "GrpType",
-             "BH",
-             "FDB",
-             "Master");
+    printRow("ID", "Family", "Scope", "Protocol", "Flags", "OIF", "Gateway",
+             "Grp", "Group IDs", "GrpType", "BH", "FDB", "Master");
 
     if (nexthops.empty())
     {
@@ -2318,9 +2233,9 @@ static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
             nh.master_name.empty()
                 ? (nh.master ? std::to_string(nh.master) : "-")
                 : nh.master_name;
-        const std::string gtp = nh.group_type == 0
-                                    ? (nh.group_str == "-" ? "-" : "mpath")
-                                    : "resilient";
+        const std::string gtp = nh.is_group
+                                    ? (nh.group_type == 0 ? "mpath" : "resilient")
+                                    : "-";
         printRow(std::to_string(nh.id),
                  familyLabel(nh.family),
                  scopeLabel(nh.scope),
@@ -2328,7 +2243,8 @@ static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
                  rtnhFlagsLabel(nh.flags),
                  oif,
                  nh.gateway.empty() ? "-" : nh.gateway,
-                 nh.group_str,
+                 nh.is_group ? "yes" : "no",
+                 formatGroupIds(nh.group_members),
                  gtp,
                  nh.blackhole ? "yes" : "no",
                  nh.fdb ? "yes" : "no",
@@ -2344,8 +2260,9 @@ static void printNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
  * Format (one entry per line after the header):
  * @code
  *   NEXTHOPS <count>
- *   id=<n> family=<f> scope=<s> proto=<p> flags=<fl> oif=<if> gw=<gw> group=<g>
- * bh=<b> fdb=<f> master=<m> …
+ *   id=<n> family=<f> scope=<s> proto=<p> flags=<fl> oif=<if> gw=<gw>
+ *   is_group=yes/no group_ids=354,364 group_type=mpath encap_type=<n>
+ *   bh=<b> fdb=<f> master=<m>
  * @endcode
  */
 static std::string
@@ -2362,12 +2279,12 @@ serializeNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
             nh.master_name.empty()
                 ? (nh.master ? std::to_string(nh.master) : "-")
                 : nh.master_name;
-        const std::string gtp = nh.group_type == 0
-                                    ? (nh.group_str == "-" ? "-" : "mpath")
-                                    : "resilient";
+        const std::string gtp = nh.is_group
+                                    ? (nh.group_type == 0 ? "mpath" : "resilient")
+                                    : "-";
         os << std::format(
             "id={} family={} scope={} proto={} flags={} oif={} gw={}"
-            " group={} group_count={} group_type={} encap_type={}"
+            " is_group={} group_ids={} group_type={} encap_type={}"
             " bh={} fdb={} master={}\n",
             nh.id,
             familyLabel(nh.family),
@@ -2376,8 +2293,8 @@ serializeNexthopTable(const std::map<uint32_t, NexthopEntry>& nexthops)
             rtnhFlagsLabel(nh.flags),
             oif,
             nh.gateway.empty() ? "-" : nh.gateway,
-            nh.group_str,
-            nh.group_count,
+            nh.is_group ? "yes" : "no",
+            formatGroupIds(nh.group_members),
             gtp,
             nh.encap_type,
             nh.blackhole ? "yes" : "no",
@@ -2428,8 +2345,10 @@ static void nlNexthopUpdate(netlink_nexthop_event_t event,
     e.fdb = nh->fdb;
     e.master = nh->master;
     e.master_name = nh->master_name;
-    e.group_str = formatNhGroup(nh->group, nh->group_count, 28);
-    e.group_count = nh->group_count;
+    e.is_group = (nh->group_count > 0);
+    e.group_members.clear();
+    for (uint32_t i = 0; i < nh->group_count; ++i)
+        e.group_members.push_back({nh->group[i].id, nh->group[i].weight});
     e.group_type = nh->group_type;
     e.encap_type = nh->encap_type;
     ctx->nexthops[nh->id] = e;
@@ -2738,18 +2657,62 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
  *
  * Unlike @c WatchCtx this context has no gRPC client; it only maintains the
  * in-memory route table and publishes snapshots to the shared UDP server.
+ * nexthops points to the shared nexthop table for resolving nhid → NhInfo.
  */
 struct StartupRouteCtx
 {
-    std::map<std::string, WatchRoute> routes; ///< "dest|gw|iface" → WatchRoute
+    std::map<std::string, WatchRoute> routes; ///< dest → WatchRoute (one per dst)
     sra::UdpTableServer* udpServer{nullptr};
+    const std::map<uint32_t, NexthopEntry>* nexthops{nullptr}; ///< read-only NH table
 };
+
+/**
+ * @brief Resolves a nexthop object ID to a list of NhInfo entries.
+ *
+ * Looks up @p nhid in @p nexthops.  If it is a group, expands each member
+ * recursively by one level.  Returns an empty vector when nhid is 0 or
+ * the table is null / missing the entry.
+ */
+static std::vector<NhInfo> resolveNhid(
+    uint32_t nhid,
+    const std::map<uint32_t, NexthopEntry>* nexthops)
+{
+    if (!nexthops || nhid == 0)
+        return {};
+    auto it = nexthops->find(nhid);
+    if (it == nexthops->end())
+        return {};
+    const auto& nh = it->second;
+    if (nh.is_group)
+    {
+        std::vector<NhInfo> result;
+        for (const auto& m : nh.group_members)
+        {
+            auto jt = nexthops->find(m.id);
+            if (jt == nexthops->end())
+                continue;
+            NhInfo info;
+            info.gateway = jt->second.gateway;
+            info.dev = jt->second.oif_name;
+            info.ifindex = jt->second.oif;
+            info.weight = static_cast<uint8_t>(m.weight + 1);
+            result.push_back(std::move(info));
+        }
+        return result;
+    }
+    NhInfo info;
+    info.gateway = nh.gateway;
+    info.dev = nh.oif_name;
+    info.ifindex = nh.oif;
+    info.weight = 1;
+    return {std::move(info)};
+}
 
 /**
  * @brief Silent live-route callback for the startup background thread.
  *
- * Updates the in-memory route table and publishes to UDP without any
- * console output (so it does not interfere with other command output).
+ * Updates the in-memory route table (one entry per destination) and publishes
+ * to UDP without any console output.
  */
 static void startupRouteLiveCb(netlink_event_t event,
                                const netlink_route32_t* route,
@@ -2763,33 +2726,49 @@ static void startupRouteLiveCb(netlink_event_t event,
         std::string(dst_buf) + "/" +
         std::to_string(static_cast<unsigned>(route->dst_len));
 
-    char gw_buf[INET_ADDRSTRLEN] = {};
-    if (route->gateway.s_addr != 0)
-        inet_ntop(AF_INET, &route->gateway, gw_buf, sizeof(gw_buf));
-    const std::string gw = gw_buf;
-    const std::string iface = route->ifname;
-    const std::string key = dest + "|" + gw + "|" + iface;
-
     if (event == NETLINK_ROUTE_REMOVED)
     {
-        ctx->routes.erase(key);
+        ctx->routes.erase(dest);
     }
     else
     {
-        ctx->routes[key] = WatchRoute{dest,
-                                      gw,
-                                      iface,
-                                      route->ifindex,
-                                      route->metric,
-                                      route->table,
-                                      route->protocol,
-                                      {},
-                                      route->family,
-                                      route->dst_len,
-                                      route->tos,
-                                      route->scope,
-                                      route->type,
-                                      route->flags};
+        WatchRoute wr;
+        wr.dest = dest;
+        wr.nhid = route->nhid;
+        wr.metric = route->metric;
+        wr.table = route->table;
+        wr.protocol = route->protocol;
+        wr.family = route->family;
+        wr.dst_len = route->dst_len;
+        wr.tos = route->tos;
+        wr.scope = route->scope;
+        wr.type = route->type;
+        wr.flags = route->flags;
+
+        // Resolve nexthops from the nexthop object table when nhid is set.
+        if (route->nhid != 0)
+        {
+            wr.nexthops = resolveNhid(route->nhid, ctx->nexthops);
+        }
+
+        // Fall back to gateway/iface embedded in the route message.
+        if (wr.nexthops.empty())
+        {
+            char gw_buf[INET_ADDRSTRLEN] = {};
+            if (route->gateway.s_addr != 0)
+                inet_ntop(AF_INET, &route->gateway, gw_buf, sizeof(gw_buf));
+            if (gw_buf[0] || route->ifname[0])
+            {
+                NhInfo nh;
+                nh.gateway = gw_buf;
+                nh.dev = route->ifname;
+                nh.ifindex = route->ifindex;
+                nh.weight = 1;
+                wr.nexthops.push_back(std::move(nh));
+            }
+        }
+
+        ctx->routes[dest] = std::move(wr);
     }
 
     if (ctx->udpServer)
@@ -2939,12 +2918,13 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
         return;
     }
 
-    // If the nexthop is not yet in the adjacency table, send an ICMP echo
-    // request to trigger ARP/NDP resolution before the route is installed.
-    if (neighCtx && !neighborHasIp(*neighCtx, gateway))
+    // Only send an ICMP echo if the nexthop is already in the adjacency table
+    // (i.e. its MAC address is resolved).  Sending to an unresolved address
+    // would fail silently and serves no useful purpose here.
+    if (neighCtx && neighborHasIp(*neighCtx, gateway))
     {
         std::println(
-            "[Nexthops] nexthop gw={} id={} absent from adjacency table — "
+            "[Nexthops] nexthop gw={} id={} in adjacency table — "
             "sending ICMP echo request",
             gateway,
             nh->id);
@@ -3459,23 +3439,20 @@ int main(int argc, char* argv[])
             {
                 if (kr.prefixLen != 32 || kr.type != RTN_UNICAST)
                     continue;
-                const std::string key =
-                    kr.destination + "|" + kr.gateway + "|" + kr.interfaceName;
-                startupRouteCtx.routes[key] =
-                    WatchRoute{kr.destination,
-                               kr.gateway,
-                               kr.interfaceName,
-                               kr.interfaceIndex,
-                               kr.metric,
-                               kr.table,
-                               kr.protocol,
-                               {},
-                               static_cast<uint8_t>(kr.family),
-                               kr.prefixLen,
-                               0u,
-                               kr.scope,
-                               kr.type,
-                               0u};
+                WatchRoute wr;
+                wr.dest = kr.destination;
+                wr.nhid = kr.nhid;
+                wr.metric = kr.metric;
+                wr.table = kr.table;
+                wr.protocol = kr.protocol;
+                wr.family = static_cast<uint8_t>(kr.family);
+                wr.dst_len = kr.prefixLen;
+                wr.scope = kr.scope;
+                wr.type = kr.type;
+                if (!kr.gateway.empty() || !kr.interfaceName.empty())
+                    wr.nexthops.push_back({kr.gateway, kr.interfaceName,
+                                           kr.interfaceIndex, 1});
+                startupRouteCtx.routes[kr.destination] = std::move(wr);
             }
         }
     }
@@ -3510,6 +3487,17 @@ int main(int argc, char* argv[])
     }
     startupUdpServer.setNexthopData(
         serializeNexthopTable(startupNhCtx.nexthops));
+
+    // ── Step 3b: Wire nexthop table into route context and re-resolve ─────
+    // Now that both tables are populated, point the route context at the
+    // nexthop map so live callbacks and initial routes can resolve nhid.
+    startupRouteCtx.nexthops = &startupNhCtx.nexthops;
+    for (auto& [key, wr] : startupRouteCtx.routes)
+    {
+        if (wr.nhid != 0 && wr.nexthops.empty())
+            wr.nexthops = resolveNhid(wr.nhid, startupRouteCtx.nexthops);
+    }
+    startupUdpServer.setRouteData(serializeRouteTable(startupRouteCtx.routes));
 
     // ── Step 4: Start the UDP server (data is pre-populated) ─────────────
     if (!startupUdpServer.start())
@@ -4070,10 +4058,11 @@ int main(int argc, char* argv[])
 
         for (const auto& gateway : vrfTable.nexthops())
         {
-            // Check adjacency; probe the nexthop if not yet resolved to a MAC.
-            if (!neighborHasIp(startupNeighCtx, gateway))
+            // Only send ICMP if the nexthop is already resolved in the
+            // adjacency table (MAC known).
+            if (neighborHasIp(startupNeighCtx, gateway))
             {
-                std::println("[run] nexthop '{}' absent from adjacency table — "
+                std::println("[run] nexthop '{}' in adjacency table — "
                              "sending ICMP echo request",
                              gateway);
                 sendIcmpEchoRequest(gateway);
