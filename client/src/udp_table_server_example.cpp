@@ -85,29 +85,88 @@ struct ExNeighbor
 };
 
 /**
- * @brief Minimal nexthop entry for the example.
+ * @brief One member of an ECMP nexthop group.
+ */
+struct ExNhGroupMember
+{
+    uint32_t id{0};
+    uint8_t weight{0}; ///< raw kernel weight; actual = weight + 1
+};
+
+/**
+ * @brief Nexthop object entry matching the real netlink_nexthop_t data.
+ *
+ * Simple nexthops carry gateway / oif; group nexthops set is_group=true
+ * and populate group_members instead.
  */
 struct ExNexthop
 {
     uint32_t id{0};
-    std::string family;
-    std::string gateway;
-    std::string oif;
-    std::string protocol;
-    std::string scope;
+    std::string family;   ///< "inet" / "inet6" / "-"
+    std::string gateway;  ///< next-hop IP or "-"
+    std::string oif;      ///< outgoing interface name or "-"
+    std::string protocol; ///< "ospf", "zebra", "static", …
+    std::string scope;    ///< "global", "link", …
+    std::string flags;    ///< RTNH_F_* label or "0x0"
+    bool is_group{false};
+    std::vector<ExNhGroupMember> group_members;
+    std::string group_type; ///< "mpath" / "resilient" / "-"
+    uint16_t encap_type{0};
+    bool blackhole{false};
+    bool fdb{false};
+    std::string master; ///< VRF/bridge master name or "-"
 };
 
 /**
- * @brief Minimal route entry for the example.
+ * @brief One resolved nexthop within a route (gateway + outgoing interface).
+ */
+struct ExNhInfo
+{
+    std::string gateway; ///< next-hop IP or "(none)"
+    std::string dev;     ///< outgoing interface name or "(none)"
+    uint32_t ifindex{0};
+    uint8_t weight{1};
+};
+
+/**
+ * @brief Route entry matching the WatchRoute structure.
+ *
+ * A single dest may have multiple ExNhInfo entries (ECMP).
  */
 struct ExRoute
 {
-    std::string dest; ///< e.g. "10.0.0.1/32"
-    std::string gateway;
-    std::string iface;
+    std::string dest;    ///< e.g. "10.0.0.1/32"
+    uint32_t nhid{0};    ///< nexthop object ID (0 when inline)
     uint32_t metric{0};
+    uint32_t table{254}; ///< RT_TABLE_MAIN
     std::string protocol;
+    std::string family;
+    uint8_t dst_len{32};
+    uint8_t tos{0};
+    std::string scope;
+    uint8_t type{1}; ///< RTN_UNICAST
+    uint32_t flags{0};
+    std::string srmd_id; ///< server-assigned route ID or "(pending)"
+    std::vector<ExNhInfo> nexthops;
 };
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+static std::string formatGroupIds(const std::vector<ExNhGroupMember>& members)
+{
+    if (members.empty())
+        return "-";
+    std::string s;
+    for (const auto& m : members)
+    {
+        if (!s.empty())
+            s += ',';
+        s += std::to_string(m.id);
+    }
+    return s;
+}
 
 // ---------------------------------------------------------------------------
 // Serializers
@@ -116,7 +175,7 @@ struct ExRoute
 /**
  * @brief Serializes the neighbor table to a text snapshot for UDP delivery.
  *
- * Format (one entry per line after the header):
+ * Format:
  * @code
  *   NEIGHBORS <count>
  *   family=inet dst=<ip> mac=<mac> iface=<if> state=<state>
@@ -145,7 +204,9 @@ static std::string serializeNeighbors(const std::vector<ExNeighbor>& table)
  * Format:
  * @code
  *   NEXTHOPS <count>
- *   id=<n> family=<f> gateway=<gw> oif=<if> protocol=<p> scope=<s>
+ *   id=<n> family=<f> scope=<s> proto=<p> flags=<fl> oif=<if> gw=<gw>
+ *   is_group=yes/no group_ids=<id>[,<id>...] group_type=mpath|resilient|-
+ *   encap_type=<n> bh=yes/no fdb=yes/no master=<m>
  *   …
  * @endcode
  */
@@ -155,14 +216,26 @@ static std::string serializeNexthops(const std::vector<ExNexthop>& table)
     os << "NEXTHOPS " << table.size() << '\n';
     for (const auto& n : table)
     {
+        const std::string gtp =
+            n.is_group ? (n.group_type.empty() ? "mpath" : n.group_type) : "-";
         os << std::format(
-            "id={} family={} gateway={} oif={} protocol={} scope={}\n",
+            "id={} family={} scope={} proto={} flags={} oif={} gw={}"
+            " is_group={} group_ids={} group_type={} encap_type={}"
+            " bh={} fdb={} master={}\n",
             n.id,
-            n.family,
-            n.gateway,
-            n.oif,
-            n.protocol,
-            n.scope);
+            n.family.empty() ? "-" : n.family,
+            n.scope.empty() ? "-" : n.scope,
+            n.protocol.empty() ? "-" : n.protocol,
+            n.flags.empty() ? "0x0" : n.flags,
+            n.oif.empty() ? "-" : n.oif,
+            n.gateway.empty() ? "-" : n.gateway,
+            n.is_group ? "yes" : "no",
+            formatGroupIds(n.group_members),
+            gtp,
+            n.encap_type,
+            n.blackhole ? "yes" : "no",
+            n.fdb ? "yes" : "no",
+            n.master.empty() ? "-" : n.master);
     }
     return os.str();
 }
@@ -173,8 +246,10 @@ static std::string serializeNexthops(const std::vector<ExNexthop>& table)
  * Format:
  * @code
  *   ROUTES <count>
- *   dest=<prefix> gw=<gw> iface=<if> metric=<m> protocol=<p>
- *   …
+ *   dest=<prefix> nhid=<n> metric=<m> table=<t> proto=<p>
+ *   family=<f> dst_len=<d> tos=<t> scope=<s> type=<t> flags=<fl> id=<srmd-id>
+ *     nexthop gw=<gw> dev=<dev> ifidx=<n> weight=<w>
+ *     …
  * @endcode
  */
 static std::string serializeRoutes(const std::vector<ExRoute>& table)
@@ -183,12 +258,30 @@ static std::string serializeRoutes(const std::vector<ExRoute>& table)
     os << "ROUTES " << table.size() << '\n';
     for (const auto& r : table)
     {
-        os << std::format("dest={} gw={} iface={} metric={} protocol={}\n",
-                          r.dest,
-                          r.gateway.empty() ? "(none)" : r.gateway,
-                          r.iface,
-                          r.metric,
-                          r.protocol);
+        os << std::format(
+            "dest={} nhid={} metric={} table={} proto={}"
+            " family={} dst_len={} tos={} scope={} type={} flags=0x{:08x}"
+            " id={}\n",
+            r.dest,
+            r.nhid,
+            r.metric,
+            r.table,
+            r.protocol.empty() ? "-" : r.protocol,
+            r.family.empty() ? "inet" : r.family,
+            static_cast<unsigned>(r.dst_len),
+            static_cast<unsigned>(r.tos),
+            r.scope.empty() ? "global" : r.scope,
+            static_cast<unsigned>(r.type),
+            r.flags,
+            r.srmd_id.empty() ? "(pending)" : r.srmd_id);
+        for (const auto& nh : r.nexthops)
+        {
+            os << std::format("  nexthop gw={} dev={} ifidx={} weight={}\n",
+                              nh.gateway.empty() ? "(none)" : nh.gateway,
+                              nh.dev.empty() ? "(none)" : nh.dev,
+                              nh.ifindex,
+                              static_cast<unsigned>(nh.weight));
+        }
     }
     return os.str();
 }
@@ -225,30 +318,86 @@ int main()
     }
 
     // ── Initial table state ───────────────────────────────────────────────
-    //
-    // These populate the snapshots that any client querying the ports will
-    // receive immediately.
 
     // ── Port 9001: ARP neighbors ─────────────────────────────────────────
     std::vector<ExNeighbor> neighbors = {
-        {"inet", "192.168.1.1", "aa:bb:cc:dd:ee:01", "eth0", "reachable"},
-        {"inet", "192.168.1.2", "aa:bb:cc:dd:ee:02", "eth0", "stale"},
-        {"inet6", "fe80::1", "aa:bb:cc:dd:ee:03", "eth1", "reachable"},
+        {"inet", "192.168.0.2", "aa:bb:cc:dd:ee:01", "Ethernet46", "reachable"},
+        {"inet", "192.168.0.6", "aa:bb:cc:dd:ee:02", "Ethernet47", "reachable"},
+        {"inet6", "fe80::1",    "aa:bb:cc:dd:ee:03", "Ethernet46", "stale"},
     };
     udp.setNeighborData(serializeNeighbors(neighbors));
 
     // ── Port 9002: nexthop objects ────────────────────────────────────────
+    //
+    // Two simple nexthops (354, 364) plus one ECMP group (363) that
+    // references them — mirrors the "id 363 group 354/364 proto zebra"
+    // scenario from FRR zebra.
     std::vector<ExNexthop> nexthops = {
-        {1, "inet", "10.0.0.1", "eth0", "ospf", "global"},
-        {2, "inet", "10.0.0.2", "eth0", "ospf", "global"},
-        {3, "inet6", "fe80::1", "eth1", "static", "link"},
+        {
+            .id       = 354,
+            .family   = "inet",
+            .gateway  = "192.168.0.2",
+            .oif      = "Ethernet46",
+            .protocol = "zebra",
+            .scope    = "global",
+            .flags    = "0x0",
+        },
+        {
+            .id       = 364,
+            .family   = "inet",
+            .gateway  = "192.168.0.6",
+            .oif      = "Ethernet47",
+            .protocol = "zebra",
+            .scope    = "global",
+            .flags    = "0x0",
+        },
+        {
+            .id          = 363,
+            .family      = "-",
+            .protocol    = "zebra",
+            .scope       = "-",
+            .flags       = "0x0",
+            .is_group    = true,
+            .group_members = {{354, 0}, {364, 0}}, // weight 0 → actual 1
+            .group_type  = "mpath",
+        },
     };
     udp.setNexthopData(serializeNexthops(nexthops));
 
     // ── Port 9003: IPv4 /32 routing table ─────────────────────────────────
+    //
+    // ECMP route for 2.2.2.2/32 via nhid 363 (group of 354 + 364).
+    // Inline simple route for 3.3.3.3/32 (no nexthop object).
     std::vector<ExRoute> routes = {
-        {"10.1.0.1/32", "10.0.0.1", "eth0", 100, "ospf"},
-        {"10.1.0.2/32", "10.0.0.2", "eth0", 100, "ospf"},
+        {
+            .dest     = "2.2.2.2/32",
+            .nhid     = 363,
+            .metric   = 20,
+            .table    = 254,
+            .protocol = "ospf",
+            .family   = "inet",
+            .dst_len  = 32,
+            .scope    = "global",
+            .srmd_id  = "(pending)",
+            .nexthops = {
+                {"192.168.0.2", "Ethernet46", 46, 1},
+                {"192.168.0.6", "Ethernet47", 47, 1},
+            },
+        },
+        {
+            .dest     = "3.3.3.3/32",
+            .nhid     = 0,
+            .metric   = 20,
+            .table    = 254,
+            .protocol = "ospf",
+            .family   = "inet",
+            .dst_len  = 32,
+            .scope    = "global",
+            .srmd_id  = "(pending)",
+            .nexthops = {
+                {"10.0.0.1", "eth0", 2, 1},
+            },
+        },
     };
     udp.setRouteData(serializeRoutes(routes));
 
@@ -277,33 +426,63 @@ int main()
         if (cycle == 0)
         {
             // ── Simulate NETLINK_NEIGH_ADDED on port 9001 ────────────────
-            std::println("[event] NEIGH ADDED 192.168.2.10 on eth2 "
+            std::println("[event] NEIGH ADDED 192.168.1.10 on Ethernet48 "
                          "(pushed to port {} subscribers)",
                          sra::UDP_PORT_NEIGHBORS);
-            neighbors.push_back({"inet",
-                                 "192.168.2.10",
-                                 "de:ad:be:ef:00:01",
-                                 "eth2",
-                                 "reachable"});
+            neighbors.push_back(
+                {"inet", "192.168.1.10", "de:ad:be:ef:00:01", "Ethernet48",
+                 "reachable"});
             udp.setNeighborData(serializeNeighbors(neighbors));
         }
         else if (cycle == 1)
         {
             // ── Simulate NETLINK_NEXTHOP_ADDED on port 9002 ──────────────
-            std::println("[event] NEXTHOP ADDED id=4 via 10.0.0.3 "
-                         "(pushed to port {} subscribers)",
+            // Add a new simple nexthop and a group referencing it + 354.
+            std::println("[event] NEXTHOP ADDED id=370 via 192.168.1.10 + "
+                         "group id=371 (pushed to port {} subscribers)",
                          sra::UDP_PORT_NEXTHOPS);
-            nexthops.push_back(
-                {4, "inet", "10.0.0.3", "eth0", "ospf", "global"});
+            nexthops.push_back({
+                .id       = 370,
+                .family   = "inet",
+                .gateway  = "192.168.1.10",
+                .oif      = "Ethernet48",
+                .protocol = "zebra",
+                .scope    = "global",
+                .flags    = "0x0",
+            });
+            nexthops.push_back({
+                .id           = 371,
+                .family       = "-",
+                .protocol     = "zebra",
+                .scope        = "-",
+                .flags        = "0x0",
+                .is_group     = true,
+                .group_members = {{354, 0}, {370, 0}},
+                .group_type   = "mpath",
+            });
             udp.setNexthopData(serializeNexthops(nexthops));
         }
         else
         {
             // ── Simulate NETLINK_ROUTE_ADDED on port 9003 ────────────────
-            std::println("[event] ROUTE ADDED 10.1.0.3/32 via 10.0.0.3 "
+            std::println("[event] ROUTE ADDED 4.4.4.4/32 nhid=371 "
                          "(pushed to port {} subscribers)",
                          sra::UDP_PORT_ROUTES);
-            routes.push_back({"10.1.0.3/32", "10.0.0.3", "eth0", 100, "ospf"});
+            routes.push_back({
+                .dest     = "4.4.4.4/32",
+                .nhid     = 371,
+                .metric   = 20,
+                .table    = 254,
+                .protocol = "ospf",
+                .family   = "inet",
+                .dst_len  = 32,
+                .scope    = "global",
+                .srmd_id  = "(pending)",
+                .nexthops = {
+                    {"192.168.0.2",  "Ethernet46", 46, 1},
+                    {"192.168.1.10", "Ethernet48", 48, 1},
+                },
+            });
             udp.setRouteData(serializeRoutes(routes));
         }
     }
