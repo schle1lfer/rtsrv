@@ -4537,6 +4537,23 @@ int main(int argc, char* argv[])
             }
 
             std::println("[add-del-list] OSPF /32 routes: {}", ospf32.size());
+
+            std::map<uint32_t, NexthopEntry> nhTable;
+            {
+                int nhfd = netlink_nexthop_init();
+                if (nhfd >= 0)
+                {
+                    netlink_nexthop_dump(nhfd, nlNhDumpToMapCb, &nhTable);
+                    netlink_nexthop_close(nhfd);
+                }
+                else
+                {
+                    std::println(
+                        "[add-del-list] warning: netlink_nexthop_init "
+                        "failed, nhid-based routes will not be resolved");
+                }
+            }
+
             for (const auto* kr : ospf32)
             {
                 const bool isEcmp = kr->nexthops.size() > 1;
@@ -4555,10 +4572,25 @@ int main(int argc, char* argv[])
 
                 if (isNhid)
                 {
-                    // nexthop data lives in the kernel nexthop table under
-                    // nhid; it is not inlined in the route message
-                    std::println("\t\t\tnexthop: nhid={} (not resolved)",
-                                 kr->nhid);
+                    const auto resolved = resolveNhid(kr->nhid, &nhTable);
+                    if (resolved.empty())
+                    {
+                        std::println("\t\t\tnexthop: nhid={} (not resolved)",
+                                     kr->nhid);
+                    }
+                    else
+                    {
+                        for (const auto& nh : resolved)
+                        {
+                            std::println(
+                                "\t\t\tnexthop: nhid={} gw={} iface={} "
+                                "iface_idx={}",
+                                kr->nhid,
+                                nh.gateway,
+                                nh.dev,
+                                nh.ifindex);
+                        }
+                    }
                 }
                 else
                 {
