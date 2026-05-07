@@ -308,6 +308,103 @@ struct NexthopDelParams
 };
 
 // ---------------------------------------------------------------------------
+// Nexthop ID pool
+// ---------------------------------------------------------------------------
+
+/// @brief First nexthop object ID managed by NexthopIdPool.
+inline constexpr std::uint32_t NEXTHOP_POOL_BASE = 7000;
+
+/// @brief Number of IDs managed by NexthopIdPool.
+///        The pool covers [NEXTHOP_POOL_BASE, NEXTHOP_POOL_BASE +
+///        NEXTHOP_POOL_SIZE).
+inline constexpr std::size_t NEXTHOP_POOL_SIZE = 1000;
+
+/**
+ * @brief Statically-allocated pool of kernel nexthop object IDs.
+ *
+ * Manages a fixed range of IDs [NEXTHOP_POOL_BASE, NEXTHOP_POOL_BASE +
+ * NEXTHOP_POOL_SIZE).  allocate() returns the smallest available ID and
+ * marks it used; release() returns an ID to the pool; markUsed() allows
+ * pre-seeding the pool from an external source (e.g. a kernel nexthop dump)
+ * so that IDs already present in the kernel are not handed out again.
+ *
+ * All operations are O(NEXTHOP_POOL_SIZE) in the worst case, which is
+ * negligible for a pool of 1000 entries.
+ */
+class NexthopIdPool
+{
+public:
+    /**
+     * @brief Allocates the minimum available ID from the pool.
+     *
+     * Scans from @c NEXTHOP_POOL_BASE upward and returns the first free entry.
+     *
+     * @return The allocated ID on success; 0 when the pool is exhausted.
+     */
+    [[nodiscard]] std::uint32_t allocate() noexcept
+    {
+        for (std::size_t i = 0; i < NEXTHOP_POOL_SIZE; ++i)
+        {
+            if (!used_[i])
+            {
+                used_[i] = true;
+                return static_cast<std::uint32_t>(NEXTHOP_POOL_BASE + i);
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * @brief Returns an ID to the pool so it can be allocated again.
+     *
+     * No-op when @p id is outside the managed range.
+     *
+     * @param id  ID to release (must have been returned by allocate()).
+     */
+    void release(std::uint32_t id) noexcept
+    {
+        if (id >= NEXTHOP_POOL_BASE &&
+            id < NEXTHOP_POOL_BASE + NEXTHOP_POOL_SIZE)
+        {
+            used_[id - NEXTHOP_POOL_BASE] = false;
+        }
+    }
+
+    /**
+     * @brief Marks @p id as in-use without returning it to the caller.
+     *
+     * Use this to pre-seed the pool from a kernel nexthop dump so that IDs
+     * already present in the kernel are not handed out again.
+     * No-op when @p id is outside the managed range.
+     *
+     * @param id  ID to mark as used.
+     */
+    void markUsed(std::uint32_t id) noexcept
+    {
+        if (id >= NEXTHOP_POOL_BASE &&
+            id < NEXTHOP_POOL_BASE + NEXTHOP_POOL_SIZE)
+        {
+            used_[id - NEXTHOP_POOL_BASE] = true;
+        }
+    }
+
+    /**
+     * @brief Returns true when @p id falls within the managed range,
+     *        regardless of whether it is currently allocated or free.
+     *
+     * @param id  ID to test.
+     */
+    [[nodiscard]] bool contains(std::uint32_t id) const noexcept
+    {
+        return id >= NEXTHOP_POOL_BASE &&
+               id < NEXTHOP_POOL_BASE + NEXTHOP_POOL_SIZE;
+    }
+
+private:
+    std::array<bool, NEXTHOP_POOL_SIZE> used_{};
+};
+
+// ---------------------------------------------------------------------------
 // Data structures — interfaces and addresses
 // ---------------------------------------------------------------------------
 

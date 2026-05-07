@@ -4419,6 +4419,12 @@ int main(int argc, char* argv[])
         cmdproto::SingleRouteRequest singleReq;
         singleReq.vrfs_name = vrfsName;
 
+        // Seed the nexthop ID pool from the kernel nexthop table so that IDs
+        // already present in the kernel are not allocated again.
+        netlink::NexthopIdPool nhPool;
+        for (const auto& [id, nh] : startupNhCtx.nexthops)
+            nhPool.markUsed(id);
+
         for (const auto& li : glResult->interfaces())
         {
             if (li.type() != "nni")
@@ -4453,6 +4459,59 @@ int main(int argc, char* argv[])
                     break;
                 }
             }
+
+            // If no kernel nexthop exists for this gateway, allocate an ID
+            // from the pool and install a new nexthop object so ud_server can
+            // reference it by ID.
+            if (nhId == 0)
+            {
+                const uint32_t allocId = nhPool.allocate();
+                if (allocId != 0)
+                {
+                    netlink::NexthopAddParams nhParams;
+                    nhParams.id      = allocId;
+                    nhParams.if_name = li.name();
+                    if (auto gw = netlink::parse_ipv4(li.nexthop()); gw)
+                    {
+                        nhParams.gateway     = *gw;
+                        nhParams.has_gateway = true;
+                    }
+                    if (auto r = netlink::add_nexthop(nhParams); r)
+                    {
+                        nhId = allocId;
+                        std::println(
+                            "[add-del-list]   installed nexthop id={} gw='{}'",
+                            nhId,
+                            li.nexthop());
+                        // Cache in the in-memory table so other interfaces
+                        // sharing the same gateway reuse this ID.
+                        NexthopEntry poolEnt;
+                        poolEnt.id      = nhId;
+                        poolEnt.gateway = li.nexthop();
+                        poolEnt.oif_name = li.name();
+                        startupNhCtx.nexthops[nhId] = poolEnt;
+                    }
+                    else
+                    {
+                        std::println(
+                            std::cerr,
+                            "[add-del-list]   add_nexthop id={} gw='{}' "
+                            "failed: {}",
+                            allocId,
+                            li.nexthop(),
+                            r.error().message());
+                        nhPool.release(allocId);
+                    }
+                }
+                else
+                {
+                    std::println(
+                        std::cerr,
+                        "[add-del-list]   nexthop pool exhausted for gw='{}'",
+                        li.nexthop());
+                }
+            }
+
             entry.nexthop_id_ipv4 = nhId;
 
             for (const auto& pfx : li.prefixes())
