@@ -4441,7 +4441,19 @@ int main(int argc, char* argv[])
                 entry.iface_name[k] = ifn[k];
             entry.nexthop_addr_ipv4 = {
                 nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-            entry.nexthop_id_ipv4 = 0;
+
+            // Look up the kernel nexthop object ID for this gateway IP so that
+            // the ud_server can reference the nexthop by ID (e.g. for ECMP).
+            uint32_t nhId = 0;
+            for (const auto& [id, nh] : startupNhCtx.nexthops)
+            {
+                if (nh.gateway == li.nexthop())
+                {
+                    nhId = id;
+                    break;
+                }
+            }
+            entry.nexthop_id_ipv4 = nhId;
 
             for (const auto& pfx : li.prefixes())
             {

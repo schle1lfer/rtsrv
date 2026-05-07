@@ -276,6 +276,38 @@ struct RouteDelParams
 };
 
 // ---------------------------------------------------------------------------
+// Data structures — nexthop objects (Linux 5.3+)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Parameters for adding a kernel nexthop object.
+ *
+ * Equivalent to: ip nexthop add id <id> via <gateway> dev <if_name>
+ *
+ * Mandatory fields: @c id (must be >= 1).
+ * Provide @c gateway + @c has_gateway = true and/or @c if_name to specify
+ * the forwarding path.  An object with neither is a blackhole nexthop.
+ */
+struct NexthopAddParams
+{
+    std::uint32_t id{};  ///< Nexthop identifier (>= 1; 0 = kernel auto-assign)
+    Ipv4Addr gateway{};  ///< IPv4 gateway address (network byte order)
+    bool has_gateway{};  ///< Set to true when @c gateway is valid
+    std::string if_name; ///< Egress interface name (empty = kernel chooses)
+    RouteProtocol protocol{RouteProtocol::Static}; ///< Nexthop originator
+};
+
+/**
+ * @brief Parameters for deleting a kernel nexthop object.
+ *
+ * Mandatory field: @c id.
+ */
+struct NexthopDelParams
+{
+    std::uint32_t id{}; ///< Nexthop identifier to delete
+};
+
+// ---------------------------------------------------------------------------
 // Data structures — interfaces and addresses
 // ---------------------------------------------------------------------------
 
@@ -362,6 +394,39 @@ delete_route(const RouteDelParams& params);
  */
 [[nodiscard]] std::expected<std::vector<RouteEntry>, std::error_code>
 list_routes(RouteTable table = RouteTable::Main);
+
+// ---------------------------------------------------------------------------
+// Nexthop object management (Linux 5.3+)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Creates a new kernel nexthop object via RTM_NEWNEXTHOP + NLM_F_CREATE.
+ *
+ * Equivalent to: ip nexthop add id <id> via <gateway> dev <if_name>
+ *
+ * Fails with @c EEXIST when an object with the same @c id already exists.
+ * Requires @c CAP_NET_ADMIN.
+ *
+ * @param params  Parameters describing the nexthop to create.
+ * @return void on success, or a @c std::error_code on failure.
+ */
+[[nodiscard]] std::expected<void, std::error_code>
+add_nexthop(const NexthopAddParams& params);
+
+/**
+ * @brief Removes an existing kernel nexthop object via RTM_DELNEXTHOP.
+ *
+ * Equivalent to: ip nexthop del id <id>
+ *
+ * Requires @c CAP_NET_ADMIN.
+ *
+ * @param params  Parameters identifying the nexthop to remove.
+ * @return void on success, or a @c std::error_code on failure.
+ *         Returns @c ENOENT (system category) when no object with that ID
+ *         exists.
+ */
+[[nodiscard]] std::expected<void, std::error_code>
+delete_nexthop(const NexthopDelParams& params);
 
 // ---------------------------------------------------------------------------
 // Interface management

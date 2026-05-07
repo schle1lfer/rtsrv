@@ -18,6 +18,7 @@
 
 #include <arpa/inet.h>
 #include <linux/netlink.h>
+#include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <sys/socket.h>
@@ -707,6 +708,69 @@ std::expected<void, std::error_code> delete_route(const RouteDelParams& params)
     {
         msg.add_attr_u32(RTA_TABLE, tbl_u32);
     }
+
+    return nl_transact(sock->fd(), msg);
+}
+
+// ---------------------------------------------------------------------------
+// Nexthop object management (Linux 5.3+)
+// ---------------------------------------------------------------------------
+
+/// @brief @copybrief netlink::add_nexthop
+std::expected<void, std::error_code> add_nexthop(const NexthopAddParams& params)
+{
+    auto sock = NlSocket::open();
+    if (!sock)
+        return std::unexpected(sock.error());
+
+    NlMsg msg;
+    msg.init(RTM_NEWNEXTHOP, NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL);
+
+    struct nhmsg nh
+    {};
+    nh.nh_family = params.has_gateway ? AF_INET : AF_UNSPEC;
+    nh.nh_protocol = static_cast<std::uint8_t>(params.protocol);
+    msg.put_body(nh);
+
+    // NHA_ID — nexthop identifier.
+    msg.add_attr_u32(NHA_ID, params.id);
+
+    // NHA_OIF — output interface index.
+    if (!params.if_name.empty())
+    {
+        auto idx = name_to_index(params.if_name);
+        if (!idx)
+            return std::unexpected(idx.error());
+        msg.add_attr_u32(NHA_OIF, static_cast<std::uint32_t>(*idx));
+    }
+
+    // NHA_GATEWAY — next-hop gateway address.
+    if (params.has_gateway)
+    {
+        msg.add_attr(NHA_GATEWAY, params.gateway.data(), params.gateway.size());
+    }
+
+    return nl_transact(sock->fd(), msg);
+}
+
+/// @brief @copybrief netlink::delete_nexthop
+std::expected<void, std::error_code>
+delete_nexthop(const NexthopDelParams& params)
+{
+    auto sock = NlSocket::open();
+    if (!sock)
+        return std::unexpected(sock.error());
+
+    NlMsg msg;
+    msg.init(RTM_DELNEXTHOP, NLM_F_ACK);
+
+    struct nhmsg nh
+    {};
+    nh.nh_family = AF_UNSPEC;
+    msg.put_body(nh);
+
+    // NHA_ID — identifies the nexthop object to remove.
+    msg.add_attr_u32(NHA_ID, params.id);
 
     return nl_transact(sock->fd(), msg);
 }
