@@ -4560,7 +4560,7 @@ int main(int argc, char* argv[])
                 const bool isNhid = kr->nexthops.empty() && kr->nhid != 0;
 
                 std::println(
-                    "[add-del-list] dst={} nhid={} metric={} table={} "
+                    "[add-del-list] dst={} id={} metric={} table={} "
                     "proto=ospf"
                     "  type={}",
                     kr->destination,
@@ -4573,12 +4573,12 @@ int main(int argc, char* argv[])
                 if (isNhid)
                 {
                     const auto resolved = resolveNhid(kr->nhid, &nhTable);
-                    if (resolved.empty())
-                    {
-                        std::println("\t\t\tnexthop: nhid={} (not resolved)",
-                                     kr->nhid);
-                    }
-                    else
+                    //if (resolved.empty())
+                    //{
+                    //    std::println("\t\t\tnexthop: nhid={} (not resolved)",
+                    //                 kr->nhid);
+                    //}
+                    //else
                     {
                         for (const auto& nh : resolved)
                         {
@@ -4596,12 +4596,12 @@ int main(int argc, char* argv[])
                 {
                     for (const auto& nh : kr->nexthops)
                     {
-                        std::println("\t\t\tnexthop: gw={} iface={} "
-                                     "iface_idx={} hhid={} weight={}",
+                        std::println("\t\t\tnexthop: nhid={} gw={} iface={} "
+                                     "iface_idx={} weight={}",
+                                     nh.hhid,
                                      nh.gateway,
                                      nh.interfaceName,
                                      nh.interfaceIndex,
-                                     nh.hhid,
                                      nh.weight);
                     }
                 }
@@ -4789,9 +4789,15 @@ int prepare_route_add_remain_lb(
             (kr->nhid != 0 || !krIface.empty()))
         {
             std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
-            std::println("[add-del-list] prepare_route_add_remain_lb prepare "
-                         "ROUTE_ADD for {}",
-                         loopback_ipv4);
+            std::println(
+            "[add-del-list] prepare_route_add_remain_lb prepare ROUTE_ADD for {}", loopback_ipv4);
+
+            struct in_addr nhAddr
+            {};
+            if (::inet_pton(AF_INET, loopback_ipv4.c_str(), &nhAddr) != 1) // krGw.c_str()
+                continue;
+            const auto* nhBytes =
+                reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
             cmdproto::Interface entry{};
             static constexpr std::string_view kUnneeded = "unneeded";
@@ -4799,7 +4805,9 @@ int prepare_route_add_remain_lb(
                  k < cmdproto::IFACE_NAME_SIZE && k < kUnneeded.size();
                  ++k)
                 entry.iface_name[k] = kUnneeded[k];
-            entry.nexthop_addr_ipv4 = {0, 0, 0, 0};
+            //entry.nexthop_addr_ipv4 = {0, 0, 0, 0}; // loopback_ipv4
+            entry.nexthop_addr_ipv4 = {
+                nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
             entry.nexthop_id_ipv4 = kr->nhid;
 
             for (const auto& pfx : prefixes->prefixes())
@@ -4822,8 +4830,9 @@ int prepare_route_add_remain_lb(
                     {pb[0], pb[1], pb[2], pb[3]}, maskLen});
             }
 
-            std::println("[add-del-list]   iface='unneeded' nexthop=0.0.0.0"
+            std::println("[add-del-list]   iface='unneeded' nexthop={}"
                          " nhid={} prefixes={}",
+                         loopback_ipv4,
                          kr->nhid,
                          entry.prefixes.size());
 
