@@ -37,6 +37,21 @@ RedisRib::~RedisRib()
         redisFree(ctx_);
 }
 
+bool RedisRib::clear()
+{
+    if (!ctx_)
+        return false;
+
+    auto* reply = static_cast<redisReply*>(
+        redisCommand(ctx_, "DEL %s", kHashKey));
+    if (!reply)
+        return false;
+
+    const bool ok = (reply->type != REDIS_REPLY_ERROR);
+    freeReplyObject(reply);
+    return ok;
+}
+
 bool RedisRib::set(const std::string& prefix, const std::string& nhg_id)
 {
     if (!ctx_)

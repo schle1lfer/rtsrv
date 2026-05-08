@@ -4432,6 +4432,8 @@ int main(int argc, char* argv[])
             std::println(std::cerr,
                          "[add-del-list] Redis not available — "
                          "prefix entries will not be written");
+        else
+            redisRib.clear();
 
         for (const auto& li : glResult->interfaces())
         {

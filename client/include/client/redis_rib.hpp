@@ -37,6 +37,9 @@ public:
     /** HDEL rib:prefix <prefix>. Returns true when the field existed. */
     bool del(const std::string& prefix);
 
+    /** DEL rib:prefix — removes the entire hash. Returns true on success. */
+    bool clear();
+
     /** HGETALL rib:prefix → map of all prefix→nhg_id entries. */
     std::unordered_map<std::string, std::string> getAll() const;
 
