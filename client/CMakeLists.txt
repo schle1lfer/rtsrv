@@ -14,6 +14,7 @@ add_executable(
     src/udp_table_server.cpp
     src/sra_udp_client.cpp
     src/vrf_table.cpp
+    src/redis_rib.cpp
     src/netlink_neigh.c
     src/netlink_nexthop.c
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
@@ -33,6 +34,9 @@ target_include_directories(
         "${BUILD_INFO_GEN_DIR}"
 )
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HIREDIS REQUIRED hiredis)
+
 target_link_libraries(
     sra
     PRIVATE
@@ -44,6 +48,13 @@ target_link_libraries(
         Boost::json
         Boost::program_options
         Boost::system
+        ${HIREDIS_LIBRARIES}
+)
+
+target_include_directories(
+    sra
+    PRIVATE
+        ${HIREDIS_INCLUDE_DIRS}
 )
 
 target_compile_definitions(

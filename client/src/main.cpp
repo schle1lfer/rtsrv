@@ -50,6 +50,7 @@
 #include "client/grpc_proc.hpp"
 #include "client/netlink_neigh.h"
 #include "client/netlink_nexthop.h"
+#include "client/redis_rib.hpp"
 #include "client/route_client.hpp"
 #include "client/routing.hpp"
 #include "client/sot_config.hpp"
@@ -4425,6 +4426,12 @@ int main(int argc, char* argv[])
         for (const auto& [id, nh] : startupNhCtx.nexthops)
             nhPool.markUsed(id);
 
+        sra::RedisRib redisRib;
+        if (!redisRib.connected())
+            std::println(std::cerr,
+                         "[add-del-list] Redis not available — "
+                         "prefix entries will not be written");
+
         for (const auto& li : glResult->interfaces())
         {
             if (li.type() != "nni")
@@ -4532,6 +4539,9 @@ int main(int argc, char* argv[])
                     std::stoul(pfxStr.substr(slash + 1)));
                 entry.prefixes.push_back(cmdproto::PrefixIpv4{
                     {pb[0], pb[1], pb[2], pb[3]}, maskLen});
+
+                if (redisRib.connected())
+                    redisRib.set(pfxStr, std::to_string(nhId));
             }
 
             std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
