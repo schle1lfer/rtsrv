@@ -98,7 +98,8 @@ int prepare_route_add_remain_lb(
     sra::SraUdpClient& vrfClient,
     const std::string& loopback_ipv4,
     std::expected<srmd::v1::GetNodePrefixesResponse, std::string>& prefixes,
-    const std::vector<const sra::KernelRoute*>& ospf32);
+    const std::vector<const sra::KernelRoute*>& ospf32,
+    sra::RedisRib& redisRib);
 
 // ---------------------------------------------------------------------------
 // Output helpers
@@ -4783,7 +4784,7 @@ int main(int argc, char* argv[])
                 // ── Step 7: Prepare ROUTE_ADD for Remaining Loopbacks
                 // ────────────────
                 prepare_route_add_remain_lb(
-                    vrfClient, node.loopback_ipv4(), nodeGl, ospf32);
+                    vrfClient, node.loopback_ipv4(), nodeGl, ospf32, redisRib);
             }
         }
 
@@ -4842,7 +4843,8 @@ int prepare_route_add_remain_lb(
     sra::SraUdpClient& vrfClient,
     const std::string& loopback_ipv4,
     std::expected<srmd::v1::GetNodePrefixesResponse, std::string>& prefixes,
-    const std::vector<const sra::KernelRoute*>& ospf32)
+    const std::vector<const sra::KernelRoute*>& ospf32,
+    sra::RedisRib& redisRib)
 {
     cmdproto::SingleRouteRequest singleReq;
     singleReq.vrfs_name = "RemainLoopbaks";
@@ -4909,6 +4911,9 @@ int prepare_route_add_remain_lb(
                     std::stoul(pfxStr.substr(slash + 1)));
                 entry.prefixes.push_back(cmdproto::PrefixIpv4{
                     {pb[0], pb[1], pb[2], pb[3]}, maskLen});
+
+                if (redisRib.connected())
+                    redisRib.set(pfxStr, std::to_string(kr->nhid));
             }
 
             std::println("[add-del-list]   iface='unneeded' nexthop={}"
