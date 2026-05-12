@@ -491,10 +491,11 @@ log_route_list(std::shared_ptr<netlink::RouteListParams> p)
 int main(int argc, char* argv[])
 {
     // Parse log options from argv (--logstream / --loglevel).
-    auto [logstream, loglevel, remaining] = logger::parse_args(argc, argv);
-    if (logstream.empty())
-        logstream = "stderr";
-    logger::init(logstream, loglevel);
+    auto res = logger::parse_args(argc, argv);
+    // Default log file for ud_server when no path was given.
+    if (res.log_file_base.empty())
+        res.log_file_base = "/var/log/ud_server.log";
+    logger::init(res.log_file_base, res.loglevel, res.extra_stream);
 
     cmdproto::HandlerCallbacks cbs;
     // for hw ASIC
@@ -509,7 +510,7 @@ int main(int argc, char* argv[])
     cmdproto::init_callbacks(std::move(cbs));
 
     const std::string sock_path =
-        (remaining.size() > 1) ? remaining[1] : "/tmp/ud_server.sock";
+        (res.remaining.size() > 1) ? res.remaining[1] : "/tmp/ud_server.sock";
 
     // Install signal handlers for clean shutdown.
     struct sigaction sa
