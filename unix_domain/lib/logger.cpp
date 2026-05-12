@@ -22,6 +22,8 @@
 
 #include "logger.hpp"
 
+#include <unistd.h>
+
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -31,7 +33,6 @@
 #include <format>
 #include <mutex>
 #include <string>
-#include <unistd.h>
 
 namespace logger
 {
@@ -256,7 +257,8 @@ ParseResult parse_args(int argc, char* argv[])
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-void init(const std::string& log_file_base, int loglevel,
+void init(const std::string& log_file_base,
+          int loglevel,
           const std::string& extra_stream)
 {
     std::scoped_lock lock{g_mutex};
@@ -329,8 +331,8 @@ void shutdown() noexcept
 
 bool is_enabled(int level) noexcept
 {
-    return g_active.load(std::memory_order_acquire)
-        && (level >= g_min_level_a.load(std::memory_order_relaxed));
+    return g_active.load(std::memory_order_acquire) &&
+           (level >= g_min_level_a.load(std::memory_order_relaxed));
 }
 
 void log(int level, std::string_view tag, std::string_view msg)

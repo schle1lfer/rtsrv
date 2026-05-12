@@ -18,7 +18,8 @@
  *   -t, --timeout <sec>   RPC deadline in seconds (overrides config)
  *       --tls             use TLS channel (overrides config file)
  *       --ca-cert <path>  CA certificate for TLS verification
- *       --logstream <d>   duplicate logs to: stdout or stderr (file always written)
+ *       --logstream <d>   duplicate logs to: stdout or stderr (file always
+ * written)
  *       --loglevel <n>    min level: DEBUG|1 INFO|2 NOTICE|3 ERR|5
  *   -v, --version         print version and exit
  *   -h, --help            print this help and exit
@@ -901,8 +902,9 @@ struct LoopbackCbEntry
 {
     std::string hostname;
     std::vector<cmdproto::PrefixIpv4> prefixes; ///< Pre-parsed prefix list
-    std::vector<std::string> prefix_strings;    ///< Original CIDR strings (for Redis)
-    uint32_t last_nhid{0};                      ///< nhid last sent to ud_server
+    std::vector<std::string>
+        prefix_strings;    ///< Original CIDR strings (for Redis)
+    uint32_t last_nhid{0}; ///< nhid last sent to ud_server
 };
 
 /** @brief Global map from loopback_ipv4 → LoopbackCbEntry.
@@ -927,8 +929,8 @@ struct WatchCtx
         udpServer; ///< UDP publisher (port 9003); may be nullptr
     std::map<uint32_t, NexthopEntry>
         nexthopTable; ///< nhid → entry for resolving ECMP
-    sra::SraUdpClient*
-        sraClient{nullptr}; ///< ud_server client for ROUTE_ADD (may be nullptr)
+    sra::SraUdpClient* sraClient{
+        nullptr}; ///< ud_server client for ROUTE_ADD (may be nullptr)
 };
 
 /**
@@ -1044,10 +1046,10 @@ static void nlWatchCb(netlink_event_t event,
                 loKey);
             return;
         }
-        struct in_addr nhAddr{};
+        struct in_addr nhAddr
+        {};
         ::inet_pton(AF_INET, loKey.c_str(), &nhAddr);
-        const auto* nb =
-            reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+        const auto* nb = reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
         cmdproto::Interface iface_entry{};
         static constexpr std::string_view kUnneeded = "unneeded";
         for (std::size_t k = 0;
@@ -1055,8 +1057,8 @@ static void nlWatchCb(netlink_event_t event,
              ++k)
             iface_entry.iface_name[k] = kUnneeded[k];
         iface_entry.nexthop_addr_ipv4 = {nb[0], nb[1], nb[2], nb[3]};
-        iface_entry.nexthop_id_ipv4   = nhid;
-        iface_entry.prefixes          = entry.prefixes;
+        iface_entry.nexthop_id_ipv4 = nhid;
+        iface_entry.prefixes = entry.prefixes;
         cmdproto::SingleRouteRequest req;
         req.vrfs_name = "RemainLoopbaks";
         req.interfaces.push_back(std::move(iface_entry));
@@ -1227,9 +1229,10 @@ static void nlWatchCb(netlink_event_t event,
 
                 if (id.empty())
                 {
-                    std::println("{} [REMOVED] {} (no server ID – no gRPC call)",
-                                 ts,
-                                 dest);
+                    std::println(
+                        "{} [REMOVED] {} (no server ID – no gRPC call)",
+                        ts,
+                        dest);
                 }
                 else
                 {
@@ -1393,7 +1396,7 @@ static volatile pthread_t g_add_del_list_nl_tid = 0;
 struct AddDelListCbCtx
 {
     sra::SraUdpClient* vrfClient{nullptr};
-    sra::RedisRib*     redisRib{nullptr};
+    sra::RedisRib* redisRib{nullptr};
 };
 
 static AddDelListCbCtx g_add_del_list_cb_ctx;
@@ -1424,7 +1427,8 @@ static void addDelListSigHandler(int /*signo*/)
  *                   trigger a ROUTE_ADD to ud_server when the destination
  *                   matches a known remaining loopback.
  * @param route      Parsed /32 route descriptor; valid for this call only.
- * @param user_data  Pointer to the global AddDelListCbCtx (vrfClient + redisRib).
+ * @param user_data  Pointer to the global AddDelListCbCtx (vrfClient +
+ * redisRib).
  */
 static void addDelListOspfCb(netlink_event_t event,
                              const netlink_route32_t* route,
@@ -1475,7 +1479,8 @@ static void addDelListOspfCb(netlink_event_t event,
                  route->nhid);
 
     // Build nexthop address bytes from the loopback IP (dst).
-    struct in_addr nhAddr{};
+    struct in_addr nhAddr
+    {};
     ::inet_pton(AF_INET, dst, &nhAddr);
     const auto* nb = reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
 
@@ -1485,9 +1490,9 @@ static void addDelListOspfCb(netlink_event_t event,
          k < cmdproto::IFACE_NAME_SIZE && k < kUnneeded.size();
          ++k)
         iface.iface_name[k] = kUnneeded[k];
-    iface.nexthop_addr_ipv4  = {nb[0], nb[1], nb[2], nb[3]};
-    iface.nexthop_id_ipv4    = route->nhid;
-    iface.prefixes           = entry.prefixes;
+    iface.nexthop_addr_ipv4 = {nb[0], nb[1], nb[2], nb[3]};
+    iface.nexthop_id_ipv4 = route->nhid;
+    iface.prefixes = entry.prefixes;
 
     cmdproto::SingleRouteRequest req;
     req.vrfs_name = "RemainLoopbaks";
@@ -1702,8 +1707,7 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
             std::println("[Watch] remaining nodes: {}", rnResult->nodes_size());
             for (const auto& node : rnResult->nodes())
             {
-                auto nodeGl =
-                    client.getLoopbacksByNodeIp(node.management_ip());
+                auto nodeGl = client.getLoopbacksByNodeIp(node.management_ip());
                 if (!nodeGl)
                 {
                     std::println(
@@ -1717,21 +1721,21 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                 for (const auto& pfx : nodeGl->prefixes())
                 {
                     const std::string& pfxStr = pfx.prefix();
-                    const auto slash          = pfxStr.rfind('/');
+                    const auto slash = pfxStr.rfind('/');
                     if (slash == std::string::npos)
                         continue;
-                    struct in_addr pfxAddr{};
+                    struct in_addr pfxAddr
+                    {};
                     if (::inet_pton(AF_INET,
                                     pfxStr.substr(0, slash).c_str(),
                                     &pfxAddr) != 1)
                         continue;
-                    const auto* pb = reinterpret_cast<const std::uint8_t*>(
-                        &pfxAddr.s_addr);
+                    const auto* pb =
+                        reinterpret_cast<const std::uint8_t*>(&pfxAddr.s_addr);
                     const auto maskLen = static_cast<std::uint8_t>(
                         std::stoul(pfxStr.substr(slash + 1)));
-                    cbEntry.prefixes.push_back(
-                        cmdproto::PrefixIpv4{{pb[0], pb[1], pb[2], pb[3]},
-                                             maskLen});
+                    cbEntry.prefixes.push_back(cmdproto::PrefixIpv4{
+                        {pb[0], pb[1], pb[2], pb[3]}, maskLen});
                     cbEntry.prefix_strings.push_back(pfxStr);
                 }
                 // Seed last_nhid from the kernel snapshot in ctx.routes.
@@ -4713,11 +4717,11 @@ int main(int argc, char* argv[])
                 if (allocId != 0)
                 {
                     netlink::NexthopAddParams nhParams;
-                    nhParams.id      = allocId;
+                    nhParams.id = allocId;
                     nhParams.if_name = li.name();
                     if (auto gw = netlink::parse_ipv4(li.nexthop()); gw)
                     {
-                        nhParams.gateway     = *gw;
+                        nhParams.gateway = *gw;
                         nhParams.has_gateway = true;
                     }
                     if (auto r = netlink::add_nexthop(nhParams); r)
@@ -4730,7 +4734,7 @@ int main(int argc, char* argv[])
                         // Cache in the in-memory table so other interfaces
                         // sharing the same gateway reuse this ID.
                         NexthopEntry poolEnt;
-                        poolEnt.id      = nhId;
+                        poolEnt.id = nhId;
                         poolEnt.gateway = li.nexthop();
                         poolEnt.oif_name = li.name();
                         startupNhCtx.nexthops[nhId] = poolEnt;
@@ -4891,12 +4895,12 @@ int main(int argc, char* argv[])
                 if (isNhid)
                 {
                     const auto resolved = resolveNhid(kr->nhid, &nhTable);
-                    //if (resolved.empty())
+                    // if (resolved.empty())
                     //{
-                    //    std::println("\t\t\tnexthop: nhid={} (not resolved)",
-                    //                 kr->nhid);
-                    //}
-                    //else
+                    //     std::println("\t\t\tnexthop: nhid={} (not resolved)",
+                    //                  kr->nhid);
+                    // }
+                    // else
                     {
                         for (const auto& nh : resolved)
                         {
@@ -4988,7 +4992,8 @@ int main(int argc, char* argv[])
                         const auto slash = pfxStr.rfind('/');
                         if (slash == std::string::npos)
                             continue;
-                        struct in_addr pfxAddr{};
+                        struct in_addr pfxAddr
+                        {};
                         if (::inet_pton(AF_INET,
                                         pfxStr.substr(0, slash).c_str(),
                                         &pfxAddr) != 1)
@@ -4997,9 +5002,8 @@ int main(int argc, char* argv[])
                             &pfxAddr.s_addr);
                         const auto maskLen = static_cast<std::uint8_t>(
                             std::stoul(pfxStr.substr(slash + 1)));
-                        cbEntry.prefixes.push_back(
-                            cmdproto::PrefixIpv4{{pb[0], pb[1], pb[2], pb[3]},
-                                                 maskLen});
+                        cbEntry.prefixes.push_back(cmdproto::PrefixIpv4{
+                            {pb[0], pb[1], pb[2], pb[3]}, maskLen});
                         cbEntry.prefix_strings.push_back(pfxStr);
                     }
                     for (const auto* kr : ospf32)
@@ -5017,7 +5021,8 @@ int main(int argc, char* argv[])
                         cbEntry.hostname,
                         cbEntry.prefixes.size(),
                         cbEntry.last_nhid);
-                    g_loopback_cb_map[node.loopback_ipv4()] = std::move(cbEntry);
+                    g_loopback_cb_map[node.loopback_ipv4()] =
+                        std::move(cbEntry);
                 }
 
                 // ── Nexthop adjacency check for LoopbacksByNodeIp ────────────
@@ -5081,7 +5086,7 @@ int main(int argc, char* argv[])
             {
                 g_add_del_list_nl_fd = nlFd;
                 g_add_del_list_cb_ctx.vrfClient = &vrfClient;
-                g_add_del_list_cb_ctx.redisRib  = &redisRib;
+                g_add_del_list_cb_ctx.redisRib = &redisRib;
                 ospfNlThread = std::thread([nlFd]() {
                     netlink_run(nlFd, addDelListOspfCb, &g_add_del_list_cb_ctx);
                 });
@@ -5152,12 +5157,14 @@ int prepare_route_add_remain_lb(
             (kr->nhid != 0 || !krIface.empty()))
         {
             std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
-            std::println(
-            "[add-del-list] prepare_route_add_remain_lb prepare ROUTE_ADD for {}", loopback_ipv4);
+            std::println("[add-del-list] prepare_route_add_remain_lb prepare "
+                         "ROUTE_ADD for {}",
+                         loopback_ipv4);
 
             struct in_addr nhAddr
             {};
-            if (::inet_pton(AF_INET, loopback_ipv4.c_str(), &nhAddr) != 1) // krGw.c_str()
+            if (::inet_pton(AF_INET, loopback_ipv4.c_str(), &nhAddr) !=
+                1) // krGw.c_str()
                 continue;
             const auto* nhBytes =
                 reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
@@ -5168,7 +5175,7 @@ int prepare_route_add_remain_lb(
                  k < cmdproto::IFACE_NAME_SIZE && k < kUnneeded.size();
                  ++k)
                 entry.iface_name[k] = kUnneeded[k];
-            //entry.nexthop_addr_ipv4 = {0, 0, 0, 0}; // loopback_ipv4
+            // entry.nexthop_addr_ipv4 = {0, 0, 0, 0}; // loopback_ipv4
             entry.nexthop_addr_ipv4 = {
                 nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
             entry.nexthop_id_ipv4 = kr->nhid;

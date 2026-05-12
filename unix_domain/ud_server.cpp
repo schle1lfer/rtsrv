@@ -54,6 +54,7 @@
 
 static volatile sig_atomic_t g_stop = 0;
 
+/** @brief Signal handler — sets @c g_stop to request a clean shutdown. */
 static void sig_handler(int) noexcept
 {
     g_stop = 1;
@@ -421,6 +422,16 @@ static void handle_connection(net::Socket conn)
 // out of scope and the pointed-to object is freed automatically.
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Example ROUTE_ADD callback — logs every field in @p p to the logger.
+ *
+ * Logs the VRF name, interface count, and per-interface nexthop and prefix
+ * details at INFO level.  The shared_ptr is released on return, freeing the
+ * @c RouteAddParams object.
+ *
+ * @param p  Route-add parameters decoded from the incoming command.
+ * @return An empty expected on success.
+ */
 static std::expected<void, std::error_code>
 log_route_add(std::shared_ptr<netlink::RouteAddParams> p)
 {
@@ -455,6 +466,15 @@ log_route_add(std::shared_ptr<netlink::RouteAddParams> p)
     return {};
 }
 
+/**
+ * @brief Example ROUTE_DEL callback — logs the route deletion parameters.
+ *
+ * Logs the VRF name, destination prefix, optional gateway, interface name,
+ * and routing table at INFO level.  The shared_ptr is released on return.
+ *
+ * @param p  Route-delete parameters decoded from the incoming command.
+ * @return An empty expected on success.
+ */
 static std::expected<void, std::error_code>
 log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
 {
@@ -472,6 +492,15 @@ log_route_del(std::shared_ptr<netlink::RouteDelParams> p)
     return {};
 }
 
+/**
+ * @brief Example ROUTE_LIST callback — logs the list query parameters.
+ *
+ * Logs the VRF name and routing table at INFO level and returns an empty
+ * route list (stub implementation).  The shared_ptr is released on return.
+ *
+ * @param p  Route-list parameters decoded from the incoming command.
+ * @return An empty vector on success.
+ */
 static std::expected<std::vector<netlink::RouteEntry>, std::error_code>
 log_route_list(std::shared_ptr<netlink::RouteListParams> p)
 {

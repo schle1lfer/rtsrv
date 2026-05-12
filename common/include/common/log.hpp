@@ -80,13 +80,13 @@ namespace rtsrv::log
 enum class Severity : std::uint8_t
 {
     Emergency = 0, ///< System is unusable.
-    Alert     = 1, ///< Action must be taken immediately.
-    Critical  = 2, ///< Critical conditions.
-    Error     = 3, ///< Error conditions.
-    Warning   = 4, ///< Warning conditions.
-    Notice    = 5, ///< Normal but significant condition.
-    Info      = 6, ///< Informational messages.
-    Debug     = 7, ///< Debug-level messages.
+    Alert = 1,     ///< Action must be taken immediately.
+    Critical = 2,  ///< Critical conditions.
+    Error = 3,     ///< Error conditions.
+    Warning = 4,   ///< Warning conditions.
+    Notice = 5,    ///< Normal but significant condition.
+    Info = 6,      ///< Informational messages.
+    Debug = 7,     ///< Debug-level messages.
 };
 
 // ---------------------------------------------------------------------------
@@ -98,30 +98,30 @@ enum class Severity : std::uint8_t
  */
 enum class Facility : std::uint8_t
 {
-    Kern      =  0, ///< Kernel messages.
-    User      =  1, ///< User-level messages.
-    Mail      =  2, ///< Mail system.
-    Daemon    =  3, ///< System daemons.
-    Auth      =  4, ///< Security / authorisation.
-    Syslogd   =  5, ///< Messages generated internally by syslogd.
-    Lpr       =  6, ///< Line printer subsystem.
-    News      =  7, ///< Network news subsystem.
-    Uucp      =  8, ///< UUCP subsystem.
-    Cron      =  9, ///< Clock daemon.
-    AuthPriv  = 10, ///< Security / authorisation (private).
-    Ftp       = 11, ///< FTP daemon.
-    Ntp       = 12, ///< NTP subsystem.
-    LogAudit  = 13, ///< Log audit.
-    LogAlert  = 14, ///< Log alert.
-    Clock     = 15, ///< Clock daemon (secondary).
-    Local0    = 16, ///< Local use 0.
-    Local1    = 17, ///< Local use 1.
-    Local2    = 18, ///< Local use 2.
-    Local3    = 19, ///< Local use 3.
-    Local4    = 20, ///< Local use 4.
-    Local5    = 21, ///< Local use 5.
-    Local6    = 22, ///< Local use 6.
-    Local7    = 23, ///< Local use 7.
+    Kern = 0,      ///< Kernel messages.
+    User = 1,      ///< User-level messages.
+    Mail = 2,      ///< Mail system.
+    Daemon = 3,    ///< System daemons.
+    Auth = 4,      ///< Security / authorisation.
+    Syslogd = 5,   ///< Messages generated internally by syslogd.
+    Lpr = 6,       ///< Line printer subsystem.
+    News = 7,      ///< Network news subsystem.
+    Uucp = 8,      ///< UUCP subsystem.
+    Cron = 9,      ///< Clock daemon.
+    AuthPriv = 10, ///< Security / authorisation (private).
+    Ftp = 11,      ///< FTP daemon.
+    Ntp = 12,      ///< NTP subsystem.
+    LogAudit = 13, ///< Log audit.
+    LogAlert = 14, ///< Log alert.
+    Clock = 15,    ///< Clock daemon (secondary).
+    Local0 = 16,   ///< Local use 0.
+    Local1 = 17,   ///< Local use 1.
+    Local2 = 18,   ///< Local use 2.
+    Local3 = 19,   ///< Local use 3.
+    Local4 = 20,   ///< Local use 4.
+    Local5 = 21,   ///< Local use 5.
+    Local6 = 22,   ///< Local use 6.
+    Local7 = 23,   ///< Local use 7.
 };
 
 // ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ struct SdParam
  */
 struct SdElement
 {
-    std::string          id;     ///< SD-ID (≤32 printable US-ASCII; no SP = ] ")
+    std::string id; ///< SD-ID (≤32 printable US-ASCII; no SP = ] ")
     std::vector<SdParam> params; ///< Parameter list for this element.
 };
 
@@ -172,12 +172,13 @@ struct ConsoleSink
  */
 struct FileSink
 {
-    bool        enabled{false};
-    std::string path;                          ///< Log file path.
+    bool enabled{false};
+    std::string path;                               ///< Log file path.
     std::size_t rotation_bytes{10UL * 1024 * 1024}; ///< Rotate at this size.
-    std::size_t max_files{5};   ///< Number of rotated archives to keep (0 = no archiving).
+    std::size_t max_files{
+        5}; ///< Number of rotated archives to keep (0 = no archiving).
     /// @c false (default) → raw RFC 5424; @c true → human-readable.
-    bool        human_readable{false};
+    bool human_readable{false};
 };
 
 /**
@@ -188,9 +189,9 @@ struct FileSink
  */
 struct UdpSink
 {
-    bool          enabled{false};
-    std::string   host;       ///< IPv4/IPv6 address or hostname.
-    std::uint16_t port{514};  ///< Destination UDP port (RFC 5426 default: 514).
+    bool enabled{false};
+    std::string host;        ///< IPv4/IPv6 address or hostname.
+    std::uint16_t port{514}; ///< Destination UDP port (RFC 5426 default: 514).
 };
 
 /**
@@ -202,11 +203,11 @@ struct UdpSink
  */
 struct TcpSink
 {
-    bool          enabled{false};
-    std::string   host;        ///< IPv4/IPv6 address or hostname.
-    std::uint16_t port{601};   ///< Destination TCP port.
+    bool enabled{false};
+    std::string host;        ///< IPv4/IPv6 address or hostname.
+    std::uint16_t port{601}; ///< Destination TCP port.
     /// @c true (default) → RFC 6587 §3.4.1 octet-count; @c false → newline.
-    bool          octet_framing{true};
+    bool octet_framing{true};
 };
 
 /**
@@ -220,7 +221,7 @@ struct LocalSyslogSink
     bool enabled{false};
     /// Flags passed to @c openlog() in addition to @c LOG_PID
     /// (e.g. @c LOG_NDELAY | @c LOG_CONS).
-    int  options{0};
+    int options{0};
 };
 
 // ---------------------------------------------------------------------------
@@ -232,16 +233,16 @@ struct LocalSyslogSink
  */
 struct Config
 {
-    std::string app_name{"rtsrv"};          ///< APP-NAME (truncated to 48 chars).
-    std::string hostname;                   ///< HOSTNAME override (empty → gethostname()).
-    Facility    facility{Facility::Daemon}; ///< Syslog facility for all records.
-    Severity    min_severity{Severity::Info}; ///< Records below this are dropped.
+    std::string app_name{"rtsrv"}; ///< APP-NAME (truncated to 48 chars).
+    std::string hostname; ///< HOSTNAME override (empty → gethostname()).
+    Facility facility{Facility::Daemon};   ///< Syslog facility for all records.
+    Severity min_severity{Severity::Info}; ///< Records below this are dropped.
 
-    ConsoleSink      console;      ///< stderr console sink.
-    FileSink         file;         ///< Rotating log-file sink.
-    UdpSink          udp;          ///< UDP remote syslog sink (RFC 5426).
-    TcpSink          tcp;          ///< TCP remote syslog sink (RFC 6587).
-    LocalSyslogSink  local_syslog; ///< Local POSIX syslog(3) sink.
+    ConsoleSink console;          ///< stderr console sink.
+    FileSink file;                ///< Rotating log-file sink.
+    UdpSink udp;                  ///< UDP remote syslog sink (RFC 5426).
+    TcpSink tcp;                  ///< TCP remote syslog sink (RFC 6587).
+    LocalSyslogSink local_syslog; ///< Local POSIX syslog(3) sink.
 };
 
 // ---------------------------------------------------------------------------
@@ -288,15 +289,14 @@ void shutdown() noexcept;
  * @param msg       Message body (UTF-8); prefixed with BOM when non-empty.
  * @return Fully formatted RFC 5424 syslog message string.
  */
-[[nodiscard]] std::string
-format_message(Facility                      facility,
-               Severity                      severity,
-               std::string_view              hostname,
-               std::string_view              app_name,
-               std::int32_t                  procid,
-               std::string_view              msg_id,
-               const std::vector<SdElement>& sd,
-               std::string_view              msg);
+[[nodiscard]] std::string format_message(Facility facility,
+                                         Severity severity,
+                                         std::string_view hostname,
+                                         std::string_view app_name,
+                                         std::int32_t procid,
+                                         std::string_view msg_id,
+                                         const std::vector<SdElement>& sd,
+                                         std::string_view msg);
 
 // ---------------------------------------------------------------------------
 // Core logging function
@@ -314,9 +314,9 @@ format_message(Facility                      facility,
  * @param msg     Human-readable message body (UTF-8).
  * @param sd      Structured-data elements (may be empty).
  */
-void log(Severity               sev,
-         std::string_view       msg_id,
-         std::string_view       msg,
+void log(Severity sev,
+         std::string_view msg_id,
+         std::string_view msg,
          std::vector<SdElement> sd = {});
 
 // ---------------------------------------------------------------------------

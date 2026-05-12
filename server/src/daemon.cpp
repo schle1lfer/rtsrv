@@ -117,6 +117,13 @@ void Daemon::daemonise()
 // Private static helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Redirects stdin, stdout, and stderr to @c /dev/null via @c dup2(2).
+ *
+ * Opens @c /dev/null once and duplicates the descriptor onto all three
+ * standard file descriptors so that the daemon process has no terminal I/O.
+ * Throws @c std::system_error on any failure.
+ */
 void Daemon::redirectStdio()
 {
     const int devNull = ::open("/dev/null", O_RDWR | O_CLOEXEC);
@@ -154,6 +161,16 @@ void Daemon::redirectStdio()
     }
 }
 
+/**
+ * @brief Installs signal handlers for SIGTERM, SIGINT, SIGHUP, and SIGPIPE.
+ *
+ * - SIGTERM / SIGINT set @c stopRequested_ to request an orderly shutdown.
+ * - SIGHUP sets @c reloadRequested_ to trigger a configuration reload.
+ * - SIGPIPE is ignored so that a broken gRPC channel does not kill the daemon.
+ *
+ * All handlers are async-signal-safe (they only store to @c std::atomic<bool>
+ * with @c memory_order_relaxed).
+ */
 void Daemon::installSignalHandlers() noexcept
 {
     struct sigaction sa
@@ -183,11 +200,29 @@ void Daemon::installSignalHandlers() noexcept
 // Signal query
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Returns @c true when a SIGTERM or SIGINT has been received.
+ *
+ * Safe to call from any thread; uses @c memory_order_relaxed.
+ *
+ * @return @c true if a stop has been requested, @c false otherwise.
+ */
 bool Daemon::shouldStop() noexcept
 {
     return stopRequested_.load(std::memory_order_relaxed);
 }
 
+/**
+ * @brief Returns @c true (exactly once per SIGHUP) and invokes the SIGHUP
+ *        handler if one has been registered.
+ *
+ * Uses a compare-exchange on @c reloadRequested_ so the flag is consumed
+ * atomically.  The registered @c sighupHandler_ is called outside the atomic
+ * operation; it must not itself call @c shouldReload().
+ *
+ * @return @c true the first time this is called after a SIGHUP; @c false
+ *         otherwise.
+ */
 bool Daemon::shouldReload() noexcept
 {
     bool expected = true;
@@ -203,6 +238,15 @@ bool Daemon::shouldReload() noexcept
     return false;
 }
 
+/**
+ * @brief Registers a callback to be invoked when SIGHUP is detected.
+ *
+ * The handler is called from @c shouldReload() (which runs on the main
+ * event-loop thread), not from the signal handler itself.
+ *
+ * @param handler  Callable invoked on the next @c shouldReload() call after
+ *                 a SIGHUP.  Pass an empty @c std::function to clear.
+ */
 void Daemon::setSighupHandler(std::function<void()> handler)
 {
     sighupHandler_ = std::move(handler);
@@ -212,6 +256,13 @@ void Daemon::setSighupHandler(std::function<void()> handler)
 // PID file
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Writes the current process ID to the configured PID file.
+ *
+ * Creates any missing parent directories, then writes @c getpid() followed
+ * by a newline.  Sets @c pidWritten_ so @c removePidFile() knows to clean up.
+ * Throws @c std::runtime_error if the file cannot be opened or written.
+ */
 void Daemon::writePidFile()
 {
     const std::filesystem::path pidPath(pidFilePath_);
@@ -233,6 +284,12 @@ void Daemon::writePidFile()
     pidWritten_ = true;
 }
 
+/**
+ * @brief Removes the PID file written by @c writePidFile(), if any.
+ *
+ * Called from the destructor.  Errors are silently ignored via
+ * @c std::error_code to keep the destructor noexcept.
+ */
 void Daemon::removePidFile() noexcept
 {
     if (!pidWritten_)
