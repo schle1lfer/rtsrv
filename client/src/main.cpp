@@ -910,6 +910,8 @@ struct WatchCtx
         udpServer; ///< UDP publisher (port 9003); may be nullptr
     std::map<uint32_t, NexthopEntry>
         nexthopTable; ///< nhid → entry for resolving ECMP
+    sra::SraUdpClient*
+        sraClient{nullptr}; ///< ud_server client for ROUTE_ADD (may be nullptr)
 };
 
 /**
@@ -992,6 +994,62 @@ static void nlWatchCb(netlink_event_t event,
         if (wr.nexthops.empty() && (!gw.empty() || !iface.empty()))
             wr.nexthops.push_back({gw, iface, route->ifindex, 1});
         return wr;
+    };
+
+    /* Helper: if this destination is a known remaining loopback and its nhid
+     * has changed, build a ROUTE_ADD and submit it to ud_server. */
+    auto maybeRouteAdd = [&](uint32_t new_nhid) {
+        if (!ctx->sraClient || new_nhid == 0)
+            return;
+        // Strip the prefix length ("/32") to obtain the loopback key.
+        const auto slash = dest.rfind('/');
+        const std::string loKey =
+            (slash != std::string::npos) ? dest.substr(0, slash) : dest;
+        auto it = g_loopback_cb_map.find(loKey);
+        if (it == g_loopback_cb_map.end())
+            return;
+        LoopbackCbEntry& entry = it->second;
+        if (new_nhid == entry.last_nhid)
+            return;
+        std::println("{} [OSPF/32] nhid changed for loopback='{}'"
+                     " (hostname='{}') {} → {} — sending ROUTE_ADD",
+                     ts,
+                     loKey,
+                     entry.hostname,
+                     entry.last_nhid,
+                     new_nhid);
+        entry.last_nhid = new_nhid;
+        if (entry.prefixes.empty())
+        {
+            std::println(
+                "{} [OSPF/32] no prefixes for '{}' — skipping ROUTE_ADD",
+                ts,
+                loKey);
+            return;
+        }
+        struct in_addr nhAddr{};
+        ::inet_pton(AF_INET, loKey.c_str(), &nhAddr);
+        const auto* nb =
+            reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+        cmdproto::Interface iface_entry{};
+        static constexpr std::string_view kUnneeded = "unneeded";
+        for (std::size_t k = 0;
+             k < cmdproto::IFACE_NAME_SIZE && k < kUnneeded.size();
+             ++k)
+            iface_entry.iface_name[k] = kUnneeded[k];
+        iface_entry.nexthop_addr_ipv4 = {nb[0], nb[1], nb[2], nb[3]};
+        iface_entry.nexthop_id_ipv4   = new_nhid;
+        iface_entry.prefixes          = entry.prefixes;
+        cmdproto::SingleRouteRequest req;
+        req.vrfs_name = "RemainLoopbaks";
+        req.interfaces.push_back(std::move(iface_entry));
+        std::println("{} [OSPF/32] submitting ROUTE_ADD for '{}'"
+                     " nhid={} prefixes={}",
+                     ts,
+                     loKey,
+                     new_nhid,
+                     req.interfaces[0].prefixes.size());
+        ctx->sraClient->submitAdd(std::move(req));
     };
 
     // only for OSPF now
@@ -1084,6 +1142,7 @@ static void nlWatchCb(netlink_event_t event,
                              dest,
                              result.error());
             }
+            maybeRouteAdd(route->nhid);
         }
         /* ---- CHANGED --------------------------------------------------------
          */
@@ -1132,6 +1191,7 @@ static void nlWatchCb(netlink_event_t event,
                              dest,
                              result.error());
             }
+            maybeRouteAdd(route->nhid);
         }
         /* ---- REMOVED --------------------------------------------------------
          */
@@ -1629,6 +1689,81 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
         }
     }
 
+    // ── Step 3c: GetRemainingLoopbacks → populate global loopback map ────
+    {
+        std::println("[Watch] fetching remaining nodes for loopback map…");
+        auto rnResult = client.getRemainingNodes();
+        if (!rnResult)
+        {
+            std::println("[Watch] GetRemainingNodes failed: {}",
+                         rnResult.error());
+        }
+        else
+        {
+            std::println("[Watch] remaining nodes: {}", rnResult->nodes_size());
+            for (const auto& node : rnResult->nodes())
+            {
+                auto nodeGl =
+                    client.getLoopbacksByNodeIp(node.management_ip());
+                if (!nodeGl)
+                {
+                    std::println(
+                        "[Watch]   GetLoopbacksByNodeIp '{}' failed: {}",
+                        node.management_ip(),
+                        nodeGl.error());
+                    continue;
+                }
+                LoopbackCbEntry cbEntry;
+                cbEntry.hostname = node.hostname();
+                for (const auto& pfx : nodeGl->prefixes())
+                {
+                    const std::string& pfxStr = pfx.prefix();
+                    const auto slash          = pfxStr.rfind('/');
+                    if (slash == std::string::npos)
+                        continue;
+                    struct in_addr pfxAddr{};
+                    if (::inet_pton(AF_INET,
+                                    pfxStr.substr(0, slash).c_str(),
+                                    &pfxAddr) != 1)
+                        continue;
+                    const auto* pb = reinterpret_cast<const std::uint8_t*>(
+                        &pfxAddr.s_addr);
+                    const auto maskLen = static_cast<std::uint8_t>(
+                        std::stoul(pfxStr.substr(slash + 1)));
+                    cbEntry.prefixes.push_back(
+                        cmdproto::PrefixIpv4{{pb[0], pb[1], pb[2], pb[3]},
+                                             maskLen});
+                    cbEntry.prefix_strings.push_back(pfxStr);
+                }
+                // Seed last_nhid from the kernel snapshot in ctx.routes.
+                const std::string& loopback = node.loopback_ipv4();
+                for (const auto& [rdest, wr] : ctx.routes)
+                {
+                    const auto sl = rdest.rfind('/');
+                    if (sl != std::string::npos &&
+                        rdest.substr(0, sl) == loopback)
+                    {
+                        cbEntry.last_nhid = wr.nhid;
+                        break;
+                    }
+                }
+                std::println("[Watch] global map: loopback='{}' hostname='{}'"
+                             " prefixes={} initial_nhid={}",
+                             loopback,
+                             cbEntry.hostname,
+                             cbEntry.prefixes.size(),
+                             cbEntry.last_nhid);
+                g_loopback_cb_map[loopback] = std::move(cbEntry);
+            }
+        }
+    }
+
+    // ── Step 3d: Connect SraUdpClient for ROUTE_ADD to ud_server ─────────
+    sra::SraUdpClient watchSraClient("/tmp/ud_server.sock");
+    watchSraClient.start();
+    ctx.sraClient = &watchSraClient;
+    std::println("[Watch] SraUdpClient started (/tmp/ud_server.sock)");
+
     // ── Step 4: Start monitoring ──────────────────────────────────────────
     /* Install signal handlers. */
     struct sigaction sa
@@ -1644,6 +1779,7 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
         std::println(std::cerr,
                      "[Monitor] Error: netlink_init failed: {}",
                      std::strerror(errno));
+        watchSraClient.stop();
         return EXIT_FAILURE;
     }
     g_watch_fd = fd;
@@ -1662,6 +1798,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     netlink_run(fd, nlWatchCb, &ctx);
 
     netlink_close(g_watch_fd); /* no-op if already closed by signal handler */
+
+    watchSraClient.stop();
 
     std::println("\n[Monitor] Stopped.");
     return EXIT_SUCCESS;
