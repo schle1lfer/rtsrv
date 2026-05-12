@@ -1310,6 +1310,30 @@ static volatile int g_add_del_list_nl_fd = -1;
  *  recv() on the now-closed fd and gets EBADF, causing a clean exit. */
 static volatile pthread_t g_add_del_list_nl_tid = 0;
 
+/** @brief Per-loopback entry saved from GetRemainingLoopbacks, keyed by
+ *  loopback_ipv4 string.  Written once during startup (before the monitor
+ *  thread starts), then read-only from the callback. */
+struct LoopbackCbEntry
+{
+    std::string hostname;
+    std::vector<cmdproto::PrefixIpv4> prefixes; ///< Pre-parsed prefix list
+    std::vector<std::string> prefix_strings;    ///< Original CIDR strings (for Redis)
+    uint32_t last_nhid{0};                      ///< nhid last sent to ud_server
+};
+
+/** @brief Global map from loopback_ipv4 → LoopbackCbEntry.
+ *  Populated after GetRemainingLoopbacks completes; read by addDelListOspfCb. */
+static std::map<std::string, LoopbackCbEntry> g_loopback_cb_map;
+
+/** @brief Context forwarded to addDelListOspfCb via user_data. */
+struct AddDelListCbCtx
+{
+    sra::SraUdpClient* vrfClient{nullptr};
+    sra::RedisRib*     redisRib{nullptr};
+};
+
+static AddDelListCbCtx g_add_del_list_cb_ctx;
+
 /** @brief SIGINT/SIGTERM handler for the 'add-del-list' command. */
 static void addDelListSigHandler(int /*signo*/)
 {
@@ -1334,11 +1358,11 @@ static void addDelListSigHandler(int /*signo*/)
  *
  * @param event      NETLINK_ROUTE_ADDED, _CHANGED, or _REMOVED.
  * @param route      Parsed /32 route descriptor; valid for this call only.
- * @param user_data  Unused (nullptr).
+ * @param user_data  Pointer to the global AddDelListCbCtx (vrfClient + redisRib).
  */
 static void addDelListOspfCb(netlink_event_t event,
                              const netlink_route32_t* route,
-                             void* /*user_data*/)
+                             void* user_data)
 {
     if (route->protocol != RTPROT_OSPF)
         return;
@@ -1358,6 +1382,71 @@ static void addDelListOspfCb(netlink_event_t event,
                  gw[0] ? gw : "(none)",
                  route->ifname[0] ? route->ifname : "?",
                  route->metric);
+
+    // Only ADD and CHANGE events can indicate a nexthop-ID update.
+    if (event == NETLINK_ROUTE_REMOVED || route->nhid == 0)
+        return;
+
+    auto it = g_loopback_cb_map.find(dst);
+    if (it == g_loopback_cb_map.end())
+        return;
+
+    LoopbackCbEntry& entry = it->second;
+    if (route->nhid == entry.last_nhid)
+        return;
+
+    std::println("[add-del-list] [OSPF/32] nhid changed for loopback='{}'"
+                 " (hostname='{}') {} → {} — sending ROUTE_ADD",
+                 dst,
+                 entry.hostname,
+                 entry.last_nhid,
+                 route->nhid);
+    entry.last_nhid = route->nhid;
+
+    auto* ctx = static_cast<AddDelListCbCtx*>(user_data);
+    if (!ctx || !ctx->vrfClient)
+        return;
+
+    if (entry.prefixes.empty())
+    {
+        std::println("[add-del-list] [OSPF/32] no prefixes for '{}' — "
+                     "skipping ROUTE_ADD",
+                     dst);
+        return;
+    }
+
+    // Build nexthop address bytes from the loopback IP (dst).
+    struct in_addr nhAddr{};
+    ::inet_pton(AF_INET, dst, &nhAddr);
+    const auto* nb = reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
+
+    cmdproto::Interface iface{};
+    static constexpr std::string_view kUnneeded = "unneeded";
+    for (std::size_t k = 0;
+         k < cmdproto::IFACE_NAME_SIZE && k < kUnneeded.size();
+         ++k)
+        iface.iface_name[k] = kUnneeded[k];
+    iface.nexthop_addr_ipv4  = {nb[0], nb[1], nb[2], nb[3]};
+    iface.nexthop_id_ipv4    = route->nhid;
+    iface.prefixes           = entry.prefixes;
+
+    cmdproto::SingleRouteRequest req;
+    req.vrfs_name = "RemainLoopbaks";
+    req.interfaces.push_back(std::move(iface));
+
+    std::println("[add-del-list] [OSPF/32] submitting ROUTE_ADD for '{}'"
+                 " nhid={} prefixes={}",
+                 dst,
+                 route->nhid,
+                 req.interfaces[0].prefixes.size());
+
+    if (ctx->redisRib && ctx->redisRib->connected())
+    {
+        for (const auto& pfxStr : entry.prefix_strings)
+            ctx->redisRib->set(pfxStr, std::to_string(route->nhid));
+    }
+
+    ctx->vrfClient->submitAdd(std::move(req));
 }
 
 /**
@@ -4744,6 +4833,48 @@ int main(int argc, char* argv[])
                         pfx.description());
                 }
 
+                // ── Save loopback data to global map for the OSPF callback ───
+                {
+                    LoopbackCbEntry cbEntry;
+                    cbEntry.hostname = node.hostname();
+                    for (const auto& pfx : nodeGl->prefixes())
+                    {
+                        const std::string& pfxStr = pfx.prefix();
+                        const auto slash = pfxStr.rfind('/');
+                        if (slash == std::string::npos)
+                            continue;
+                        struct in_addr pfxAddr{};
+                        if (::inet_pton(AF_INET,
+                                        pfxStr.substr(0, slash).c_str(),
+                                        &pfxAddr) != 1)
+                            continue;
+                        const auto* pb = reinterpret_cast<const std::uint8_t*>(
+                            &pfxAddr.s_addr);
+                        const auto maskLen = static_cast<std::uint8_t>(
+                            std::stoul(pfxStr.substr(slash + 1)));
+                        cbEntry.prefixes.push_back(
+                            cmdproto::PrefixIpv4{{pb[0], pb[1], pb[2], pb[3]},
+                                                 maskLen});
+                        cbEntry.prefix_strings.push_back(pfxStr);
+                    }
+                    for (const auto* kr : ospf32)
+                    {
+                        if (kr->destination.contains(node.loopback_ipv4()))
+                        {
+                            cbEntry.last_nhid = kr->nhid;
+                            break;
+                        }
+                    }
+                    std::println(
+                        "[add-del-list] global map: saved loopback='{}'"
+                        " hostname='{}' prefixes={} initial_nhid={}",
+                        node.loopback_ipv4(),
+                        cbEntry.hostname,
+                        cbEntry.prefixes.size(),
+                        cbEntry.last_nhid);
+                    g_loopback_cb_map[node.loopback_ipv4()] = std::move(cbEntry);
+                }
+
                 // ── Nexthop adjacency check for LoopbacksByNodeIp ────────────
                 // The nexthop for a remaining node's prefixes is the gateway
                 // from the OSPF /32 route whose destination matches the node's
@@ -4804,8 +4935,10 @@ int main(int argc, char* argv[])
             else
             {
                 g_add_del_list_nl_fd = nlFd;
+                g_add_del_list_cb_ctx.vrfClient = &vrfClient;
+                g_add_del_list_cb_ctx.redisRib  = &redisRib;
                 ospfNlThread = std::thread([nlFd]() {
-                    netlink_run(nlFd, addDelListOspfCb, nullptr);
+                    netlink_run(nlFd, addDelListOspfCb, &g_add_del_list_cb_ctx);
                 });
                 g_add_del_list_nl_tid = ospfNlThread.native_handle();
                 std::println("[add-del-list] OSPF /32 netlink monitor active "
