@@ -893,6 +893,22 @@ serializeRouteTable(const std::map<std::string, WatchRoute>& routes)
     return os.str();
 }
 
+/** @brief Per-loopback entry saved from GetRemainingLoopbacks, keyed by
+ *  loopback_ipv4 string.  Written once during startup (before the monitor
+ *  thread starts), then read-only from the callback. */
+struct LoopbackCbEntry
+{
+    std::string hostname;
+    std::vector<cmdproto::PrefixIpv4> prefixes; ///< Pre-parsed prefix list
+    std::vector<std::string> prefix_strings;    ///< Original CIDR strings (for Redis)
+    uint32_t last_nhid{0};                      ///< nhid last sent to ud_server
+};
+
+/** @brief Global map from loopback_ipv4 → LoopbackCbEntry.
+ *  Populated after GetRemainingLoopbacks completes; read by nlWatchCb and
+ *  addDelListOspfCb. */
+static std::map<std::string, LoopbackCbEntry> g_loopback_cb_map;
+
 /**
  * @brief Context forwarded via the @c user_data pointer to the netlink
  * callback.
@@ -1369,21 +1385,6 @@ static volatile int g_add_del_list_nl_fd = -1;
  *  Linux; pthread_kill(SIGINT) delivers EINTR so netlink_run() retries
  *  recv() on the now-closed fd and gets EBADF, causing a clean exit. */
 static volatile pthread_t g_add_del_list_nl_tid = 0;
-
-/** @brief Per-loopback entry saved from GetRemainingLoopbacks, keyed by
- *  loopback_ipv4 string.  Written once during startup (before the monitor
- *  thread starts), then read-only from the callback. */
-struct LoopbackCbEntry
-{
-    std::string hostname;
-    std::vector<cmdproto::PrefixIpv4> prefixes; ///< Pre-parsed prefix list
-    std::vector<std::string> prefix_strings;    ///< Original CIDR strings (for Redis)
-    uint32_t last_nhid{0};                      ///< nhid last sent to ud_server
-};
-
-/** @brief Global map from loopback_ipv4 → LoopbackCbEntry.
- *  Populated after GetRemainingLoopbacks completes; read by addDelListOspfCb. */
-static std::map<std::string, LoopbackCbEntry> g_loopback_cb_map;
 
 /** @brief Context forwarded to addDelListOspfCb via user_data. */
 struct AddDelListCbCtx
