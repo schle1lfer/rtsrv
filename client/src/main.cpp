@@ -1012,10 +1012,11 @@ static void nlWatchCb(netlink_event_t event,
         return wr;
     };
 
-    /* Helper: if this destination is a known remaining loopback and its nhid
-     * has changed, build a ROUTE_ADD and submit it to ud_server. */
-    auto maybeRouteAdd = [&](uint32_t new_nhid) {
-        if (!ctx->sraClient || new_nhid == 0)
+    /* Helper: for every RTM_NEWROUTE / RTM_DELROUTE event whose destination
+     * matches a known remaining loopback, build a ROUTE_ADD and submit it
+     * to ud_server with the current nhid and stored prefix list. */
+    auto sendRouteAdd = [&](uint32_t nhid) {
+        if (!ctx->sraClient)
             return;
         // Strip the prefix length ("/32") to obtain the loopback key.
         const auto slash = dest.rfind('/');
@@ -1025,16 +1026,15 @@ static void nlWatchCb(netlink_event_t event,
         if (it == g_loopback_cb_map.end())
             return;
         LoopbackCbEntry& entry = it->second;
-        if (new_nhid == entry.last_nhid)
-            return;
-        std::println("{} [OSPF/32] nhid changed for loopback='{}'"
-                     " (hostname='{}') {} → {} — sending ROUTE_ADD",
+        std::println("{} [OSPF/32] {} loopback='{}' (hostname='{}')"
+                     " nhid={} — sending ROUTE_ADD",
                      ts,
+                     (event == NETLINK_ROUTE_ADDED)     ? "ADD"
+                     : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
+                                                        : "CHG",
                      loKey,
                      entry.hostname,
-                     entry.last_nhid,
-                     new_nhid);
-        entry.last_nhid = new_nhid;
+                     nhid);
         if (entry.prefixes.empty())
         {
             std::println(
@@ -1054,7 +1054,7 @@ static void nlWatchCb(netlink_event_t event,
              ++k)
             iface_entry.iface_name[k] = kUnneeded[k];
         iface_entry.nexthop_addr_ipv4 = {nb[0], nb[1], nb[2], nb[3]};
-        iface_entry.nexthop_id_ipv4   = new_nhid;
+        iface_entry.nexthop_id_ipv4   = nhid;
         iface_entry.prefixes          = entry.prefixes;
         cmdproto::SingleRouteRequest req;
         req.vrfs_name = "RemainLoopbaks";
@@ -1063,7 +1063,7 @@ static void nlWatchCb(netlink_event_t event,
                      " nhid={} prefixes={}",
                      ts,
                      loKey,
-                     new_nhid,
+                     nhid,
                      req.interfaces[0].prefixes.size());
         ctx->sraClient->submitAdd(std::move(req));
     };
@@ -1158,7 +1158,7 @@ static void nlWatchCb(netlink_event_t event,
                              dest,
                              result.error());
             }
-            maybeRouteAdd(route->nhid);
+            sendRouteAdd(route->nhid);
         }
         /* ---- CHANGED --------------------------------------------------------
          */
@@ -1207,7 +1207,7 @@ static void nlWatchCb(netlink_event_t event,
                              dest,
                              result.error());
             }
-            maybeRouteAdd(route->nhid);
+            sendRouteAdd(route->nhid);
         }
         /* ---- REMOVED --------------------------------------------------------
          */
@@ -1218,36 +1218,38 @@ static void nlWatchCb(netlink_event_t event,
             {
                 std::println(
                     "{} [REMOVED] {} (not tracked – no gRPC call)", ts, dest);
-                std::cout.flush();
-                return;
-            }
-
-            const std::string id = it->second.srmdId;
-            ctx->routes.erase(it);
-
-            if (id.empty())
-            {
-                std::println(
-                    "{} [REMOVED] {} (no server ID – no gRPC call)", ts, dest);
             }
             else
             {
-                auto result = ctx->client->removeRoute(id);
-                if (result)
+                const std::string id = it->second.srmdId;
+                ctx->routes.erase(it);
+
+                if (id.empty())
                 {
-                    std::println("{} [REMOVED] {} id={}",
+                    std::println("{} [REMOVED] {} (no server ID – no gRPC call)",
                                  ts,
-                                 dest,
-                                 id.substr(0, 8) + "…");
+                                 dest);
                 }
                 else
                 {
-                    std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                                 ts,
-                                 dest,
-                                 result.error());
+                    auto result = ctx->client->removeRoute(id);
+                    if (result)
+                    {
+                        std::println("{} [REMOVED] {} id={}",
+                                     ts,
+                                     dest,
+                                     id.substr(0, 8) + "…");
+                    }
+                    else
+                    {
+                        std::println("{} [REMOVED] {} → gRPC FAILED: {}",
+                                     ts,
+                                     dest,
+                                     result.error());
+                    }
                 }
             }
+            sendRouteAdd(route->nhid);
         }
 
         /* Publish updated table via UDP (port 9003) instead of printing. */
@@ -1417,7 +1419,9 @@ static void addDelListSigHandler(int /*signo*/)
  * Events with a protocol other than RTPROT_OSPF are silently ignored so
  * that only OSPF host-routes produce log output.
  *
- * @param event      NETLINK_ROUTE_ADDED, _CHANGED, or _REMOVED.
+ * @param event      NETLINK_ROUTE_ADDED, _CHANGED, or _REMOVED.  All three
+ *                   trigger a ROUTE_ADD to ud_server when the destination
+ *                   matches a known remaining loopback.
  * @param route      Parsed /32 route descriptor; valid for this call only.
  * @param user_data  Pointer to the global AddDelListCbCtx (vrfClient + redisRib).
  */
@@ -1444,25 +1448,11 @@ static void addDelListOspfCb(netlink_event_t event,
                  route->ifname[0] ? route->ifname : "?",
                  route->metric);
 
-    // Only ADD and CHANGE events can indicate a nexthop-ID update.
-    if (event == NETLINK_ROUTE_REMOVED || route->nhid == 0)
-        return;
-
     auto it = g_loopback_cb_map.find(dst);
     if (it == g_loopback_cb_map.end())
         return;
 
     LoopbackCbEntry& entry = it->second;
-    if (route->nhid == entry.last_nhid)
-        return;
-
-    std::println("[add-del-list] [OSPF/32] nhid changed for loopback='{}'"
-                 " (hostname='{}') {} → {} — sending ROUTE_ADD",
-                 dst,
-                 entry.hostname,
-                 entry.last_nhid,
-                 route->nhid);
-    entry.last_nhid = route->nhid;
 
     auto* ctx = static_cast<AddDelListCbCtx*>(user_data);
     if (!ctx || !ctx->vrfClient)
@@ -1475,6 +1465,13 @@ static void addDelListOspfCb(netlink_event_t event,
                      dst);
         return;
     }
+
+    std::println("[add-del-list] [OSPF/32] {} loopback='{}' (hostname='{}')"
+                 " nhid={} — sending ROUTE_ADD",
+                 evLabel,
+                 dst,
+                 entry.hostname,
+                 route->nhid);
 
     // Build nexthop address bytes from the loopback IP (dst).
     struct in_addr nhAddr{};
