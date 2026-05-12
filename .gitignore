@@ -62,3 +62,4 @@ lib/
 !unix_domain/lib/**
 !unix_domain/CMakeLists.txt
 !unix_domain/ud_server.cpp
+docs/

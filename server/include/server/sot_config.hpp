@@ -79,7 +79,7 @@ struct SotPrefix
  * @brief IPv4 interface configuration within a VRF.
  *
  * Corresponds to one entry of the @c interfaces map under
- * @c vrfs.<vrf>.ipv4.interfaces.
+ * @c vrfs.&lt;vrf&gt;.ipv4.interfaces.
  */
 struct SotInterface
 {
@@ -115,7 +115,7 @@ struct SotInterface
 /**
  * @brief IPv4 configuration block within a VRF.
  *
- * Wraps the interface list from @c vrfs.<vrf>.ipv4.
+ * Wraps the interface list from @c vrfs.&lt;vrf&gt;.ipv4.
  */
 struct SotVrfIpv4
 {
@@ -126,7 +126,7 @@ struct SotVrfIpv4
 /**
  * @brief IPv6 configuration block within a VRF.
  *
- * Wraps the interface list from @c vrfs.<vrf>.ipv6.
+ * Wraps the interface list from @c vrfs.&lt;vrf&gt;.ipv6.
  */
 struct SotVrfIpv6
 {

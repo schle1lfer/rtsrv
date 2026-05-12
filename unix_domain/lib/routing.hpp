@@ -282,7 +282,7 @@ struct RouteDelParams
 /**
  * @brief Parameters for adding a kernel nexthop object.
  *
- * Equivalent to: ip nexthop add id <id> via <gateway> dev <if_name>
+ * Equivalent to: @c "ip nexthop add id \<id\> via \<gateway\> dev \<if_name\>"
  *
  * Mandatory fields: @c id (must be >= 1).
  * Provide @c gateway + @c has_gateway = true and/or @c if_name to specify
@@ -499,7 +499,7 @@ list_routes(RouteTable table = RouteTable::Main);
 /**
  * @brief Creates a new kernel nexthop object via RTM_NEWNEXTHOP + NLM_F_CREATE.
  *
- * Equivalent to: ip nexthop add id <id> via <gateway> dev <if_name>
+ * Equivalent to: @c "ip nexthop add id \<id\> via \<gateway\> dev \<if_name\>"
  *
  * Fails with @c EEXIST when an object with the same @c id already exists.
  * Requires @c CAP_NET_ADMIN.
@@ -513,7 +513,7 @@ add_nexthop(const NexthopAddParams& params);
 /**
  * @brief Removes an existing kernel nexthop object via RTM_DELNEXTHOP.
  *
- * Equivalent to: ip nexthop del id <id>
+ * Equivalent to: @c "ip nexthop del id \<id\>"
  *
  * Requires @c CAP_NET_ADMIN.
  *

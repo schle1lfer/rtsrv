@@ -114,8 +114,7 @@ static void initLogs(const std::string& logBasePath,
                      const std::string& extraStream)
 {
     const auto ts = static_cast<long long>(std::time(nullptr));
-    const std::string timestampedPath =
-        logBasePath + "." + std::to_string(ts);
+    const std::string timestampedPath = logBasePath + "." + std::to_string(ts);
 
     // Update symlink: remove stale link then create the new one.
     ::unlink(logBasePath.c_str());
@@ -128,20 +127,17 @@ static void initLogs(const std::string& logBasePath,
                      std::strerror(errno));
     }
 
-    auto fmt =
-        expr::stream
-        << expr::format_date_time<boost::posix_time::ptime>(
-               "TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
-        << " [srmd] [" << logging::trivial::severity << "] "
-        << expr::smessage;
+    auto fmt = expr::stream << expr::format_date_time<boost::posix_time::ptime>(
+                                   "TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
+                            << " [srmd] [" << logging::trivial::severity << "] "
+                            << expr::smessage;
 
     logging::add_common_attributes();
 
-    logging::add_file_log(
-        keywords::file_name = timestampedPath,
-        keywords::auto_flush = true,
-        keywords::open_mode = std::ios::out | std::ios::app,
-        keywords::format = fmt);
+    logging::add_file_log(keywords::file_name = timestampedPath,
+                          keywords::auto_flush = true,
+                          keywords::open_mode = std::ios::out | std::ios::app,
+                          keywords::format = fmt);
 
     if (extraStream == "stdout")
         logging::add_console_log(std::cout, keywords::format = fmt);
@@ -155,6 +151,13 @@ static void initLogs(const std::string& logBasePath,
 // Hostname helper
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Returns the hostname of the local machine.
+ *
+ * Calls @c gethostname(2) and returns the result as a @c std::string.
+ *
+ * @return Hostname string, or @c "unknown" if the call fails.
+ */
 static std::string getHostname()
 {
     char buf[256]{};

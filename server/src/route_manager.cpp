@@ -21,6 +21,15 @@ namespace srmd
 // Private static helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Generates a unique route ID string.
+ *
+ * Reads a UUID from @c /proc/sys/kernel/random/uuid when available.
+ * Falls back to a @c steady_clock nanosecond timestamp formatted as
+ * @c "srmd-<hex>-route" when the kernel interface is absent.
+ *
+ * @return A non-empty unique identifier string.
+ */
 std::string RouteManager::generateId()
 {
     // Prefer the kernel's UUID generator when available.
@@ -39,6 +48,14 @@ std::string RouteManager::generateId()
     return std::format("srmd-{:016x}-route", static_cast<uint64_t>(ns));
 }
 
+/**
+ * @brief Returns the current wall-clock time as a microsecond timestamp.
+ *
+ * Uses @c std::chrono::system_clock so the value is suitable for storing
+ * as a creation or update timestamp in route records.
+ *
+ * @return Microseconds since the Unix epoch.
+ */
 int64_t RouteManager::nowUs() noexcept
 {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -199,6 +216,16 @@ void RouteManager::unregisterObserver(int handle)
     observers_.erase(handle);
 }
 
+/**
+ * @brief Delivers @p event to every registered observer.
+ *
+ * Takes a snapshot of the observer map under @c observersMutex_ to avoid
+ * holding the lock while calling into observer code (which may itself call
+ * back into @c RouteManager).  Observers that have been unregistered between
+ * the snapshot and the call are silently skipped via the copy.
+ *
+ * @param event  Route event to broadcast.
+ */
 void RouteManager::notifyObservers(const srmd::v1::RouteEvent& event)
 {
     // Snapshot the map under the lock, then call outside to avoid deadlocks.

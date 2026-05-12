@@ -63,14 +63,15 @@ namespace
 
 struct State
 {
-    bool         initialised{false}; ///< True once init() succeeds; checked under g_mutex.
-    Config       cfg;
-    std::string  hostname;
+    bool initialised{
+        false}; ///< True once init() succeeds; checked under g_mutex.
+    Config cfg;
+    std::string hostname;
     std::int32_t procid{0};
 
     // File sink
     std::ofstream file_stream;
-    std::size_t   file_bytes{0};
+    std::size_t file_bytes{0};
 
     // UDP sink
     int udp_fd{-1};
@@ -95,7 +96,7 @@ std::atomic<bool> g_ready{false};
 std::atomic<std::uint8_t> g_min_sev{static_cast<std::uint8_t>(Severity::Debug)};
 
 std::mutex g_mutex;
-State      g_state;
+State g_state;
 
 // ---------------------------------------------------------------------------
 // Timestamp
@@ -106,13 +107,13 @@ std::string current_timestamp()
 {
     using namespace std::chrono;
 
-    auto now    = system_clock::now();
+    auto now = system_clock::now();
     auto now_us = time_point_cast<microseconds>(now);
-    auto now_s  = time_point_cast<seconds>(now);
-    auto us     = (now_us - now_s).count();
+    auto now_s = time_point_cast<seconds>(now);
+    auto us = (now_us - now_s).count();
 
-    std::time_t tt  = system_clock::to_time_t(now);
-    std::tm     utc{};
+    std::time_t tt = system_clock::to_time_t(now);
+    std::tm utc{};
     ::gmtime_r(&tt, &utc);
 
     return std::format("{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}.{:06d}Z",
@@ -213,25 +214,23 @@ static constexpr std::string_view kBom{"\xEF\xBB\xBF", 3};
 // Internal format_message (takes a pre-computed timestamp)
 // ---------------------------------------------------------------------------
 
-std::string build_rfc5424(Facility                      facility,
-                          Severity                      severity,
-                          std::string_view              hostname,
-                          std::string_view              app_name,
-                          std::int32_t                  procid,
-                          std::string_view              msg_id,
+std::string build_rfc5424(Facility facility,
+                          Severity severity,
+                          std::string_view hostname,
+                          std::string_view app_name,
+                          std::int32_t procid,
+                          std::string_view msg_id,
                           const std::vector<SdElement>& sd,
-                          std::string_view              msg,
-                          const std::string&            ts)
+                          std::string_view msg,
+                          const std::string& ts)
 {
-    auto prival = static_cast<unsigned>(facility) * 8u
-                  + static_cast<unsigned>(severity);
+    auto prival =
+        static_cast<unsigned>(facility) * 8u + static_cast<unsigned>(severity);
 
-    std::string hn  = hostname.empty()
-                          ? "-"
-                          : sanitize_printusascii(hostname, 255);
-    std::string an  = app_name.empty()
-                          ? "-"
-                          : sanitize_printusascii(app_name, 48);
+    std::string hn =
+        hostname.empty() ? "-" : sanitize_printusascii(hostname, 255);
+    std::string an =
+        app_name.empty() ? "-" : sanitize_printusascii(app_name, 48);
     std::string mid = (msg_id.empty() || msg_id == "-")
                           ? "-"
                           : sanitize_printusascii(msg_id, 32);
@@ -268,16 +267,16 @@ static constexpr std::array<std::string_view, 8> kSevLabel{{
     "DEBUG    ",
 }};
 
-std::string build_human(Severity                      sev,
-                        std::string_view              app_name,
-                        std::string_view              msg_id,
+std::string build_human(Severity sev,
+                        std::string_view app_name,
+                        std::string_view msg_id,
                         const std::vector<SdElement>& sd,
-                        std::string_view              msg,
-                        const std::string&            ts)
+                        std::string_view msg,
+                        const std::string& ts)
 {
-    auto        idx   = static_cast<std::uint8_t>(sev);
-    std::string_view label = idx < kSevLabel.size() ? kSevLabel[idx]
-                                                    : "UNKNOWN  ";
+    auto idx = static_cast<std::uint8_t>(sev);
+    std::string_view label =
+        idx < kSevLabel.size() ? kSevLabel[idx] : "UNKNOWN  ";
 
     std::string line = std::format("{} {} [{}]", ts, label, app_name);
 
@@ -304,7 +303,7 @@ void rotate_file(State& s)
     s.file_stream.close();
 
     const std::string& base = s.cfg.file.path;
-    const std::size_t  max  = s.cfg.file.max_files;
+    const std::size_t max = s.cfg.file.max_files;
 
     if (max == 0)
     {
@@ -356,7 +355,7 @@ int udp_connect(const std::string& host, std::uint16_t port)
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
 
-    addrinfo*   res      = nullptr;
+    addrinfo* res = nullptr;
     std::string port_str = std::to_string(port);
 
     if (::getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res) != 0)
@@ -399,7 +398,7 @@ int tcp_connect(const std::string& host, std::uint16_t port)
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
-    addrinfo*   res      = nullptr;
+    addrinfo* res = nullptr;
     std::string port_str = std::to_string(port);
 
     if (::getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res) != 0)
@@ -463,14 +462,22 @@ int to_posix_priority(Severity sev)
 {
     switch (sev)
     {
-    case Severity::Emergency: return LOG_EMERG;
-    case Severity::Alert:     return LOG_ALERT;
-    case Severity::Critical:  return LOG_CRIT;
-    case Severity::Error:     return LOG_ERR;
-    case Severity::Warning:   return LOG_WARNING;
-    case Severity::Notice:    return LOG_NOTICE;
-    case Severity::Info:      return LOG_INFO;
-    case Severity::Debug:     return LOG_DEBUG;
+    case Severity::Emergency:
+        return LOG_EMERG;
+    case Severity::Alert:
+        return LOG_ALERT;
+    case Severity::Critical:
+        return LOG_CRIT;
+    case Severity::Error:
+        return LOG_ERR;
+    case Severity::Warning:
+        return LOG_WARNING;
+    case Severity::Notice:
+        return LOG_NOTICE;
+    case Severity::Info:
+        return LOG_INFO;
+    case Severity::Debug:
+        return LOG_DEBUG;
     }
     return LOG_INFO;
 }
@@ -479,31 +486,55 @@ int to_posix_facility(Facility fac)
 {
     switch (fac)
     {
-    case Facility::Kern:     return LOG_KERN;
-    case Facility::User:     return LOG_USER;
-    case Facility::Mail:     return LOG_MAIL;
-    case Facility::Daemon:   return LOG_DAEMON;
-    case Facility::Auth:     return LOG_AUTH;
-    case Facility::Syslogd:  return LOG_SYSLOG;
-    case Facility::Lpr:      return LOG_LPR;
-    case Facility::News:     return LOG_NEWS;
-    case Facility::Uucp:     return LOG_UUCP;
-    case Facility::Cron:     return LOG_CRON;
-    case Facility::AuthPriv: return LOG_AUTHPRIV;
-    case Facility::Ftp:      return LOG_FTP;
+    case Facility::Kern:
+        return LOG_KERN;
+    case Facility::User:
+        return LOG_USER;
+    case Facility::Mail:
+        return LOG_MAIL;
+    case Facility::Daemon:
+        return LOG_DAEMON;
+    case Facility::Auth:
+        return LOG_AUTH;
+    case Facility::Syslogd:
+        return LOG_SYSLOG;
+    case Facility::Lpr:
+        return LOG_LPR;
+    case Facility::News:
+        return LOG_NEWS;
+    case Facility::Uucp:
+        return LOG_UUCP;
+    case Facility::Cron:
+        return LOG_CRON;
+    case Facility::AuthPriv:
+        return LOG_AUTHPRIV;
+    case Facility::Ftp:
+        return LOG_FTP;
     // Facilities 12-15 have no standard LOG_ constant; compute directly.
-    case Facility::Ntp:      return (12 << 3);
-    case Facility::LogAudit: return (13 << 3);
-    case Facility::LogAlert: return (14 << 3);
-    case Facility::Clock:    return (15 << 3);
-    case Facility::Local0:   return LOG_LOCAL0;
-    case Facility::Local1:   return LOG_LOCAL1;
-    case Facility::Local2:   return LOG_LOCAL2;
-    case Facility::Local3:   return LOG_LOCAL3;
-    case Facility::Local4:   return LOG_LOCAL4;
-    case Facility::Local5:   return LOG_LOCAL5;
-    case Facility::Local6:   return LOG_LOCAL6;
-    case Facility::Local7:   return LOG_LOCAL7;
+    case Facility::Ntp:
+        return (12 << 3);
+    case Facility::LogAudit:
+        return (13 << 3);
+    case Facility::LogAlert:
+        return (14 << 3);
+    case Facility::Clock:
+        return (15 << 3);
+    case Facility::Local0:
+        return LOG_LOCAL0;
+    case Facility::Local1:
+        return LOG_LOCAL1;
+    case Facility::Local2:
+        return LOG_LOCAL2;
+    case Facility::Local3:
+        return LOG_LOCAL3;
+    case Facility::Local4:
+        return LOG_LOCAL4;
+    case Facility::Local5:
+        return LOG_LOCAL5;
+    case Facility::Local6:
+        return LOG_LOCAL6;
+    case Facility::Local7:
+        return LOG_LOCAL7;
     }
     return LOG_DAEMON;
 }
@@ -554,15 +585,14 @@ void close_sinks(State& s)
 // Public: format_message
 // ---------------------------------------------------------------------------
 
-std::string
-format_message(Facility                      facility,
-               Severity                      severity,
-               std::string_view              hostname,
-               std::string_view              app_name,
-               std::int32_t                  procid,
-               std::string_view              msg_id,
-               const std::vector<SdElement>& sd,
-               std::string_view              msg)
+std::string format_message(Facility facility,
+                           Severity severity,
+                           std::string_view hostname,
+                           std::string_view app_name,
+                           std::int32_t procid,
+                           std::string_view msg_id,
+                           const std::vector<SdElement>& sd,
+                           std::string_view msg)
 {
     return build_rfc5424(facility,
                          severity,
@@ -593,8 +623,8 @@ std::expected<void, std::string> init(const Config& cfg)
         g_state = State{};
     }
 
-    g_state.cfg     = cfg;
-    g_state.procid  = static_cast<std::int32_t>(::getpid());
+    g_state.cfg = cfg;
+    g_state.procid = static_cast<std::int32_t>(::getpid());
     g_state.hostname = cfg.hostname.empty() ? resolve_hostname() : cfg.hostname;
 
     if (g_state.cfg.app_name.size() > 48)
@@ -603,13 +633,11 @@ std::expected<void, std::string> init(const Config& cfg)
     // File sink
     if (cfg.file.enabled)
     {
-        g_state.file_stream.open(cfg.file.path,
-                                 std::ios::out | std::ios::app);
+        g_state.file_stream.open(cfg.file.path, std::ios::out | std::ios::app);
         if (!g_state.file_stream.is_open())
         {
             return std::unexpected(
-                std::format("log: cannot open log file '{}'",
-                            cfg.file.path));
+                std::format("log: cannot open log file '{}'", cfg.file.path));
         }
         std::error_code ec;
         auto sz = std::filesystem::file_size(cfg.file.path, ec);
@@ -677,9 +705,9 @@ void shutdown() noexcept
 // Public: log
 // ---------------------------------------------------------------------------
 
-void log(Severity               sev,
-         std::string_view       msg_id,
-         std::string_view       msg,
+void log(Severity sev,
+         std::string_view msg_id,
+         std::string_view msg,
          std::vector<SdElement> sd)
 {
     // --- Lock-free fast path -------------------------------------------------
@@ -691,8 +719,8 @@ void log(Severity               sev,
     // sufficient ordering.
     if (!g_ready.load(std::memory_order_acquire))
         return;
-    if (static_cast<std::uint8_t>(sev)
-        > g_min_sev.load(std::memory_order_relaxed))
+    if (static_cast<std::uint8_t>(sev) >
+        g_min_sev.load(std::memory_order_relaxed))
         return;
 
     // --- Locked slow path ----------------------------------------------------
@@ -702,12 +730,12 @@ void log(Severity               sev,
     // the atomic check above and this point.
     if (!g_state.initialised)
         return;
-    if (static_cast<std::uint8_t>(sev)
-        > static_cast<std::uint8_t>(g_state.cfg.min_severity))
+    if (static_cast<std::uint8_t>(sev) >
+        static_cast<std::uint8_t>(g_state.cfg.min_severity))
         return;
 
     const Config& cfg = g_state.cfg;
-    std::string   ts  = current_timestamp();
+    std::string ts = current_timestamp();
 
     // Build the RFC 5424 string lazily (only if a raw-format sink is active).
     std::optional<std::string> rfc5424;
@@ -820,30 +848,39 @@ void dbg(std::string_view msg, std::string_view msg_id)
 
 bool is_enabled(Severity sev) noexcept
 {
-    return g_ready.load(std::memory_order_acquire)
-        && static_cast<std::uint8_t>(sev)
-               <= g_min_sev.load(std::memory_order_relaxed);
+    return g_ready.load(std::memory_order_acquire) &&
+           static_cast<std::uint8_t>(sev) <=
+               g_min_sev.load(std::memory_order_relaxed);
 }
 
 Severity min_severity() noexcept
 {
     return g_ready.load(std::memory_order_acquire)
-        ? static_cast<Severity>(g_min_sev.load(std::memory_order_relaxed))
-        : Severity::Debug;
+               ? static_cast<Severity>(
+                     g_min_sev.load(std::memory_order_relaxed))
+               : Severity::Debug;
 }
 
 std::string_view to_string(Severity sev) noexcept
 {
     switch (sev)
     {
-    case Severity::Emergency: return "emergency";
-    case Severity::Alert:     return "alert";
-    case Severity::Critical:  return "critical";
-    case Severity::Error:     return "error";
-    case Severity::Warning:   return "warning";
-    case Severity::Notice:    return "notice";
-    case Severity::Info:      return "info";
-    case Severity::Debug:     return "debug";
+    case Severity::Emergency:
+        return "emergency";
+    case Severity::Alert:
+        return "alert";
+    case Severity::Critical:
+        return "critical";
+    case Severity::Error:
+        return "error";
+    case Severity::Warning:
+        return "warning";
+    case Severity::Notice:
+        return "notice";
+    case Severity::Info:
+        return "info";
+    case Severity::Debug:
+        return "debug";
     }
     return "unknown";
 }
@@ -852,30 +889,54 @@ std::string_view to_string(Facility fac) noexcept
 {
     switch (fac)
     {
-    case Facility::Kern:     return "kern";
-    case Facility::User:     return "user";
-    case Facility::Mail:     return "mail";
-    case Facility::Daemon:   return "daemon";
-    case Facility::Auth:     return "auth";
-    case Facility::Syslogd:  return "syslog";
-    case Facility::Lpr:      return "lpr";
-    case Facility::News:     return "news";
-    case Facility::Uucp:     return "uucp";
-    case Facility::Cron:     return "cron";
-    case Facility::AuthPriv: return "authpriv";
-    case Facility::Ftp:      return "ftp";
-    case Facility::Ntp:      return "ntp";
-    case Facility::LogAudit: return "logaudit";
-    case Facility::LogAlert: return "logalert";
-    case Facility::Clock:    return "clock";
-    case Facility::Local0:   return "local0";
-    case Facility::Local1:   return "local1";
-    case Facility::Local2:   return "local2";
-    case Facility::Local3:   return "local3";
-    case Facility::Local4:   return "local4";
-    case Facility::Local5:   return "local5";
-    case Facility::Local6:   return "local6";
-    case Facility::Local7:   return "local7";
+    case Facility::Kern:
+        return "kern";
+    case Facility::User:
+        return "user";
+    case Facility::Mail:
+        return "mail";
+    case Facility::Daemon:
+        return "daemon";
+    case Facility::Auth:
+        return "auth";
+    case Facility::Syslogd:
+        return "syslog";
+    case Facility::Lpr:
+        return "lpr";
+    case Facility::News:
+        return "news";
+    case Facility::Uucp:
+        return "uucp";
+    case Facility::Cron:
+        return "cron";
+    case Facility::AuthPriv:
+        return "authpriv";
+    case Facility::Ftp:
+        return "ftp";
+    case Facility::Ntp:
+        return "ntp";
+    case Facility::LogAudit:
+        return "logaudit";
+    case Facility::LogAlert:
+        return "logalert";
+    case Facility::Clock:
+        return "clock";
+    case Facility::Local0:
+        return "local0";
+    case Facility::Local1:
+        return "local1";
+    case Facility::Local2:
+        return "local2";
+    case Facility::Local3:
+        return "local3";
+    case Facility::Local4:
+        return "local4";
+    case Facility::Local5:
+        return "local5";
+    case Facility::Local6:
+        return "local6";
+    case Facility::Local7:
+        return "local7";
     }
     return "unknown";
 }
@@ -893,14 +954,22 @@ std::optional<Severity> parse_severity(std::string_view s) noexcept
         return true;
     };
 
-    if (ci_eq("emergency") || ci_eq("emerg")) return Severity::Emergency;
-    if (ci_eq("alert"))                        return Severity::Alert;
-    if (ci_eq("critical")  || ci_eq("crit"))   return Severity::Critical;
-    if (ci_eq("error")     || ci_eq("err"))    return Severity::Error;
-    if (ci_eq("warning")   || ci_eq("warn"))   return Severity::Warning;
-    if (ci_eq("notice"))                       return Severity::Notice;
-    if (ci_eq("info") || ci_eq("informational")) return Severity::Info;
-    if (ci_eq("debug"))                        return Severity::Debug;
+    if (ci_eq("emergency") || ci_eq("emerg"))
+        return Severity::Emergency;
+    if (ci_eq("alert"))
+        return Severity::Alert;
+    if (ci_eq("critical") || ci_eq("crit"))
+        return Severity::Critical;
+    if (ci_eq("error") || ci_eq("err"))
+        return Severity::Error;
+    if (ci_eq("warning") || ci_eq("warn"))
+        return Severity::Warning;
+    if (ci_eq("notice"))
+        return Severity::Notice;
+    if (ci_eq("info") || ci_eq("informational"))
+        return Severity::Info;
+    if (ci_eq("debug"))
+        return Severity::Debug;
     return std::nullopt;
 }
 
@@ -917,30 +986,54 @@ std::optional<Facility> parse_facility(std::string_view s) noexcept
         return true;
     };
 
-    if (ci_eq("kern"))      return Facility::Kern;
-    if (ci_eq("user"))      return Facility::User;
-    if (ci_eq("mail"))      return Facility::Mail;
-    if (ci_eq("daemon"))    return Facility::Daemon;
-    if (ci_eq("auth"))      return Facility::Auth;
-    if (ci_eq("syslog"))    return Facility::Syslogd;
-    if (ci_eq("lpr"))       return Facility::Lpr;
-    if (ci_eq("news"))      return Facility::News;
-    if (ci_eq("uucp"))      return Facility::Uucp;
-    if (ci_eq("cron"))      return Facility::Cron;
-    if (ci_eq("authpriv"))  return Facility::AuthPriv;
-    if (ci_eq("ftp"))       return Facility::Ftp;
-    if (ci_eq("ntp"))       return Facility::Ntp;
-    if (ci_eq("logaudit"))  return Facility::LogAudit;
-    if (ci_eq("logalert"))  return Facility::LogAlert;
-    if (ci_eq("clock"))     return Facility::Clock;
-    if (ci_eq("local0"))    return Facility::Local0;
-    if (ci_eq("local1"))    return Facility::Local1;
-    if (ci_eq("local2"))    return Facility::Local2;
-    if (ci_eq("local3"))    return Facility::Local3;
-    if (ci_eq("local4"))    return Facility::Local4;
-    if (ci_eq("local5"))    return Facility::Local5;
-    if (ci_eq("local6"))    return Facility::Local6;
-    if (ci_eq("local7"))    return Facility::Local7;
+    if (ci_eq("kern"))
+        return Facility::Kern;
+    if (ci_eq("user"))
+        return Facility::User;
+    if (ci_eq("mail"))
+        return Facility::Mail;
+    if (ci_eq("daemon"))
+        return Facility::Daemon;
+    if (ci_eq("auth"))
+        return Facility::Auth;
+    if (ci_eq("syslog"))
+        return Facility::Syslogd;
+    if (ci_eq("lpr"))
+        return Facility::Lpr;
+    if (ci_eq("news"))
+        return Facility::News;
+    if (ci_eq("uucp"))
+        return Facility::Uucp;
+    if (ci_eq("cron"))
+        return Facility::Cron;
+    if (ci_eq("authpriv"))
+        return Facility::AuthPriv;
+    if (ci_eq("ftp"))
+        return Facility::Ftp;
+    if (ci_eq("ntp"))
+        return Facility::Ntp;
+    if (ci_eq("logaudit"))
+        return Facility::LogAudit;
+    if (ci_eq("logalert"))
+        return Facility::LogAlert;
+    if (ci_eq("clock"))
+        return Facility::Clock;
+    if (ci_eq("local0"))
+        return Facility::Local0;
+    if (ci_eq("local1"))
+        return Facility::Local1;
+    if (ci_eq("local2"))
+        return Facility::Local2;
+    if (ci_eq("local3"))
+        return Facility::Local3;
+    if (ci_eq("local4"))
+        return Facility::Local4;
+    if (ci_eq("local5"))
+        return Facility::Local5;
+    if (ci_eq("local6"))
+        return Facility::Local6;
+    if (ci_eq("local7"))
+        return Facility::Local7;
     return std::nullopt;
 }
 

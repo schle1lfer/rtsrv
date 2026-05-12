@@ -25,16 +25,16 @@ namespace
 {
 
 constexpr int N_THREADS = 8;
-constexpr int N_MSGS    = 500;
+constexpr int N_MSGS = 500;
 
 rtsrv::log::Config make_cfg(const std::string& path)
 {
     rtsrv::log::Config cfg;
-    cfg.app_name     = "log_thread_test";
-    cfg.facility     = rtsrv::log::Facility::Daemon;
+    cfg.app_name = "log_thread_test";
+    cfg.facility = rtsrv::log::Facility::Daemon;
     cfg.min_severity = rtsrv::log::Severity::Debug;
     cfg.file.enabled = true;
-    cfg.file.path    = path;
+    cfg.file.path = path;
     cfg.file.human_readable = false;
     return cfg;
 }
@@ -75,15 +75,32 @@ int main()
                 // Exercise every severity level.
                 switch (i % 8)
                 {
-                case 0: rtsrv::log::dbg(msg);    break;
-                case 1: rtsrv::log::info(msg);   break;
-                case 2: rtsrv::log::notice(msg); break;
-                case 3: rtsrv::log::warn(msg);   break;
-                case 4: rtsrv::log::err(msg);    break;
-                case 5: rtsrv::log::crit(msg);   break;
-                case 6: rtsrv::log::alert(msg);  break;
-                case 7: rtsrv::log::emerg(msg);  break;
-                default: break;
+                case 0:
+                    rtsrv::log::dbg(msg);
+                    break;
+                case 1:
+                    rtsrv::log::info(msg);
+                    break;
+                case 2:
+                    rtsrv::log::notice(msg);
+                    break;
+                case 3:
+                    rtsrv::log::warn(msg);
+                    break;
+                case 4:
+                    rtsrv::log::err(msg);
+                    break;
+                case 5:
+                    rtsrv::log::crit(msg);
+                    break;
+                case 6:
+                    rtsrv::log::alert(msg);
+                    break;
+                case 7:
+                    rtsrv::log::emerg(msg);
+                    break;
+                default:
+                    break;
                 }
 
                 // Exercise is_enabled() from multiple threads.
@@ -152,10 +169,15 @@ int main()
         auto fmt_thread = [&] {
             while (!stop2.load(std::memory_order_relaxed))
             {
-                auto s = rtsrv::log::format_message(
-                    rtsrv::log::Facility::Daemon,
-                    rtsrv::log::Severity::Info,
-                    "host", "app", 42, "MSGID", {}, "hello");
+                auto s =
+                    rtsrv::log::format_message(rtsrv::log::Facility::Daemon,
+                                               rtsrv::log::Severity::Info,
+                                               "host",
+                                               "app",
+                                               42,
+                                               "MSGID",
+                                               {},
+                                               "hello");
                 assert(!s.empty());
             }
         };

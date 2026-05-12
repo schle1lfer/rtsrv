@@ -1,10 +1,23 @@
+/**
+ * @file client/src/redis_rib.cpp
+ * @brief Hiredis-backed Redis hash implementation for the RIB prefix table.
+ *
+ * All operations use the synchronous (blocking) hiredis API.
+ * A failed or missing Redis connection is handled gracefully: every
+ * method returns a safe sentinel value (false / nullopt / empty map)
+ * rather than throwing.
+ *
+ * @version 1.0
+ */
+
 #include "client/redis_rib.hpp"
 
 #include <hiredis/hiredis.h>
 
 #include <cstdio>
 
-namespace sra {
+namespace sra
+{
 
 RedisRib::RedisRib(const std::string& host, int port)
 {
@@ -42,8 +55,8 @@ bool RedisRib::clear()
     if (!ctx_)
         return false;
 
-    auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "DEL %s", kHashKey));
+    auto* reply =
+        static_cast<redisReply*>(redisCommand(ctx_, "DEL %s", kHashKey));
     if (!reply)
         return false;
 
@@ -57,9 +70,8 @@ bool RedisRib::set(const std::string& prefix, const std::string& nhg_id)
     if (!ctx_)
         return false;
 
-    auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "HSET %s %s %s", kHashKey,
-                     prefix.c_str(), nhg_id.c_str()));
+    auto* reply = static_cast<redisReply*>(redisCommand(
+        ctx_, "HSET %s %s %s", kHashKey, prefix.c_str(), nhg_id.c_str()));
     if (!reply)
         return false;
 
@@ -96,7 +108,8 @@ bool RedisRib::del(const std::string& prefix)
     if (!reply)
         return false;
 
-    const bool existed = (reply->type == REDIS_REPLY_INTEGER && reply->integer > 0);
+    const bool existed =
+        (reply->type == REDIS_REPLY_INTEGER && reply->integer > 0);
     freeReplyObject(reply);
     return existed;
 }
@@ -107,8 +120,8 @@ std::unordered_map<std::string, std::string> RedisRib::getAll() const
     if (!ctx_)
         return result;
 
-    auto* reply = static_cast<redisReply*>(
-        redisCommand(ctx_, "HGETALL %s", kHashKey));
+    auto* reply =
+        static_cast<redisReply*>(redisCommand(ctx_, "HGETALL %s", kHashKey));
     if (!reply)
         return result;
 
