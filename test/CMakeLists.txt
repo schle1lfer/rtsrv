@@ -1,7 +1,13 @@
 ##
 # @file test/CMakeLists.txt
-# @brief Builds unix_domain protocol integration tests.
+# @brief Builds the logging-module thread-safety stress test.
 ##
 
-# route_add_single_iface has been removed — its functionality is now
-# available via: sra add-del-list --iface <n> --nexthop <ip> --prefix <cidr>
+add_executable(log_thread_test log_thread_test.cpp)
+
+target_link_libraries(
+    log_thread_test
+    PRIVATE
+        common_lib
+        Threads::Threads
+)
