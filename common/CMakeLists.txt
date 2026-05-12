@@ -1,11 +1,12 @@
 ##
 # @file common/CMakeLists.txt
-# @brief Builds the shared configuration library used by both srmd and sra.
+# @brief Builds the shared configuration and logging library used by srmd and sra.
 ##
 
 add_library(
     common_lib STATIC
     src/config.cpp
+    src/log.cpp
 )
 
 target_include_directories(
@@ -18,6 +19,7 @@ target_link_libraries(
     common_lib
     PUBLIC
         Boost::json
+        Threads::Threads
 )
 
 target_compile_definitions(
