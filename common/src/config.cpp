@@ -133,7 +133,7 @@ parseDaemon(const boost::json::object& obj)
     }
     cfg.pid_file = std::move(*pidFile);
 
-    auto logFile = getString(obj, "log_file", "/var/log/srmd/srmd.log");
+    auto logFile = getString(obj, "log_file", "/var/log/srmd.log");
     if (!logFile)
     {
         return std::unexpected(logFile.error());

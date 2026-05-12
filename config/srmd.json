@@ -1,7 +1,7 @@
 {
     "daemon": {
         "pid_file"   : "/run/srmd/srmd.pid",
-        "log_file"   : "/var/log/srmd/srmd.log",
+        "log_file"   : "/var/log/srmd.log",
         "log_level"  : "info",
         "working_dir": "/"
     },
