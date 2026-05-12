@@ -27,9 +27,11 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <format>
 #include <mutex>
 #include <string>
+#include <unistd.h>
 
 namespace logger
 {
@@ -44,19 +46,20 @@ namespace
 /// @brief Guards all accesses to the mutable state below.
 std::mutex g_mutex;
 
-/// @brief Destination stream; nullptr means logging is disabled.
+/// @brief Primary log file stream; nullptr means logging is disabled.
 FILE* g_stream{nullptr};
 
 /// @brief True when g_stream was opened by us and must be closed on shutdown.
 bool g_owns_stream{false};
+
+/// @brief Optional extra stream (stdout/stderr); nullptr if not set.
+FILE* g_extra_stream{nullptr};
 
 // ---------------------------------------------------------------------------
 // Fast-path atomics – read without holding g_mutex
 // ---------------------------------------------------------------------------
 
 /// Set to true by init() after a stream is opened; cleared by shutdown().
-/// Acquiring loads in is_enabled() / log() pair with the releasing stores in
-/// init() / shutdown() so the stream pointer is always valid when observed.
 std::atomic<bool> g_active{false};
 
 /// Mirror of g_min_level updated by init() before the release store on
@@ -64,7 +67,6 @@ std::atomic<bool> g_active{false};
 std::atomic<int> g_min_level_a{DEBUG};
 
 /// @brief Minimum level to emit (messages below this are dropped).
-/// Kept in sync with g_min_level_a; used only within the locked path.
 int g_min_level{DEBUG};
 
 // ---------------------------------------------------------------------------
@@ -110,6 +112,45 @@ std::string hex_span(std::span<const std::uint8_t> data)
     return out;
 }
 
+/**
+ * @brief Creates a timestamped log file and updates the base-path symlink.
+ *
+ * Opens @p base_path.<epoch_seconds> for appending, then atomically
+ * replaces the symlink at @p base_path to point to the new file.
+ *
+ * @param base_path  Base log file path (e.g. "/var/log/sra.log").
+ * @return Opened FILE* owned by the caller, or nullptr on failure.
+ */
+FILE* open_timestamped_log(const std::string& base_path)
+{
+    const auto ts = static_cast<long long>(std::time(nullptr));
+    const std::string timestamped = base_path + "." + std::to_string(ts);
+
+    FILE* f = std::fopen(timestamped.c_str(), "a");
+    if (!f)
+    {
+        std::fprintf(stderr,
+                     "[logger] cannot open log file '%s': %s\n",
+                     timestamped.c_str(),
+                     std::strerror(errno));
+        return nullptr;
+    }
+
+    // Update the symlink: remove stale link/file then create new one.
+    ::unlink(base_path.c_str());
+    if (::symlink(timestamped.c_str(), base_path.c_str()) != 0)
+    {
+        std::fprintf(stderr,
+                     "[logger] cannot create symlink '%s' -> '%s': %s\n",
+                     base_path.c_str(),
+                     timestamped.c_str(),
+                     std::strerror(errno));
+        // Non-fatal: the file is open and will receive log output.
+    }
+
+    return f;
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -126,7 +167,11 @@ ParseResult parse_args(int argc, char* argv[])
         std::string_view arg{argv[i]};
         if ((arg == "--logstream") && (i + 1 < argc))
         {
-            result.logstream = argv[++i];
+            std::string_view val{argv[++i]};
+            if (val == "stdout" || val == "stderr")
+                result.extra_stream = std::string{val};
+            else
+                result.log_file_base = std::string{val};
         }
         else if ((arg == "--loglevel") && (i + 1 < argc))
         {
@@ -198,10 +243,11 @@ ParseResult parse_args(int argc, char* argv[])
         }
     }
 
-    // If the caller requested a specific log level but did not name a
-    // logstream, default to stderr so that --loglevel <N> works on its own.
-    if (loglevel_explicit && result.logstream.empty())
-        result.logstream = "stderr";
+    // If the caller requested a specific log level but gave no logstream,
+    // default extra output to stderr so --loglevel <N> works on its own.
+    if (loglevel_explicit && result.log_file_base.empty() &&
+        result.extra_stream.empty())
+        result.extra_stream = "stderr";
 
     return result;
 }
@@ -210,7 +256,8 @@ ParseResult parse_args(int argc, char* argv[])
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-void init(const std::string& logstream, int loglevel)
+void init(const std::string& log_file_base, int loglevel,
+          const std::string& extra_stream)
 {
     std::scoped_lock lock{g_mutex};
 
@@ -219,44 +266,39 @@ void init(const std::string& logstream, int loglevel)
     // until it acquires g_mutex, after which it will see g_active==false.
     g_active.store(false, std::memory_order_release);
 
-    // Close any previously opened file.
+    // Close any previously owned file.
     if (g_owns_stream && g_stream)
     {
         std::fclose(g_stream);
         g_stream = nullptr;
         g_owns_stream = false;
     }
+    g_extra_stream = nullptr;
 
-    if (logstream.empty())
+    if (log_file_base.empty())
     {
         g_stream = nullptr;
         return;
     }
 
-    if (logstream == "stdout")
+    // Open the timestamped log file and update the base-path symlink.
+    g_stream = open_timestamped_log(log_file_base);
+    if (g_stream)
     {
-        g_stream = stdout;
-        g_owns_stream = false;
-    }
-    else if (logstream == "stderr")
-    {
-        g_stream = stderr;
-        g_owns_stream = false;
+        g_owns_stream = true;
     }
     else
     {
-        g_stream = std::fopen(logstream.c_str(), "a");
-        g_owns_stream = (g_stream != nullptr);
-        if (!g_stream)
-        {
-            // Fall back to stderr so the failure is visible.
-            std::fprintf(stderr,
-                         "[logger] cannot open log file '%s': %s\n",
-                         logstream.c_str(),
-                         std::strerror(errno));
-            g_stream = stderr;
-        }
+        // Fall back to stderr so failures remain visible.
+        g_stream = stderr;
+        g_owns_stream = false;
     }
+
+    // Wire up the optional extra stream (stdout / stderr).
+    if (extra_stream == "stdout")
+        g_extra_stream = stdout;
+    else if (extra_stream == "stderr")
+        g_extra_stream = stderr;
 
     g_min_level = (loglevel >= DEBUG && loglevel <= EMERG) ? loglevel : DEBUG;
 
@@ -270,10 +312,8 @@ void init(const std::string& logstream, int loglevel)
 void shutdown() noexcept
 {
     std::scoped_lock lock{g_mutex};
-    // Quiesce the fast path under the lock so that any log() that passes the
-    // atomic check will find a valid g_stream until it acquires g_mutex, then
-    // see g_active==false (re-checked inside log()).
     g_active.store(false, std::memory_order_release);
+    g_extra_stream = nullptr;
     if (g_owns_stream && g_stream)
     {
         std::fflush(g_stream);
@@ -308,6 +348,8 @@ void log(int level, std::string_view tag, std::string_view msg)
     // Re-validate under the lock in case shutdown() raced with us.
     if (g_stream)
         std::fputs(line.c_str(), g_stream);
+    if (g_extra_stream && g_extra_stream != g_stream)
+        std::fputs(line.c_str(), g_extra_stream);
 }
 
 void log_hex(std::string_view tag,
@@ -346,6 +388,8 @@ void log_hex(std::string_view tag,
     // Re-validate under the lock in case shutdown() raced with us.
     if (g_stream)
         std::fputs(line.c_str(), g_stream);
+    if (g_extra_stream && g_extra_stream != g_stream)
+        std::fputs(line.c_str(), g_extra_stream);
 }
 
 } // namespace logger

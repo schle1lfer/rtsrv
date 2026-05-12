@@ -23,8 +23,8 @@
  *
  * @code
  *   // Parse --logstream / --loglevel from argv.
- *   auto [logstream, loglevel, rest] = logger::parse_args(argc, argv);
- *   logger::init(logstream, loglevel);
+ *   auto res = logger::parse_args(argc, argv);
+ *   logger::init(res.log_file_base, res.loglevel, res.extra_stream);
  * @endcode
  *
  * A message is emitted when its level is **≥ the configured minimum level**:
@@ -84,8 +84,9 @@ inline constexpr int EMERG = 7;
  */
 struct ParseResult
 {
-    std::string logstream; ///< Destination (path, "stdout", or "stderr")
-    int loglevel{1};       ///< Minimum level to emit (1–7)
+    std::string log_file_base; ///< Base path for log file (e.g. /var/log/sra.log)
+    std::string extra_stream;  ///< Extra stream to duplicate output: "stdout", "stderr", or ""
+    int loglevel{1};           ///< Minimum level to emit (1–7)
     std::vector<std::string> remaining; ///< Non-log argv elements
 };
 
@@ -109,16 +110,22 @@ ParseResult parse_args(int argc, char* argv[]);
 /**
  * @brief Initialises the logging subsystem.
  *
+ * Always writes to @p log_file_base.<unix_timestamp> and atomically
+ * updates the symlink at @p log_file_base to point to that file.
  * May be called multiple times; each call replaces the previous
  * configuration and closes any previously opened log file.
  *
- * @param logstream  Output destination: a filesystem path, @c "stdout",
- *                   or @c "stderr".  Pass an empty string to disable
- *                   logging entirely.
- * @param loglevel   Minimum severity to emit (1–7).  Messages whose level
- *                   is below this value are silently dropped.
+ * @param log_file_base  Base path for the log file (e.g. @c "/var/log/sra.log").
+ *                       The actual file opened is @c log_file_base.<epoch_seconds>.
+ *                       Pass an empty string to disable logging entirely.
+ * @param loglevel       Minimum severity to emit (1–7).  Messages whose level
+ *                       is below this value are silently dropped.
+ * @param extra_stream   If @c "stdout" or @c "stderr", log lines are also
+ *                       written to that stream in addition to the file.
+ *                       Pass an empty string (default) for file-only output.
  */
-void init(const std::string& logstream, int loglevel);
+void init(const std::string& log_file_base, int loglevel,
+          const std::string& extra_stream = "");
 
 /**
  * @brief Flushes and closes the log stream (if a file was opened).

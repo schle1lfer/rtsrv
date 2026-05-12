@@ -18,7 +18,7 @@
  *   -t, --timeout <sec>   RPC deadline in seconds (overrides config)
  *       --tls             use TLS channel (overrides config file)
  *       --ca-cert <path>  CA certificate for TLS verification
- *       --logstream <d>   log dest: stderr (default), stdout, or file path
+ *       --logstream <d>   duplicate logs to: stdout or stderr (file always written)
  *       --loglevel <n>    min level: DEBUG|1 INFO|2 NOTICE|3 ERR|5
  *   -v, --version         print version and exit
  *   -h, --help            print this help and exit
@@ -78,6 +78,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <format>
 #include <iostream>
 #include <map>
@@ -3445,9 +3446,9 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(std::string{}),
             "Path to PEM CA certificate for TLS")
         ("logstream",
-            po::value<std::string>()->default_value("/var/log/sra.log"),
-            "unix_domain layer log destination: \"/var/log/sra.log\" (default),"
-            " \"stderr\", \"stdout\", absolute file path, or \"\" to disable")
+            po::value<std::string>()->default_value(std::string{}),
+            "Duplicate unix_domain log output to \"stdout\" or \"stderr\" in"
+            " addition to the default log file /var/log/sra.log.<timestamp>")
         ("loglevel",
             po::value<std::string>()->default_value("1"),
             "Minimum log level for unix_domain layer:"
@@ -3487,6 +3488,9 @@ int main(int argc, char* argv[])
     // Initialise the unix_domain protocol-layer logger as early as possible so
     // that all logger::log / logger::log_hex calls (including those in
     // sra_udp_client, cmd_proto, etc.) are active for the lifetime of the run.
+    // Logs always go to /var/log/sra.log.<timestamp> (symlinked from
+    // /var/log/sra.log).  --logstream stdout/stderr additionally mirrors
+    // every log line to that stream.
     {
         const std::string& lvlStr = vm["loglevel"].as<std::string>();
         int lvl = logger::DEBUG;
@@ -3509,12 +3513,17 @@ int main(int argc, char* argv[])
             catch (...)
             {}
         }
-        const std::string& logstream = vm["logstream"].as<std::string>();
-        logger::init(logstream, lvl);
+        static constexpr std::string_view kLogFileBase = "/var/log/sra.log";
+        const std::string& extraStream = vm["logstream"].as<std::string>();
+        logger::init(std::string{kLogFileBase}, lvl, extraStream);
         logger::log(
             logger::DEBUG,
             "sra",
-            std::format("logger active: stream='{}' level={}", logstream, lvl));
+            std::format("logger active: file='{}.{}' extra='{}' level={}",
+                        kLogFileBase,
+                        static_cast<long long>(std::time(nullptr)),
+                        extraStream,
+                        lvl));
     }
 
     if (vm.count("help") || !vm.count("command"))

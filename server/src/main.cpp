@@ -36,8 +36,11 @@
 #include <boost/log/utility/setup/console.hpp>
 #include <boost/log/utility/setup/file.hpp>
 #include <boost/program_options.hpp>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <format>
 #include <fstream>
 #include <iostream>
@@ -93,36 +96,58 @@ parseLogLevel(const std::string& level) noexcept
     return logging::trivial::info;
 }
 
-/** @brief Initialises console logging for foreground mode. */
-static void initConsoleLogs(logging::trivial::severity_level level)
+/**
+ * @brief Initialises logging: always writes to a timestamped file and
+ *        optionally mirrors output to stdout or stderr.
+ *
+ * Creates @p logBasePath.<epoch_seconds>, updates the symlink at
+ * @p logBasePath to point to the new file, then starts a Boost.Log
+ * file sink.  If @p extraStream is @c "stdout" or @c "stderr" a second
+ * console sink is added so every log line is duplicated there.
+ *
+ * @param logBasePath  Base path for the log file (e.g. /var/log/srmd.log).
+ * @param level        Minimum Boost.Log severity to emit.
+ * @param extraStream  Extra output stream: "stdout", "stderr", or "" (none).
+ */
+static void initLogs(const std::string& logBasePath,
+                     logging::trivial::severity_level level,
+                     const std::string& extraStream)
 {
-    logging::add_common_attributes();
-    logging::add_console_log(
-        std::clog,
-        keywords::format =
-            (expr::stream << expr::format_date_time<boost::posix_time::ptime>(
-                                 "TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
-                          << " [srmd] [" << logging::trivial::severity << "] "
-                          << expr::smessage));
-    logging::core::get()->set_filter(logging::trivial::severity >= level);
-}
+    const auto ts = static_cast<long long>(std::time(nullptr));
+    const std::string timestampedPath =
+        logBasePath + "." + std::to_string(ts);
 
-/** @brief Initialises rotating file logging for daemon mode. */
-static void initFileLogs(const std::string& logPath,
-                         logging::trivial::severity_level level)
-{
+    // Update symlink: remove stale link then create the new one.
+    ::unlink(logBasePath.c_str());
+    if (::symlink(timestampedPath.c_str(), logBasePath.c_str()) != 0)
+    {
+        std::fprintf(stderr,
+                     "[srmd] cannot create symlink '%s' -> '%s': %s\n",
+                     logBasePath.c_str(),
+                     timestampedPath.c_str(),
+                     std::strerror(errno));
+    }
+
+    auto fmt =
+        expr::stream
+        << expr::format_date_time<boost::posix_time::ptime>(
+               "TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
+        << " [srmd] [" << logging::trivial::severity << "] "
+        << expr::smessage;
+
     logging::add_common_attributes();
+
     logging::add_file_log(
-        keywords::file_name = logPath,
-        keywords::rotation_size = 10 * 1024 * 1024,
-        keywords::max_files = 5,
+        keywords::file_name = timestampedPath,
         keywords::auto_flush = true,
         keywords::open_mode = std::ios::out | std::ios::app,
-        keywords::format =
-            (expr::stream << expr::format_date_time<boost::posix_time::ptime>(
-                                 "TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
-                          << " [srmd] [" << logging::trivial::severity << "] "
-                          << expr::smessage));
+        keywords::format = fmt);
+
+    if (extraStream == "stdout")
+        logging::add_console_log(std::cout, keywords::format = fmt);
+    else if (extraStream == "stderr")
+        logging::add_console_log(std::cerr, keywords::format = fmt);
+
     logging::core::get()->set_filter(logging::trivial::severity >= level);
 }
 
@@ -213,7 +238,11 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(
                 std::string(kDefaultConfig)),
             "Path to the Source-of-Truth JSON file (route_sot)")
-        ("foreground,f", "Run in the foreground (skip daemonisation)");
+        ("foreground,f", "Run in the foreground (skip daemonisation)")
+        ("logstream",
+            po::value<std::string>()->default_value(std::string{}),
+            "Duplicate log output to \"stdout\" or \"stderr\" in addition"
+            " to the default log file /var/log/srmd.log.<timestamp>");
     // clang-format on
 
     po::variables_map vm;
@@ -247,6 +276,7 @@ int main(int argc, char* argv[])
     const std::string configPath = vm["config"].as<std::string>();
     const std::string sotPath = vm["sot"].as<std::string>();
     const bool foreground = vm.count("foreground") > 0;
+    const std::string logstream = vm["logstream"].as<std::string>();
 
     // -----------------------------------------------------------------------
     // "sync" command – parse SOT *before* opening any gRPC connections
@@ -333,20 +363,21 @@ int main(int argc, char* argv[])
             std::cerr << "daemonise() failed: " << ex.what() << '\n';
             return EXIT_FAILURE;
         }
-
-        try
-        {
-            initFileLogs(cfg.daemon.log_file,
-                         parseLogLevel(cfg.daemon.log_level));
-        }
-        catch (...)
-        {
-            return EXIT_FAILURE;
-        }
     }
-    else
+
+    // Always initialise file logging.  The actual file is
+    // <log_file>.<epoch_seconds> with a symlink at <log_file>.
+    // --logstream stdout/stderr additionally mirrors every line there.
+    try
     {
-        initConsoleLogs(parseLogLevel(cfg.daemon.log_level));
+        initLogs(cfg.daemon.log_file,
+                 parseLogLevel(cfg.daemon.log_level),
+                 logstream);
+    }
+    catch (const std::exception& ex)
+    {
+        std::cerr << "initLogs() failed: " << ex.what() << '\n';
+        return EXIT_FAILURE;
     }
 
     BOOST_LOG_TRIVIAL(info)
