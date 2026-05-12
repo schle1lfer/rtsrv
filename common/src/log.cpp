@@ -2,9 +2,22 @@
  * @file common/src/log.cpp
  * @brief RFC 5424 logging module implementation.
  *
- * Internal state is held in a module-level struct protected by a single
- * std::mutex.  format_message() is stateless and lock-free; all other
- * public functions acquire the mutex before touching sink state.
+ * Thread-safety model
+ * -------------------
+ * Two atomics provide a lock-free fast path used by is_enabled() and the
+ * entry guard of log():
+ *
+ *   g_ready   (atomic<bool>)    – true once init() completes successfully;
+ *                                  cleared by shutdown() while g_mutex is held.
+ *   g_min_sev (atomic<uint8_t>) – mirror of cfg.min_severity updated by init();
+ *                                  read without the lock to filter cheap.
+ *
+ * After passing the atomic checks, log() acquires g_mutex and re-validates
+ * g_state.initialised so that a racing shutdown() can never write to a closed
+ * sink.
+ *
+ * All state mutations (init / shutdown / sink I/O) are serialised by g_mutex.
+ * format_message() is stateless and entirely lock-free.
  *
  * Sink details:
  *  - Console  : atomic write(2) to STDERR_FILENO; no separate fd locking.
@@ -13,7 +26,7 @@
  *  - TCP      : SOCK_STREAM; octet-count or newline framing; auto-reconnect.
  *  - Syslog   : POSIX openlog/syslog/closelog; ident pointer into g_state.
  *
- * @version 1.0
+ * @version 1.1
  */
 
 #include "common/log.hpp"
@@ -25,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -49,6 +63,7 @@ namespace
 
 struct State
 {
+    bool         initialised{false}; ///< True once init() succeeds; checked under g_mutex.
     Config       cfg;
     std::string  hostname;
     std::int32_t procid{0};
@@ -67,8 +82,19 @@ struct State
     bool local_syslog_open{false};
 };
 
+// ---------------------------------------------------------------------------
+// Fast-path atomics (no lock required for reads in is_enabled / log entry)
+// ---------------------------------------------------------------------------
+
+/// Set to true by init() after all sinks are open; cleared by shutdown().
+/// Acquiring load in log() pairs with the releasing store in init()/shutdown().
+std::atomic<bool> g_ready{false};
+
+/// Mirror of cfg.min_severity updated by init(); allows lock-free severity
+/// filtering before the mutex is taken.
+std::atomic<std::uint8_t> g_min_sev{static_cast<std::uint8_t>(Severity::Debug)};
+
 std::mutex g_mutex;
-bool       g_initialised{false};
 State      g_state;
 
 // ---------------------------------------------------------------------------
@@ -557,11 +583,14 @@ std::expected<void, std::string> init(const Config& cfg)
 {
     std::lock_guard lock(g_mutex);
 
-    if (g_initialised)
+    if (g_state.initialised)
     {
+        // Quiesce the fast path before tearing down sinks so that any
+        // concurrent log() call that already passed the atomic check will
+        // find initialised==false after it acquires g_mutex.
+        g_ready.store(false, std::memory_order_release);
         close_sinks(g_state);
-        g_state      = State{};
-        g_initialised = false;
+        g_state = State{};
     }
 
     g_state.cfg     = cfg;
@@ -616,7 +645,15 @@ std::expected<void, std::string> init(const Config& cfg)
         g_state.local_syslog_open = true;
     }
 
-    g_initialised = true;
+    g_state.initialised = true;
+
+    // Publish the severity threshold and signal readiness.  The release store
+    // on g_ready pairs with the acquire load in log() / is_enabled() so that
+    // all sink state written above is visible to other threads before they
+    // observe g_ready == true.
+    g_min_sev.store(static_cast<std::uint8_t>(cfg.min_severity),
+                    std::memory_order_relaxed);
+    g_ready.store(true, std::memory_order_release);
     return {};
 }
 
@@ -627,11 +664,13 @@ std::expected<void, std::string> init(const Config& cfg)
 void shutdown() noexcept
 {
     std::lock_guard lock(g_mutex);
-    if (!g_initialised)
+    if (!g_state.initialised)
         return;
+    // Quiesce the fast path first; any log() that already passed the atomic
+    // check will find initialised==false after acquiring g_mutex below.
+    g_ready.store(false, std::memory_order_release);
     close_sinks(g_state);
-    g_state       = State{};
-    g_initialised = false;
+    g_state = State{};
 }
 
 // ---------------------------------------------------------------------------
@@ -643,11 +682,26 @@ void log(Severity               sev,
          std::string_view       msg,
          std::vector<SdElement> sd)
 {
-    std::lock_guard lock(g_mutex);
-    if (!g_initialised)
+    // --- Lock-free fast path -------------------------------------------------
+    // Avoids taking g_mutex when the logger is not ready or the severity is
+    // filtered out.  The acquire load on g_ready synchronises with the release
+    // store in init() / shutdown() so all sink state is visible if g_ready is
+    // true.  g_min_sev is read relaxed because it is always written while
+    // g_ready is false (or under g_mutex), so the acquire on g_ready provides
+    // sufficient ordering.
+    if (!g_ready.load(std::memory_order_acquire))
+        return;
+    if (static_cast<std::uint8_t>(sev)
+        > g_min_sev.load(std::memory_order_relaxed))
         return;
 
-    // Drop records that are less urgent than the configured minimum.
+    // --- Locked slow path ----------------------------------------------------
+    std::lock_guard lock(g_mutex);
+
+    // Re-validate after acquiring the mutex: shutdown() may have raced between
+    // the atomic check above and this point.
+    if (!g_state.initialised)
+        return;
     if (static_cast<std::uint8_t>(sev)
         > static_cast<std::uint8_t>(g_state.cfg.min_severity))
         return;
@@ -766,17 +820,16 @@ void dbg(std::string_view msg, std::string_view msg_id)
 
 bool is_enabled(Severity sev) noexcept
 {
-    std::lock_guard lock(g_mutex);
-    if (!g_initialised)
-        return false;
-    return static_cast<std::uint8_t>(sev)
-           <= static_cast<std::uint8_t>(g_state.cfg.min_severity);
+    return g_ready.load(std::memory_order_acquire)
+        && static_cast<std::uint8_t>(sev)
+               <= g_min_sev.load(std::memory_order_relaxed);
 }
 
 Severity min_severity() noexcept
 {
-    std::lock_guard lock(g_mutex);
-    return g_initialised ? g_state.cfg.min_severity : Severity::Debug;
+    return g_ready.load(std::memory_order_acquire)
+        ? static_cast<Severity>(g_min_sev.load(std::memory_order_relaxed))
+        : Severity::Debug;
 }
 
 std::string_view to_string(Severity sev) noexcept

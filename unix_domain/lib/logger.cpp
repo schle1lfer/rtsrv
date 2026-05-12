@@ -2,10 +2,20 @@
  * @file logger.cpp
  * @brief Implementation of the global logging facility.
  *
- * Thread-safe: all output is serialised through a single mutex so that
- * interleaved messages from the server's receiver and processor threads
- * remain readable.
+ * Thread-safety model
+ * -------------------
+ * Two atomics provide a lock-free fast path used by is_enabled() and the
+ * entry guard of log() / log_hex():
  *
+ *   g_active    (atomic<bool>) – true once init() opens a stream; cleared by
+ *                                shutdown() while g_mutex is held.
+ *   g_min_level (atomic<int>)  – minimum level to emit; updated by init()
+ *                                before the release store on g_active.
+ *
+ * All state mutations (init / shutdown / stream I/O) are serialised by
+ * g_mutex.  After passing the atomic fast-path, log() acquires g_mutex and
+ * re-checks g_stream so that a racing shutdown() can never write to a
+ * closed stream.
  *
  * @date    2026
  */
@@ -13,6 +23,7 @@
 #include "logger.hpp"
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -30,7 +41,7 @@ namespace logger
 namespace
 {
 
-/// @brief Guards all accesses to the logger state below.
+/// @brief Guards all accesses to the mutable state below.
 std::mutex g_mutex;
 
 /// @brief Destination stream; nullptr means logging is disabled.
@@ -39,7 +50,21 @@ FILE* g_stream{nullptr};
 /// @brief True when g_stream was opened by us and must be closed on shutdown.
 bool g_owns_stream{false};
 
+// ---------------------------------------------------------------------------
+// Fast-path atomics – read without holding g_mutex
+// ---------------------------------------------------------------------------
+
+/// Set to true by init() after a stream is opened; cleared by shutdown().
+/// Acquiring loads in is_enabled() / log() pair with the releasing stores in
+/// init() / shutdown() so the stream pointer is always valid when observed.
+std::atomic<bool> g_active{false};
+
+/// Mirror of g_min_level updated by init() before the release store on
+/// g_active.  Read relaxed because the acquire on g_active provides ordering.
+std::atomic<int> g_min_level_a{DEBUG};
+
 /// @brief Minimum level to emit (messages below this are dropped).
+/// Kept in sync with g_min_level_a; used only within the locked path.
 int g_min_level{DEBUG};
 
 // ---------------------------------------------------------------------------
@@ -189,6 +214,11 @@ void init(const std::string& logstream, int loglevel)
 {
     std::scoped_lock lock{g_mutex};
 
+    // Quiesce the fast path before touching the stream so any concurrent
+    // log() that already passed the atomic check will find g_stream intact
+    // until it acquires g_mutex, after which it will see g_active==false.
+    g_active.store(false, std::memory_order_release);
+
     // Close any previously opened file.
     if (g_owns_stream && g_stream)
     {
@@ -229,11 +259,21 @@ void init(const std::string& logstream, int loglevel)
     }
 
     g_min_level = (loglevel >= DEBUG && loglevel <= EMERG) ? loglevel : DEBUG;
+
+    // Publish the level first (relaxed) then signal readiness with a release
+    // store.  Readers in is_enabled() use an acquire load on g_active so the
+    // level is visible before the stream.
+    g_min_level_a.store(g_min_level, std::memory_order_relaxed);
+    g_active.store(true, std::memory_order_release);
 }
 
 void shutdown() noexcept
 {
     std::scoped_lock lock{g_mutex};
+    // Quiesce the fast path under the lock so that any log() that passes the
+    // atomic check will find a valid g_stream until it acquires g_mutex, then
+    // see g_active==false (re-checked inside log()).
+    g_active.store(false, std::memory_order_release);
     if (g_owns_stream && g_stream)
     {
         std::fflush(g_stream);
@@ -249,20 +289,23 @@ void shutdown() noexcept
 
 bool is_enabled(int level) noexcept
 {
-    // Intentionally racy read of g_stream/g_min_level to avoid locking in the
-    // hot path; the worst case is a spurious or missed log line during init.
-    return (g_stream != nullptr) && (level >= g_min_level);
+    return g_active.load(std::memory_order_acquire)
+        && (level >= g_min_level_a.load(std::memory_order_relaxed));
 }
 
 void log(int level, std::string_view tag, std::string_view msg)
 {
-    if (!is_enabled(level))
+    // Lock-free fast path: no mutex taken when inactive or severity filtered.
+    if (!g_active.load(std::memory_order_acquire))
+        return;
+    if (level < g_min_level_a.load(std::memory_order_relaxed))
         return;
 
     const auto line =
         std::format("[{}] [{}] {}\n", level_name(level), tag, msg);
 
     std::scoped_lock lock{g_mutex};
+    // Re-validate under the lock in case shutdown() raced with us.
     if (g_stream)
         std::fputs(line.c_str(), g_stream);
 }
@@ -272,7 +315,10 @@ void log_hex(std::string_view tag,
              int fd,
              std::span<const std::uint8_t> data)
 {
-    if (!is_enabled(DEBUG))
+    // Lock-free fast path.
+    if (!g_active.load(std::memory_order_acquire))
+        return;
+    if (DEBUG < g_min_level_a.load(std::memory_order_relaxed))
         return;
 
     std::string hex = hex_span(data);
@@ -297,6 +343,7 @@ void log_hex(std::string_view tag,
     }
 
     std::scoped_lock lock{g_mutex};
+    // Re-validate under the lock in case shutdown() raced with us.
     if (g_stream)
         std::fputs(line.c_str(), g_stream);
 }
