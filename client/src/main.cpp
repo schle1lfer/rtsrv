@@ -3445,9 +3445,9 @@ int main(int argc, char* argv[])
             po::value<std::string>()->default_value(std::string{}),
             "Path to PEM CA certificate for TLS")
         ("logstream",
-            po::value<std::string>()->default_value("stderr"),
-            "unix_domain layer log destination: \"stderr\" (default),"
-            " \"stdout\", absolute file path, or \"\" to disable")
+            po::value<std::string>()->default_value("/var/log/sra.log"),
+            "unix_domain layer log destination: \"/var/log/sra.log\" (default),"
+            " \"stderr\", \"stdout\", absolute file path, or \"\" to disable")
         ("loglevel",
             po::value<std::string>()->default_value("1"),
             "Minimum log level for unix_domain layer:"
