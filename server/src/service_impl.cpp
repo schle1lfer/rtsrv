@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <format>
 #include <mutex>
+#include <string_view>
 
 namespace srmd
 {
@@ -57,6 +58,22 @@ std::string SwitchRouteManagerImpl::extractClientIp(const std::string& peer)
     return peer;
 }
 
+void SwitchRouteManagerImpl::logIfNewPeer(const std::string& peer,
+                                          std::string_view rpc)
+{
+    bool isNew = false;
+    {
+        std::lock_guard lock(knownPeersMutex_);
+        isNew = knownPeers_.insert(peer).second;
+    }
+    if (isNew)
+    {
+        rtsrv::log::info(std::format(
+            "[Connection] new client peer='{}' clientIp='{}' rpc='{}'",
+            peer, extractClientIp(peer), rpc));
+    }
+}
+
 int64_t SwitchRouteManagerImpl::nowUs() noexcept
 {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -68,12 +85,14 @@ int64_t SwitchRouteManagerImpl::nowUs() noexcept
 // Echo
 // ---------------------------------------------------------------------------
 
-grpc::Status SwitchRouteManagerImpl::Echo(grpc::ServerContext* /*ctx*/,
+grpc::Status SwitchRouteManagerImpl::Echo(grpc::ServerContext* ctx,
                                           const srmd::v1::EchoRequest* req,
                                           srmd::v1::EchoResponse* resp)
 {
-    rtsrv::log::dbg(std::format(
-        "[Echo] msg='{}' client_ts={}", req->message(), req->client_ts_us()));
+    logIfNewPeer(ctx->peer(), "Echo");
+    rtsrv::log::info(std::format(
+        "[Echo] peer='{}' msg='{}' client_ts={}",
+        ctx->peer(), req->message(), req->client_ts_us()));
 
     resp->set_message(req->message());
     resp->set_client_ts_us(req->client_ts_us());
@@ -89,10 +108,13 @@ grpc::Status SwitchRouteManagerImpl::Echo(grpc::ServerContext* /*ctx*/,
 // ---------------------------------------------------------------------------
 
 grpc::Status
-SwitchRouteManagerImpl::Heartbeat(grpc::ServerContext* /*ctx*/,
+SwitchRouteManagerImpl::Heartbeat(grpc::ServerContext* ctx,
                                   const srmd::v1::HeartbeatRequest* req,
                                   srmd::v1::HeartbeatResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "Heartbeat");
+    rtsrv::log::dbg(std::format(
+        "[Heartbeat] peer='{}' seq={}", ctx->peer(), req->sequence()));
     resp->set_sequence(req->sequence());
     resp->set_server_ts_us(nowUs());
     return grpc::Status::OK;
@@ -103,18 +125,24 @@ SwitchRouteManagerImpl::Heartbeat(grpc::ServerContext* /*ctx*/,
 // ---------------------------------------------------------------------------
 
 grpc::Status
-SwitchRouteManagerImpl::AddRoute(grpc::ServerContext* /*ctx*/,
+SwitchRouteManagerImpl::AddRoute(grpc::ServerContext* ctx,
                                  const srmd::v1::AddRouteRequest* req,
                                  srmd::v1::RouteResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "AddRoute");
     auto result = routeManager_.addRoute(*req);
     if (!result)
     {
         resp->set_code(srmd::v1::STATUS_CODE_INVALID_ARGUMENT);
         resp->set_message(result.error());
-        rtsrv::log::warn(std::format("[AddRoute] rejected: {}", result.error()));
+        rtsrv::log::warn(std::format("[AddRoute] peer='{}' rejected: {}",
+                                     ctx->peer(), result.error()));
         return grpc::Status::OK;
     }
+
+    rtsrv::log::info(std::format(
+        "[AddRoute] peer='{}' id='{}' dst='{}' via='{}'",
+        ctx->peer(), result->id(), result->destination(), result->nexthop()));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("Route added successfully");
@@ -127,12 +155,16 @@ SwitchRouteManagerImpl::AddRoute(grpc::ServerContext* /*ctx*/,
 // ---------------------------------------------------------------------------
 
 grpc::Status
-SwitchRouteManagerImpl::RemoveRoute(grpc::ServerContext* /*ctx*/,
+SwitchRouteManagerImpl::RemoveRoute(grpc::ServerContext* ctx,
                                     const srmd::v1::RemoveRouteRequest* req,
                                     srmd::v1::StatusResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "RemoveRoute");
     if (req->id().empty())
     {
+        rtsrv::log::warn(std::format(
+            "[RemoveRoute] peer='{}' rejected: id must not be empty",
+            ctx->peer()));
         resp->set_code(srmd::v1::STATUS_CODE_INVALID_ARGUMENT);
         resp->set_message("id must not be empty");
         return grpc::Status::OK;
@@ -141,10 +173,15 @@ SwitchRouteManagerImpl::RemoveRoute(grpc::ServerContext* /*ctx*/,
     auto result = routeManager_.removeRoute(req->id());
     if (!result)
     {
+        rtsrv::log::warn(std::format("[RemoveRoute] peer='{}' id='{}' not found: {}",
+                                     ctx->peer(), req->id(), result.error()));
         resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
         resp->set_message(result.error());
         return grpc::Status::OK;
     }
+
+    rtsrv::log::info(
+        std::format("[RemoveRoute] peer='{}' id='{}' removed", ctx->peer(), req->id()));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("Route removed");
@@ -156,12 +193,15 @@ SwitchRouteManagerImpl::RemoveRoute(grpc::ServerContext* /*ctx*/,
 // ---------------------------------------------------------------------------
 
 grpc::Status
-SwitchRouteManagerImpl::GetRoute(grpc::ServerContext* /*ctx*/,
+SwitchRouteManagerImpl::GetRoute(grpc::ServerContext* ctx,
                                  const srmd::v1::GetRouteRequest* req,
                                  srmd::v1::RouteResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "GetRoute");
     if (req->id().empty())
     {
+        rtsrv::log::warn(std::format(
+            "[GetRoute] peer='{}' rejected: id must not be empty", ctx->peer()));
         resp->set_code(srmd::v1::STATUS_CODE_INVALID_ARGUMENT);
         resp->set_message("id must not be empty");
         return grpc::Status::OK;
@@ -170,10 +210,15 @@ SwitchRouteManagerImpl::GetRoute(grpc::ServerContext* /*ctx*/,
     auto result = routeManager_.getRoute(req->id());
     if (!result)
     {
+        rtsrv::log::warn(std::format("[GetRoute] peer='{}' id='{}' not found: {}",
+                                     ctx->peer(), req->id(), result.error()));
         resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
         resp->set_message(result.error());
         return grpc::Status::OK;
     }
+
+    rtsrv::log::info(std::format("[GetRoute] peer='{}' id='{}'",
+                                 ctx->peer(), req->id()));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("OK");
@@ -186,10 +231,11 @@ SwitchRouteManagerImpl::GetRoute(grpc::ServerContext* /*ctx*/,
 // ---------------------------------------------------------------------------
 
 grpc::Status
-SwitchRouteManagerImpl::ListRoutes(grpc::ServerContext* /*ctx*/,
+SwitchRouteManagerImpl::ListRoutes(grpc::ServerContext* ctx,
                                    const srmd::v1::ListRoutesRequest* req,
                                    srmd::v1::ListRoutesResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "ListRoutes");
     const auto routes = routeManager_.listRoutes(*req);
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
@@ -199,8 +245,8 @@ SwitchRouteManagerImpl::ListRoutes(grpc::ServerContext* /*ctx*/,
         *resp->add_routes() = r;
     }
 
-    rtsrv::log::dbg(
-        std::format("[ListRoutes] returning {} route(s)", routes.size()));
+    rtsrv::log::info(std::format("[ListRoutes] peer='{}' returning {} route(s)",
+                                 ctx->peer(), routes.size()));
     return grpc::Status::OK;
 }
 
@@ -213,7 +259,9 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
     const srmd::v1::WatchRoutesRequest* req,
     grpc::ServerWriter<srmd::v1::RouteEvent>* writer)
 {
-    rtsrv::log::info("[WatchRoutes] stream opened");
+    logIfNewPeer(ctx->peer(), "WatchRoutes");
+    rtsrv::log::info(
+        std::format("[WatchRoutes] peer='{}' stream opened", ctx->peer()));
 
     // Optionally send the current route snapshot first
     if (req->send_initial_state())
@@ -230,7 +278,9 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
             ev.set_event_ts_us(ts);
             if (!writer->Write(ev))
             {
-                rtsrv::log::info("[WatchRoutes] client disconnected during snapshot");
+                rtsrv::log::info(std::format(
+                    "[WatchRoutes] peer='{}' disconnected during snapshot",
+                    ctx->peer()));
                 return grpc::Status::OK;
             }
         }
@@ -271,7 +321,9 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
             }
             if (!writer->Write(ev))
             {
-                rtsrv::log::info("[WatchRoutes] client disconnected during stream");
+                rtsrv::log::info(std::format(
+                    "[WatchRoutes] peer='{}' disconnected during stream",
+                    ctx->peer()));
                 routeManager_.unregisterObserver(handle);
                 return grpc::Status::OK;
             }
@@ -279,7 +331,8 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
     }
 
     routeManager_.unregisterObserver(handle);
-    rtsrv::log::info("[WatchRoutes] stream closed");
+    rtsrv::log::info(
+        std::format("[WatchRoutes] peer='{}' stream closed", ctx->peer()));
     return grpc::Status::OK;
 }
 
@@ -288,12 +341,16 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
 // ---------------------------------------------------------------------------
 
 grpc::Status
-SwitchRouteManagerImpl::SetLoopback(grpc::ServerContext* /*ctx*/,
+SwitchRouteManagerImpl::SetLoopback(grpc::ServerContext* ctx,
                                     const srmd::v1::SetLoopbackRequest* req,
                                     srmd::v1::SetLoopbackResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "SetLoopback");
     if (req->address().empty())
     {
+        rtsrv::log::warn(std::format(
+            "[SetLoopback] peer='{}' rejected: address must not be empty",
+            ctx->peer()));
         resp->set_code(srmd::v1::STATUS_CODE_INVALID_ARGUMENT);
         resp->set_message("address must not be empty");
         return grpc::Status::OK;
@@ -304,7 +361,8 @@ SwitchRouteManagerImpl::SetLoopback(grpc::ServerContext* /*ctx*/,
         loopbackAddress_ = req->address();
     }
 
-    rtsrv::log::info(std::format("[SetLoopback] address='{}'", req->address()));
+    rtsrv::log::info(std::format("[SetLoopback] peer='{}' address='{}'",
+                                 ctx->peer(), req->address()));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("Loopback address set");
@@ -317,17 +375,19 @@ SwitchRouteManagerImpl::SetLoopback(grpc::ServerContext* /*ctx*/,
 // ---------------------------------------------------------------------------
 
 grpc::Status
-SwitchRouteManagerImpl::GetLoopback(grpc::ServerContext* /*ctx*/,
+SwitchRouteManagerImpl::GetLoopback(grpc::ServerContext* ctx,
                                     const srmd::v1::GetLoopbackRequest* /*req*/,
                                     srmd::v1::GetLoopbackResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "GetLoopback");
     std::string addr;
     {
         std::lock_guard lock(loopbackMutex_);
         addr = loopbackAddress_;
     }
 
-    rtsrv::log::dbg(std::format("[GetLoopback] returning address='{}'", addr));
+    rtsrv::log::info(std::format("[GetLoopback] peer='{}' returning address='{}'",
+                                 ctx->peer(), addr));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("OK");
@@ -344,10 +404,11 @@ SwitchRouteManagerImpl::GetLoopbacks(grpc::ServerContext* ctx,
                                      const srmd::v1::GetLoopbacksRequest* req,
                                      srmd::v1::GetLoopbacksResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "GetLoopbacks");
     // 1. Extract client IP from peer string ("ipv4:A.B.C.D:PORT" etc.)
     const std::string clientIp = extractClientIp(ctx->peer());
 
-    rtsrv::log::dbg(std::format(
+    rtsrv::log::info(std::format(
         "[GetLoopbacks] peer='{}' clientIp='{}' loopback='{}'",
         ctx->peer(), clientIp, req->loopback()));
 
@@ -449,6 +510,7 @@ grpc::Status SwitchRouteManagerImpl::RequestLoopback(
     const srmd::v1::RequestLoopbackRequest* /*req*/,
     srmd::v1::RequestLoopbackResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "RequestLoopback");
     const std::string clientIp = extractClientIp(ctx->peer());
 
     rtsrv::log::info(std::format(
@@ -489,6 +551,7 @@ grpc::Status SwitchRouteManagerImpl::GetAllRoutes(
     const srmd::v1::GetAllRoutesRequest* /*req*/,
     srmd::v1::GetAllRoutesResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "GetAllRoutes");
     const std::string clientIp = extractClientIp(ctx->peer());
 
     rtsrv::log::info(std::format(
@@ -562,6 +625,7 @@ grpc::Status SwitchRouteManagerImpl::GetRemainingNodes(
     const srmd::v1::GetRemainingNodesRequest* /*req*/,
     srmd::v1::GetRemainingNodesResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "GetRemainingNodes");
     const std::string clientIp = extractClientIp(ctx->peer());
 
     rtsrv::log::info(std::format(
@@ -613,9 +677,10 @@ grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
     const srmd::v1::GetLoopbacksByNodeIpRequest* req,
     srmd::v1::GetNodePrefixesResponse* resp)
 {
+    logIfNewPeer(ctx->peer(), "GetLoopbacksByNodeIp");
     const std::string clientIp = extractClientIp(ctx->peer());
 
-    rtsrv::log::dbg(std::format(
+    rtsrv::log::info(std::format(
         "[GetLoopbacksByNodeIp] peer='{}' clientIp='{}' node_ip='{}'",
         ctx->peer(), clientIp, req->node_ip()));
 

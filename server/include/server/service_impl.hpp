@@ -22,6 +22,7 @@
 
 #include <mutex>
 #include <string>
+#include <unordered_set>
 
 namespace srmd
 {
@@ -218,6 +219,18 @@ private:
      */
     static std::string extractClientIp(const std::string& peer);
 
+    /**
+     * @brief Logs a "new connection" message the first time a peer is seen.
+     *
+     * gRPC HTTP/2 multiplexes multiple RPCs over a single TCP connection.
+     * Each unique IP:PORT string from @c grpc::ServerContext::peer() identifies
+     * one TCP connection; a new ephemeral port means a new connection.
+     *
+     * @param peer  Full peer string from @c grpc::ServerContext::peer().
+     * @param rpc   Name of the RPC that triggered the first contact.
+     */
+    void logIfNewPeer(const std::string& peer, std::string_view rpc);
+
     RouteManager& routeManager_; ///< Shared route table (injected).
     std::string serverId_;       ///< Server identity for Echo responses.
     std::string serverVersion_;  ///< Binary version for Echo responses.
@@ -225,6 +238,9 @@ private:
 
     mutable std::mutex loopbackMutex_; ///< Guards loopbackAddress_.
     std::string loopbackAddress_;      ///< Loopback address set by clients.
+
+    mutable std::mutex knownPeersMutex_;         ///< Guards knownPeers_.
+    std::unordered_set<std::string> knownPeers_; ///< Seen peer strings (IP:PORT).
 };
 
 } // namespace srmd
