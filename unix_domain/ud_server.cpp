@@ -263,7 +263,9 @@ dispatch_route_list(const cmdproto::Command& cmd)
  */
 static void handle_connection(net::Socket conn)
 {
-    std::println("[ud_server] client connected fd={}", conn.fd());
+    logger::log(logger::NOTICE,
+                "ud_server",
+                std::format("client connected fd={}", conn.fd()));
 
     while (true)
     {
@@ -273,12 +275,14 @@ static void handle_connection(net::Socket conn)
         {
             if (frame_data.error() ==
                 net::make_error_code(net::NetError::ConnectionClosed))
-                std::println("[ud_server] client disconnected fd={}",
-                             conn.fd());
+                logger::log(logger::NOTICE,
+                            "ud_server",
+                            std::format("client disconnected fd={}", conn.fd()));
             else
-                std::println(stderr,
-                             "[ud_server] recv error: {}",
-                             frame_data.error().message());
+                logger::log(logger::ERR,
+                            "ud_server",
+                            std::format("recv error: {}",
+                                        frame_data.error().message()));
             return;
         }
         logger::log_hex("ud_server", false, conn.fd(), *frame_data);

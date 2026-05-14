@@ -251,22 +251,28 @@ void SraUdpClient::submitList(std::string vrfs_name)
 
 void SraUdpClient::threadFunc()
 {
-    std::println("[SraUdpClient] thread started, socket='{}'", socketPath_);
+    logger::log(logger::NOTICE,
+                "SraUdpClient",
+                std::format("thread started, socket='{}'", socketPath_));
 
     auto conn_result = openConnection(socketPath_, ioTimeoutMs_);
     if (!conn_result)
     {
-        std::println(stderr,
-                     "[SraUdpClient] connect({}): {}",
-                     socketPath_,
-                     conn_result.error().message());
+        logger::log(logger::ERR,
+                    "SraUdpClient",
+                    std::format("connect({}): {}",
+                                socketPath_,
+                                conn_result.error().message()));
         running_.store(false);
-        std::println("[SraUdpClient] thread stopped");
+        logger::log(logger::NOTICE, "SraUdpClient", "thread stopped");
         return;
     }
     net::Socket conn = std::move(*conn_result);
-    std::println(
-        "[SraUdpClient] connected fd={} path='{}'", conn.fd(), socketPath_);
+    logger::log(logger::NOTICE,
+                "SraUdpClient",
+                std::format("connected fd={} path='{}'",
+                            conn.fd(),
+                            socketPath_));
 
     while (true)
     {
@@ -298,7 +304,7 @@ void SraUdpClient::threadFunc()
     }
 
     running_.store(false);
-    std::println("[SraUdpClient] thread stopped");
+    logger::log(logger::NOTICE, "SraUdpClient", "thread stopped");
 }
 
 // ---------------------------------------------------------------------------

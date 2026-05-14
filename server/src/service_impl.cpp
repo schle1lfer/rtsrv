@@ -130,6 +130,10 @@ SwitchRouteManagerImpl::AddRoute(grpc::ServerContext* ctx,
                                  srmd::v1::RouteResponse* resp)
 {
     logIfNewPeer(ctx->peer(), "AddRoute");
+    rtsrv::log::info(std::format(
+        "[AddRoute] peer='{}' dst='{}' via='{}' iface='{}' metric={}",
+        ctx->peer(), req->destination(), req->gateway(),
+        req->interface_name(), req->metric()));
     auto result = routeManager_.addRoute(*req);
     if (!result)
     {
@@ -160,6 +164,8 @@ SwitchRouteManagerImpl::RemoveRoute(grpc::ServerContext* ctx,
                                     srmd::v1::StatusResponse* resp)
 {
     logIfNewPeer(ctx->peer(), "RemoveRoute");
+    rtsrv::log::info(std::format(
+        "[RemoveRoute] peer='{}' id='{}'", ctx->peer(), req->id()));
     if (req->id().empty())
     {
         rtsrv::log::warn(std::format(
@@ -198,6 +204,8 @@ SwitchRouteManagerImpl::GetRoute(grpc::ServerContext* ctx,
                                  srmd::v1::RouteResponse* resp)
 {
     logIfNewPeer(ctx->peer(), "GetRoute");
+    rtsrv::log::info(std::format(
+        "[GetRoute] peer='{}' id='{}'", ctx->peer(), req->id()));
     if (req->id().empty())
     {
         rtsrv::log::warn(std::format(
@@ -236,6 +244,10 @@ SwitchRouteManagerImpl::ListRoutes(grpc::ServerContext* ctx,
                                    srmd::v1::ListRoutesResponse* resp)
 {
     logIfNewPeer(ctx->peer(), "ListRoutes");
+    rtsrv::log::info(std::format(
+        "[ListRoutes] peer='{}' af={} proto={} active_only={}",
+        ctx->peer(), static_cast<int>(req->address_family()),
+        static_cast<int>(req->protocol()), req->active_only()));
     const auto routes = routeManager_.listRoutes(*req);
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
