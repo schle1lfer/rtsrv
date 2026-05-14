@@ -12,7 +12,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <boost/log/trivial.hpp>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>

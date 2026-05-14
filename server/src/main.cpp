@@ -4,20 +4,22 @@
  *
  * Start-up sequence:
  *  1. Parse CLI flags (--config, --sot, --foreground, --version, --help).
- *  2. Load and parse the Source-of-Truth (SOT) JSON file.
- *  3. Load and validate the JSON configuration file.
- *  4. Initialise Boost.Log (file in daemon mode; console in foreground mode).
- *  5. Daemonise via double-fork + dup2 (skipped when --foreground is set).
- *  6. Construct the RouteManager and SwitchRouteManagerImpl.
- *  7. Start the gRPC server on the configured listen address.
- *  8. Enter the main event loop (SIGTERM/SIGINT → stop; SIGHUP → reload).
- *  9. Graceful shutdown: stop the gRPC server and exit.
+ *  2. Initialise the RFC 5424 logging API (console sink for early messages).
+ *  3. Load and parse the Source-of-Truth (SOT) JSON file.
+ *  4. Load and validate the JSON configuration file.
+ *  5. Re-initialise logging with the configured file sink (and optional console).
+ *  6. Daemonise via double-fork + dup2 (skipped when --foreground is set).
+ *  7. Construct the RouteManager and SwitchRouteManagerImpl.
+ *  8. Start the gRPC server on the configured listen address.
+ *  9. Enter the main event loop (SIGTERM/SIGINT → stop; SIGHUP → reload).
+ * 10. Graceful shutdown: stop the gRPC server, flush logging, and exit.
  *
- * @version 1.0
+ * @version 1.1
  */
 
 #include "build_info.hpp"
 #include "common/config.hpp"
+#include "common/log.hpp"
 #include "server/daemon.hpp"
 #include "server/route_manager.hpp"
 #include "server/service_impl.hpp"
@@ -28,13 +30,6 @@
 #include <grpcpp/server_builder.h>
 #include <unistd.h>
 
-#include <boost/log/core.hpp>
-#include <boost/log/expressions.hpp>
-#include <boost/log/support/date_time.hpp>
-#include <boost/log/trivial.hpp>
-#include <boost/log/utility/setup/common_attributes.hpp>
-#include <boost/log/utility/setup/console.hpp>
-#include <boost/log/utility/setup/file.hpp>
 #include <boost/program_options.hpp>
 #include <cerrno>
 #include <chrono>
@@ -50,9 +45,6 @@
 #include <thread>
 
 namespace po = boost::program_options;
-namespace logging = boost::log;
-namespace keywords = boost::log::keywords;
-namespace expr = boost::log::expressions;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -65,56 +57,42 @@ static constexpr std::string_view kDefaultConfig = "/etc/srmd/srmd.json";
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Maps a log level name string to Boost.Log trivial severity.
+ * @brief Maps a log-level name to the RFC 5424 Severity enum.
  *
- * @param level  One of: trace, debug, info, warning, error, fatal.
- * @return Severity level, defaulting to info on unknown input.
+ * @param level  One of: trace, debug, info, warning/warn, error, fatal.
+ * @return Corresponding Severity; defaults to Info on unknown input.
  */
-static logging::trivial::severity_level
-parseLogLevel(const std::string& level) noexcept
+static rtsrv::log::Severity mapLogLevel(const std::string& level) noexcept
 {
-    if (level == "trace")
-    {
-        return logging::trivial::trace;
-    }
-    if (level == "debug")
-    {
-        return logging::trivial::debug;
-    }
+    if (level == "trace" || level == "debug")
+        return rtsrv::log::Severity::Debug;
     if (level == "warning" || level == "warn")
-    {
-        return logging::trivial::warning;
-    }
+        return rtsrv::log::Severity::Warning;
     if (level == "error")
-    {
-        return logging::trivial::error;
-    }
+        return rtsrv::log::Severity::Error;
     if (level == "fatal")
-    {
-        return logging::trivial::fatal;
-    }
-    return logging::trivial::info;
+        return rtsrv::log::Severity::Critical;
+    return rtsrv::log::Severity::Info;
 }
 
 /**
- * @brief Initialises logging: always writes to a timestamped file and
- *        optionally mirrors output to stdout or stderr.
+ * @brief (Re-)initialises the RFC 5424 logging API.
  *
- * Creates @p logBasePath.<epoch_seconds>, updates the symlink at
- * @p logBasePath to point to the new file, then starts a Boost.Log
- * file sink.  If @p extraStream is @c "stdout" or @c "stderr" a second
- * console sink is added so every log line is duplicated there.
+ * Always writes to @p logBasePath.<epoch_seconds> with a symlink at
+ * @p logBasePath.  If @p extraStream is "stdout" or "stderr" a console
+ * sink is also enabled so every log line is duplicated there.
  *
  * @param logBasePath  Base path for the log file (e.g. /var/log/srmd.log).
- * @param level        Minimum Boost.Log severity to emit.
- * @param extraStream  Extra output stream: "stdout", "stderr", or "" (none).
+ * @param sev          Minimum RFC 5424 severity to emit.
+ * @param extraStream  Extra output: "stdout", "stderr", or "" (none).
  */
 static void initLogs(const std::string& logBasePath,
-                     logging::trivial::severity_level level,
+                     rtsrv::log::Severity sev,
                      const std::string& extraStream)
 {
     const auto ts = static_cast<long long>(std::time(nullptr));
-    const std::string timestampedPath = logBasePath + "." + std::to_string(ts);
+    const std::string timestampedPath =
+        logBasePath + "." + std::to_string(ts);
 
     // Update symlink: remove stale link then create the new one.
     ::unlink(logBasePath.c_str());
@@ -127,24 +105,23 @@ static void initLogs(const std::string& logBasePath,
                      std::strerror(errno));
     }
 
-    auto fmt = expr::stream << expr::format_date_time<boost::posix_time::ptime>(
-                                   "TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
-                            << " [srmd] [" << logging::trivial::severity << "] "
-                            << expr::smessage;
+    rtsrv::log::Config cfg;
+    cfg.app_name     = "srmd";
+    cfg.facility     = rtsrv::log::Facility::Daemon;
+    cfg.min_severity = sev;
 
-    logging::add_common_attributes();
+    cfg.file.enabled        = true;
+    cfg.file.path           = timestampedPath;
+    cfg.file.human_readable = true;
 
-    logging::add_file_log(keywords::file_name = timestampedPath,
-                          keywords::auto_flush = true,
-                          keywords::open_mode = std::ios::out | std::ios::app,
-                          keywords::format = fmt);
+    if (extraStream == "stderr" || extraStream == "stdout")
+    {
+        cfg.console.enabled        = true;
+        cfg.console.human_readable = true;
+    }
 
-    if (extraStream == "stdout")
-        logging::add_console_log(std::cout, keywords::format = fmt);
-    else if (extraStream == "stderr")
-        logging::add_console_log(std::cerr, keywords::format = fmt);
-
-    logging::core::get()->set_filter(logging::trivial::severity >= level);
+    if (auto r = rtsrv::log::init(cfg); !r)
+        std::fprintf(stderr, "[srmd] log init failed: %s\n", r.error().c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -153,18 +130,12 @@ static void initLogs(const std::string& logBasePath,
 
 /**
  * @brief Returns the hostname of the local machine.
- *
- * Calls @c gethostname(2) and returns the result as a @c std::string.
- *
- * @return Hostname string, or @c "unknown" if the call fails.
  */
 static std::string getHostname()
 {
     char buf[256]{};
     if (::gethostname(buf, sizeof(buf) - 1) == 0)
-    {
         return std::string(buf);
-    }
     return "unknown";
 }
 
@@ -174,12 +145,6 @@ static std::string getHostname()
 
 /**
  * @brief Prints a parsed @c SotConfig summary to stdout.
- *
- * Lists every node with its hostname, management IP, loopback addresses,
- * and a count of VRFs, interfaces, and prefixes.  Called immediately after
- * successful SOT parsing so the operator can verify the loaded data.
- *
- * @param cfg  Parsed SOT configuration.
  */
 static void printSotSummary(const srmd::SotConfig& cfg)
 {
@@ -218,13 +183,24 @@ static void printSotSummary(const srmd::SotConfig& cfg)
 
 /**
  * @brief srmd entry point.
- *
- * @param argc Argument count.
- * @param argv Argument vector.
- * @return EXIT_SUCCESS on clean shutdown; EXIT_FAILURE on fatal error.
  */
 int main(int argc, char* argv[])
 {
+    // -----------------------------------------------------------------------
+    // Phase 1: Early logging – console sink active before config is loaded.
+    // -----------------------------------------------------------------------
+    {
+        rtsrv::log::Config early;
+        early.app_name        = "srmd";
+        early.facility        = rtsrv::log::Facility::Daemon;
+        early.min_severity    = rtsrv::log::Severity::Debug;
+        early.console.enabled        = true;
+        early.console.human_readable = true;
+        if (auto r = rtsrv::log::init(early); !r)
+            std::fprintf(stderr, "[srmd] early log init failed: %s\n",
+                         r.error().c_str());
+    }
+
     // -----------------------------------------------------------------------
     // Command-line parsing
     // -----------------------------------------------------------------------
@@ -277,12 +253,12 @@ int main(int argc, char* argv[])
     }
 
     const std::string configPath = vm["config"].as<std::string>();
-    const std::string sotPath = vm["sot"].as<std::string>();
-    const bool foreground = vm.count("foreground") > 0;
-    const std::string logstream = vm["logstream"].as<std::string>();
+    const std::string sotPath    = vm["sot"].as<std::string>();
+    const bool foreground        = vm.count("foreground") > 0;
+    const std::string logstream  = vm["logstream"].as<std::string>();
 
     // -----------------------------------------------------------------------
-    // "sync" command – parse SOT *before* opening any gRPC connections
+    // SOT parsing
     // -----------------------------------------------------------------------
     if (sotPath.empty())
     {
@@ -290,7 +266,6 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    // Parse the SOT file first – no network connections yet
     std::println("srmd  build #{}  Parsing SOT: {}",
                  rtsrv::build::kBuildNumber,
                  sotPath);
@@ -303,7 +278,6 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    // Print what was loaded so the operator can verify before pushing
     printSotSummary(*sotResult);
 #if 0
     // Multi-server sync via switch_config.json
@@ -351,6 +325,23 @@ int main(int argc, char* argv[])
     const auto& cfg = *cfgResult;
 
     // -----------------------------------------------------------------------
+    // Phase 2: Re-initialise logging with the configured file sink.
+    // -----------------------------------------------------------------------
+    initLogs(cfg.daemon.log_file,
+             mapLogLevel(cfg.daemon.log_level),
+             foreground ? logstream : std::string{});
+
+    rtsrv::log::info(
+        std::format("srmd starting  version={}  build=#{}  built={}  pid={}",
+                    rtsrv::build::kProjectVersion,
+                    rtsrv::build::kBuildNumber,
+                    rtsrv::build::kBuildTimestamp,
+                    ::getpid()));
+
+    rtsrv::log::info(std::format(
+        "Listening on {}  foreground={}", cfg.server.target(), foreground));
+
+    // -----------------------------------------------------------------------
     // Daemonise or stay in foreground
     // -----------------------------------------------------------------------
     srmd::Daemon daemon(cfg.daemon.pid_file, cfg.daemon.working_dir);
@@ -367,31 +358,6 @@ int main(int argc, char* argv[])
             return EXIT_FAILURE;
         }
     }
-
-    // Always initialise file logging.  The actual file is
-    // <log_file>.<epoch_seconds> with a symlink at <log_file>.
-    // --logstream stdout/stderr additionally mirrors every line there.
-    try
-    {
-        initLogs(cfg.daemon.log_file,
-                 parseLogLevel(cfg.daemon.log_level),
-                 logstream);
-    }
-    catch (const std::exception& ex)
-    {
-        std::cerr << "initLogs() failed: " << ex.what() << '\n';
-        return EXIT_FAILURE;
-    }
-
-    BOOST_LOG_TRIVIAL(info)
-        << std::format("srmd starting  version={}  build=#{}  built={}  pid={}",
-                       rtsrv::build::kProjectVersion,
-                       rtsrv::build::kBuildNumber,
-                       rtsrv::build::kBuildTimestamp,
-                       ::getpid());
-
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "Listening on {}  foreground={}", cfg.server.target(), foreground);
 
     // -----------------------------------------------------------------------
     // Build server identity string
@@ -417,14 +383,13 @@ int main(int argc, char* argv[])
 
     if (cfg.server.tls_enabled)
     {
-        // Load certificate and key from disk
         auto loadFile = [](const std::string& path) -> std::string {
             std::ifstream ifs(path);
             return std::string(std::istreambuf_iterator<char>(ifs), {});
         };
         grpc::SslServerCredentialsOptions sslOpts;
         grpc::SslServerCredentialsOptions::PemKeyCertPair kp;
-        kp.cert_chain = loadFile(cfg.server.tls_cert);
+        kp.cert_chain  = loadFile(cfg.server.tls_cert);
         kp.private_key = loadFile(cfg.server.tls_key);
         sslOpts.pem_key_cert_pairs.push_back(std::move(kp));
         builder.AddListeningPort(cfg.server.target(),
@@ -437,64 +402,59 @@ int main(int argc, char* argv[])
     }
 
     builder.RegisterService(&service);
-    builder.SetMaxReceiveMessageSize(4 * 1024 * 1024); // 4 MiB
+    builder.SetMaxReceiveMessageSize(4 * 1024 * 1024);
     builder.SetMaxSendMessageSize(4 * 1024 * 1024);
 
     std::unique_ptr<grpc::Server> grpcServer = builder.BuildAndStart();
     if (!grpcServer)
     {
-        BOOST_LOG_TRIVIAL(fatal) << std::format(
-            "Failed to start gRPC server on {}", cfg.server.target());
+        rtsrv::log::crit(std::format(
+            "Failed to start gRPC server on {}", cfg.server.target()));
         return EXIT_FAILURE;
     }
 
-    BOOST_LOG_TRIVIAL(info)
-        << std::format("gRPC server listening on {} (TLS={})",
-                       cfg.server.target(),
-                       cfg.server.tls_enabled);
+    rtsrv::log::info(std::format("gRPC server listening on {} (TLS={})",
+                                 cfg.server.target(),
+                                 cfg.server.tls_enabled));
 
     // -----------------------------------------------------------------------
     // SIGHUP handler: reload config
     // -----------------------------------------------------------------------
     daemon.setSighupHandler([&] {
-        BOOST_LOG_TRIVIAL(info) << "SIGHUP – reloading configuration";
+        rtsrv::log::info("SIGHUP – reloading configuration");
         auto newCfg = common::loadServerConfig(configPath);
         if (!newCfg)
-        {
-            BOOST_LOG_TRIVIAL(error)
-                << std::format("Reload failed: {}", newCfg.error());
-        }
+            rtsrv::log::err(
+                std::format("Reload failed: {}", newCfg.error()));
         else
-        {
-            BOOST_LOG_TRIVIAL(info) << "Configuration reloaded";
-        }
+            rtsrv::log::info("Configuration reloaded");
     });
 
     // -----------------------------------------------------------------------
     // Main event loop
     // -----------------------------------------------------------------------
     using namespace std::chrono_literals;
-    BOOST_LOG_TRIVIAL(info) << "Entering main event loop";
+    rtsrv::log::info("Entering main event loop");
 
     while (!srmd::Daemon::shouldStop())
     {
         if (daemon.shouldReload())
-        {
-            BOOST_LOG_TRIVIAL(info)
-                << "SIGHUP received – reload not implemented";
-        }
+            rtsrv::log::info("SIGHUP received – reload not implemented");
         std::this_thread::sleep_for(500ms);
     }
 
     // -----------------------------------------------------------------------
     // Graceful shutdown
     // -----------------------------------------------------------------------
-    BOOST_LOG_TRIVIAL(info)
-        << "Shutdown signal received – stopping gRPC server";
+    rtsrv::log::info("Shutdown signal received – stopping gRPC server");
     grpcServer->Shutdown(std::chrono::system_clock::now() + 10s);
     grpcServer->Wait();
 
-    BOOST_LOG_TRIVIAL(info) << std::format("srmd build #{} exiting cleanly",
-                                           rtsrv::build::kBuildNumber);
+    rtsrv::log::info(std::format("srmd build #{} exiting cleanly",
+                                 rtsrv::build::kBuildNumber));
+
+    // Flush and join the logging thread before the process exits.
+    rtsrv::log::shutdown();
+
     return EXIT_SUCCESS;
 }

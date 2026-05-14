@@ -7,7 +7,7 @@
 
 #include "server/service_impl.hpp"
 
-#include <boost/log/trivial.hpp>
+#include "common/log.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <format>
@@ -72,8 +72,8 @@ grpc::Status SwitchRouteManagerImpl::Echo(grpc::ServerContext* /*ctx*/,
                                           const srmd::v1::EchoRequest* req,
                                           srmd::v1::EchoResponse* resp)
 {
-    BOOST_LOG_TRIVIAL(debug) << std::format(
-        "[Echo] msg='{}' client_ts={}", req->message(), req->client_ts_us());
+    rtsrv::log::dbg(std::format(
+        "[Echo] msg='{}' client_ts={}", req->message(), req->client_ts_us()));
 
     resp->set_message(req->message());
     resp->set_client_ts_us(req->client_ts_us());
@@ -112,8 +112,7 @@ SwitchRouteManagerImpl::AddRoute(grpc::ServerContext* /*ctx*/,
     {
         resp->set_code(srmd::v1::STATUS_CODE_INVALID_ARGUMENT);
         resp->set_message(result.error());
-        BOOST_LOG_TRIVIAL(warning)
-            << std::format("[AddRoute] rejected: {}", result.error());
+        rtsrv::log::warn(std::format("[AddRoute] rejected: {}", result.error()));
         return grpc::Status::OK;
     }
 
@@ -200,8 +199,8 @@ SwitchRouteManagerImpl::ListRoutes(grpc::ServerContext* /*ctx*/,
         *resp->add_routes() = r;
     }
 
-    BOOST_LOG_TRIVIAL(debug)
-        << std::format("[ListRoutes] returning {} route(s)", routes.size());
+    rtsrv::log::dbg(
+        std::format("[ListRoutes] returning {} route(s)", routes.size()));
     return grpc::Status::OK;
 }
 
@@ -214,7 +213,7 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
     const srmd::v1::WatchRoutesRequest* req,
     grpc::ServerWriter<srmd::v1::RouteEvent>* writer)
 {
-    BOOST_LOG_TRIVIAL(info) << "[WatchRoutes] stream opened";
+    rtsrv::log::info("[WatchRoutes] stream opened");
 
     // Optionally send the current route snapshot first
     if (req->send_initial_state())
@@ -231,8 +230,7 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
             ev.set_event_ts_us(ts);
             if (!writer->Write(ev))
             {
-                BOOST_LOG_TRIVIAL(info)
-                    << "[WatchRoutes] client disconnected during snapshot";
+                rtsrv::log::info("[WatchRoutes] client disconnected during snapshot");
                 return grpc::Status::OK;
             }
         }
@@ -273,8 +271,7 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
             }
             if (!writer->Write(ev))
             {
-                BOOST_LOG_TRIVIAL(info)
-                    << "[WatchRoutes] client disconnected during stream";
+                rtsrv::log::info("[WatchRoutes] client disconnected during stream");
                 routeManager_.unregisterObserver(handle);
                 return grpc::Status::OK;
             }
@@ -282,7 +279,7 @@ grpc::Status SwitchRouteManagerImpl::WatchRoutes(
     }
 
     routeManager_.unregisterObserver(handle);
-    BOOST_LOG_TRIVIAL(info) << "[WatchRoutes] stream closed";
+    rtsrv::log::info("[WatchRoutes] stream closed");
     return grpc::Status::OK;
 }
 
@@ -307,8 +304,7 @@ SwitchRouteManagerImpl::SetLoopback(grpc::ServerContext* /*ctx*/,
         loopbackAddress_ = req->address();
     }
 
-    BOOST_LOG_TRIVIAL(info)
-        << std::format("[SetLoopback] address='{}'", req->address());
+    rtsrv::log::info(std::format("[SetLoopback] address='{}'", req->address()));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("Loopback address set");
@@ -331,8 +327,7 @@ SwitchRouteManagerImpl::GetLoopback(grpc::ServerContext* /*ctx*/,
         addr = loopbackAddress_;
     }
 
-    BOOST_LOG_TRIVIAL(debug)
-        << std::format("[GetLoopback] returning address='{}'", addr);
+    rtsrv::log::dbg(std::format("[GetLoopback] returning address='{}'", addr));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("OK");
@@ -352,18 +347,16 @@ SwitchRouteManagerImpl::GetLoopbacks(grpc::ServerContext* ctx,
     // 1. Extract client IP from peer string ("ipv4:A.B.C.D:PORT" etc.)
     const std::string clientIp = extractClientIp(ctx->peer());
 
-    BOOST_LOG_TRIVIAL(debug)
-        << std::format("[GetLoopbacks] peer='{}' clientIp='{}' loopback='{}'",
-                       ctx->peer(),
-                       clientIp,
-                       req->loopback());
+    rtsrv::log::dbg(std::format(
+        "[GetLoopbacks] peer='{}' clientIp='{}' loopback='{}'",
+        ctx->peer(), clientIp, req->loopback()));
 
     // 2. Authorise: client IP must be present in nodes_by_loopback
     const SotNode* node = sotConfig_.findByManagementIp(clientIp);
     if (!node)
     {
-        BOOST_LOG_TRIVIAL(warning) << std::format(
-            "[GetLoopbacks] access denied for clientIp='{}'", clientIp);
+        rtsrv::log::warn(std::format(
+            "[GetLoopbacks] access denied for clientIp='{}'", clientIp));
         resp->set_code(srmd::v1::STATUS_CODE_PERMISSION_DENIED);
         resp->set_message(std::format(
             "Access denied: IP '{}' is not registered in the SOT", clientIp));
@@ -377,11 +370,9 @@ SwitchRouteManagerImpl::GetLoopbacks(grpc::ServerContext* ctx,
 
     if (!isIpv4Match && !isIpv6Match)
     {
-        BOOST_LOG_TRIVIAL(warning) << std::format(
+        rtsrv::log::warn(std::format(
             "[GetLoopbacks] loopback '{}' not found for node '{}' ({})",
-            requestedLb,
-            node->hostname,
-            clientIp);
+            requestedLb, node->hostname, clientIp));
         resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
         resp->set_message(std::format(
             "Loopback '{}' does not match node '{}' (ipv4='{}' ipv6='{}')",
@@ -441,12 +432,10 @@ SwitchRouteManagerImpl::GetLoopbacks(grpc::ServerContext* ctx,
         }
     }
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[GetLoopbacks] node='{}' loopback='{}' ({}) → {} interface(s)",
-        node->hostname,
-        requestedLb,
-        isIpv4Match ? "ipv4" : "ipv6",
-        interfaces->size());
+    rtsrv::log::info(std::format(
+        "[GetLoopbacks] node='{}' loopback='{}' ({}) -> {} interface(s)",
+        node->hostname, requestedLb, isIpv4Match ? "ipv4" : "ipv6",
+        interfaces->size()));
 
     return grpc::Status::OK;
 }
@@ -462,16 +451,15 @@ grpc::Status SwitchRouteManagerImpl::RequestLoopback(
 {
     const std::string clientIp = extractClientIp(ctx->peer());
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[RequestLoopback] peer='{}' clientIp='{}'", ctx->peer(), clientIp);
+    rtsrv::log::info(std::format(
+        "[RequestLoopback] peer='{}' clientIp='{}'", ctx->peer(), clientIp));
 
     const SotNode* node = sotConfig_.findByManagementIp(clientIp);
     if (!node)
     {
-        BOOST_LOG_TRIVIAL(warning)
-            << std::format("[RequestLoopback] clientIp='{}' not found in SOT — "
-                           "closing connection",
-                           clientIp);
+        rtsrv::log::warn(std::format(
+            "[RequestLoopback] clientIp='{}' not found in SOT — closing connection",
+            clientIp));
         resp->set_code(srmd::v1::STATUS_CODE_PERMISSION_DENIED);
         resp->set_message(std::format(
             "Client IP '{}' is not registered in the SOT — connection rejected",
@@ -481,11 +469,9 @@ grpc::Status SwitchRouteManagerImpl::RequestLoopback(
             std::format("SRA IP '{}' not in SOT nodes_by_loopback", clientIp));
     }
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
+    rtsrv::log::info(std::format(
         "[RequestLoopback] node='{}' clientIp='{}' loopback='{}'",
-        node->hostname,
-        clientIp,
-        node->loopbacks.ipv4);
+        node->hostname, clientIp, node->loopbacks.ipv4));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message(
@@ -505,8 +491,8 @@ grpc::Status SwitchRouteManagerImpl::GetAllRoutes(
 {
     const std::string clientIp = extractClientIp(ctx->peer());
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[GetAllRoutes] peer='{}' clientIp='{}'", ctx->peer(), clientIp);
+    rtsrv::log::info(std::format(
+        "[GetAllRoutes] peer='{}' clientIp='{}'", ctx->peer(), clientIp));
 
     // Authorise: client IP must be registered as a management IP in the SOT.
     // Using the same lookup as RequestLoopback so that the SRA can call both
@@ -514,8 +500,8 @@ grpc::Status SwitchRouteManagerImpl::GetAllRoutes(
     const SotNode* node = sotConfig_.findByManagementIp(clientIp);
     if (!node)
     {
-        BOOST_LOG_TRIVIAL(warning) << std::format(
-            "[GetAllRoutes] clientIp='{}' not found in SOT", clientIp);
+        rtsrv::log::warn(std::format(
+            "[GetAllRoutes] clientIp='{}' not found in SOT", clientIp));
         resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
         resp->set_message(std::format(
             "Client IP '{}' is not registered in the SOT", clientIp));
@@ -559,13 +545,10 @@ grpc::Status SwitchRouteManagerImpl::GetAllRoutes(
                     node->loopbacks.ipv4,
                     routeCount));
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[GetAllRoutes] node='{}' loopback='{}' → {} VRF interface(s) across"
+    rtsrv::log::info(std::format(
+        "[GetAllRoutes] node='{}' loopback='{}' -> {} VRF interface(s) across"
         " {} VRF(s)",
-        node->hostname,
-        node->loopbacks.ipv4,
-        routeCount,
-        node->vrfs.size());
+        node->hostname, node->loopbacks.ipv4, routeCount, node->vrfs.size()));
 
     return grpc::Status::OK;
 }
@@ -581,14 +564,14 @@ grpc::Status SwitchRouteManagerImpl::GetRemainingNodes(
 {
     const std::string clientIp = extractClientIp(ctx->peer());
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[GetRemainingNodes] peer='{}' clientIp='{}'", ctx->peer(), clientIp);
+    rtsrv::log::info(std::format(
+        "[GetRemainingNodes] peer='{}' clientIp='{}'", ctx->peer(), clientIp));
 
     const SotNode* clientNode = sotConfig_.findByManagementIp(clientIp);
     if (!clientNode)
     {
-        BOOST_LOG_TRIVIAL(warning) << std::format(
-            "[GetRemainingNodes] clientIp='{}' not found in SOT", clientIp);
+        rtsrv::log::warn(std::format(
+            "[GetRemainingNodes] clientIp='{}' not found in SOT", clientIp));
         resp->set_code(srmd::v1::STATUS_CODE_PERMISSION_DENIED);
         resp->set_message(std::format(
             "Client IP '{}' is not registered in the SOT", clientIp));
@@ -614,10 +597,9 @@ grpc::Status SwitchRouteManagerImpl::GetRemainingNodes(
                                   count,
                                   clientNode->hostname));
 
-    BOOST_LOG_TRIVIAL(info)
-        << std::format("[GetRemainingNodes] node='{}' → {} remaining node(s)",
-                       clientNode->hostname,
-                       count);
+    rtsrv::log::info(std::format(
+        "[GetRemainingNodes] node='{}' -> {} remaining node(s)",
+        clientNode->hostname, count));
 
     return grpc::Status::OK;
 }
@@ -633,18 +615,16 @@ grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
 {
     const std::string clientIp = extractClientIp(ctx->peer());
 
-    BOOST_LOG_TRIVIAL(debug) << std::format(
+    rtsrv::log::dbg(std::format(
         "[GetLoopbacksByNodeIp] peer='{}' clientIp='{}' node_ip='{}'",
-        ctx->peer(),
-        clientIp,
-        req->node_ip());
+        ctx->peer(), clientIp, req->node_ip()));
 
     // Authorise: caller must be registered in the SOT.
     const SotNode* clientNode = sotConfig_.findByManagementIp(clientIp);
     if (!clientNode)
     {
-        BOOST_LOG_TRIVIAL(warning) << std::format(
-            "[GetLoopbacksByNodeIp] access denied for clientIp='{}'", clientIp);
+        rtsrv::log::warn(std::format(
+            "[GetLoopbacksByNodeIp] access denied for clientIp='{}'", clientIp));
         resp->set_code(srmd::v1::STATUS_CODE_PERMISSION_DENIED);
         resp->set_message(std::format(
             "Access denied: IP '{}' is not registered in the SOT", clientIp));
@@ -655,9 +635,9 @@ grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
     const SotNode* targetNode = sotConfig_.findByManagementIp(req->node_ip());
     if (!targetNode)
     {
-        BOOST_LOG_TRIVIAL(warning) << std::format(
+        rtsrv::log::warn(std::format(
             "[GetLoopbacksByNodeIp] node_ip='{}' not found in SOT",
-            req->node_ip());
+            req->node_ip()));
         resp->set_code(srmd::v1::STATUS_CODE_NOT_FOUND);
         resp->set_message(std::format(
             "Node IP '{}' is not registered in the SOT", req->node_ip()));
@@ -698,11 +678,9 @@ grpc::Status SwitchRouteManagerImpl::GetLoopbacksByNodeIp(
     resp->set_message(std::format(
         "OK: node '{}' – {} prefix(es)", targetNode->hostname, pfxCount));
 
-    BOOST_LOG_TRIVIAL(info)
-        << std::format("[GetLoopbacksByNodeIp] node='{}' ({}) → {} prefix(es)",
-                       targetNode->hostname,
-                       req->node_ip(),
-                       pfxCount);
+    rtsrv::log::info(std::format(
+        "[GetLoopbacksByNodeIp] node='{}' ({}) -> {} prefix(es)",
+        targetNode->hostname, req->node_ip(), pfxCount));
 
     return grpc::Status::OK;
 }

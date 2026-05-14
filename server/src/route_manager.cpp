@@ -7,7 +7,7 @@
 
 #include "server/route_manager.hpp"
 
-#include <boost/log/trivial.hpp>
+#include "common/log.hpp"
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -99,13 +99,10 @@ RouteManager::addRoute(const srmd::v1::AddRouteRequest& req)
         routes_.emplace(id, route);
     }
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
+    rtsrv::log::info(std::format(
         "[RouteManager] AddRoute id={} dest={} gw={} iface={} metric={}",
-        id,
-        req.destination(),
-        req.gateway(),
-        req.interface_name(),
-        req.metric());
+        id, req.destination(), req.gateway(), req.interface_name(),
+        req.metric()));
 
     // Notify observers (outside the write lock)
     srmd::v1::RouteEvent ev;
@@ -132,8 +129,8 @@ RouteManager::removeRoute(const std::string& id)
         routes_.erase(it);
     }
 
-    BOOST_LOG_TRIVIAL(info) << std::format(
-        "[RouteManager] RemoveRoute id={} dest={}", id, removed.destination());
+    rtsrv::log::info(std::format(
+        "[RouteManager] RemoveRoute id={} dest={}", id, removed.destination()));
 
     srmd::v1::RouteEvent ev;
     ev.set_type(srmd::v1::ROUTE_EVENT_REMOVED);

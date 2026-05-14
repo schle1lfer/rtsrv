@@ -33,18 +33,14 @@ target_link_libraries(
         protobuf::libprotobuf
         gRPC::grpc++
         gRPC::grpc++_reflection
-        Boost::log
-        Boost::log_setup
         Boost::program_options
         Boost::filesystem
         Boost::system
-        Boost::thread
 )
 
 target_compile_definitions(
     srmd
     PRIVATE
-        BOOST_LOG_DYN_LINK
         BOOST_ALL_DYN_LINK
 )
 

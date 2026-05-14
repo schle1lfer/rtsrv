@@ -8,16 +8,24 @@
  * entry guard of log():
  *
  *   g_ready   (atomic<bool>)    – true once init() completes successfully;
- *                                  cleared by shutdown() while g_mutex is held.
+ *                                  cleared by shutdown() before joining the
+ *                                  logging thread.
  *   g_min_sev (atomic<uint8_t>) – mirror of cfg.min_severity updated by init();
  *                                  read without the lock to filter cheap.
  *
- * After passing the atomic checks, log() acquires g_mutex and re-validates
- * g_state.initialised so that a racing shutdown() can never write to a closed
- * sink.
+ * Async logging thread
+ * --------------------
+ * log() enqueues a LogEntry (sev, msg_id, msg, sd) under g_queue_mutex and
+ * wakes the logging thread via g_queue_cv.  The logging thread pops entries
+ * in FIFO order and writes them to the configured sinks under g_mutex.
  *
- * All state mutations (init / shutdown / sink I/O) are serialised by g_mutex.
- * format_message() is stateless and entirely lock-free.
+ * Shutdown sequence (init() re-call or explicit shutdown()):
+ *  1. g_ready.store(false)           – fast path stops accepting new entries.
+ *  2. g_queue_active = false         – secondary gate under g_queue_mutex.
+ *  3. g_thread_stop = true           – signals the thread to drain and exit.
+ *  4. g_queue_cv.notify_one()        – wakes the thread.
+ *  5. g_log_thread.join()            – waits for the thread to drain the queue.
+ *  6. close_sinks() / reset State    – performed under g_mutex.
  *
  * Sink details:
  *  - Console  : atomic write(2) to STDERR_FILENO; no separate fd locking.
@@ -26,7 +34,7 @@
  *  - TCP      : SOCK_STREAM; octet-count or newline framing; auto-reconnect.
  *  - Syslog   : POSIX openlog/syslog/closelog; ident pointer into g_state.
  *
- * @version 1.1
+ * @version 1.2
  */
 
 #include "common/log.hpp"
@@ -42,6 +50,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -49,7 +58,9 @@
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <queue>
 #include <string>
+#include <thread>
 
 namespace rtsrv::log
 {
@@ -63,8 +74,7 @@ namespace
 
 struct State
 {
-    bool initialised{
-        false}; ///< True once init() succeeds; checked under g_mutex.
+    bool initialised{false}; ///< True once init() succeeds; checked under g_mutex.
     Config cfg;
     std::string hostname;
     std::int32_t procid{0};
@@ -88,7 +98,6 @@ struct State
 // ---------------------------------------------------------------------------
 
 /// Set to true by init() after all sinks are open; cleared by shutdown().
-/// Acquiring load in log() pairs with the releasing store in init()/shutdown().
 std::atomic<bool> g_ready{false};
 
 /// Mirror of cfg.min_severity updated by init(); allows lock-free severity
@@ -97,6 +106,26 @@ std::atomic<std::uint8_t> g_min_sev{static_cast<std::uint8_t>(Severity::Debug)};
 
 std::mutex g_mutex;
 State g_state;
+
+// ---------------------------------------------------------------------------
+// Async logging thread state
+// ---------------------------------------------------------------------------
+
+/// A single log record queued for the logging thread.
+struct LogEntry
+{
+    Severity sev;
+    std::string msg_id;
+    std::string msg;
+    std::vector<SdElement> sd;
+};
+
+std::mutex g_queue_mutex;
+std::condition_variable g_queue_cv;
+std::queue<LogEntry> g_log_queue;
+bool g_queue_active{false}; ///< True while the queue accepts new entries.
+bool g_thread_stop{false};  ///< True when the thread should drain and exit.
+std::thread g_log_thread;
 
 // ---------------------------------------------------------------------------
 // Timestamp
@@ -579,161 +608,15 @@ void close_sinks(State& s)
     }
 }
 
-} // anonymous namespace
-
 // ---------------------------------------------------------------------------
-// Public: format_message
+// Sink writer (called by logging thread with g_mutex held)
 // ---------------------------------------------------------------------------
 
-std::string format_message(Facility facility,
-                           Severity severity,
-                           std::string_view hostname,
-                           std::string_view app_name,
-                           std::int32_t procid,
-                           std::string_view msg_id,
-                           const std::vector<SdElement>& sd,
-                           std::string_view msg)
+void write_entry_locked(Severity sev,
+                        std::string_view msg_id,
+                        std::string_view msg,
+                        const std::vector<SdElement>& sd)
 {
-    return build_rfc5424(facility,
-                         severity,
-                         hostname,
-                         app_name,
-                         procid,
-                         msg_id,
-                         sd,
-                         msg,
-                         current_timestamp());
-}
-
-// ---------------------------------------------------------------------------
-// Public: init
-// ---------------------------------------------------------------------------
-
-std::expected<void, std::string> init(const Config& cfg)
-{
-    std::lock_guard lock(g_mutex);
-
-    if (g_state.initialised)
-    {
-        // Quiesce the fast path before tearing down sinks so that any
-        // concurrent log() call that already passed the atomic check will
-        // find initialised==false after it acquires g_mutex.
-        g_ready.store(false, std::memory_order_release);
-        close_sinks(g_state);
-        g_state = State{};
-    }
-
-    g_state.cfg = cfg;
-    g_state.procid = static_cast<std::int32_t>(::getpid());
-    g_state.hostname = cfg.hostname.empty() ? resolve_hostname() : cfg.hostname;
-
-    if (g_state.cfg.app_name.size() > 48)
-        g_state.cfg.app_name.resize(48);
-
-    // File sink
-    if (cfg.file.enabled)
-    {
-        g_state.file_stream.open(cfg.file.path, std::ios::out | std::ios::app);
-        if (!g_state.file_stream.is_open())
-        {
-            return std::unexpected(
-                std::format("log: cannot open log file '{}'", cfg.file.path));
-        }
-        std::error_code ec;
-        auto sz = std::filesystem::file_size(cfg.file.path, ec);
-        g_state.file_bytes = ec ? 0 : static_cast<std::size_t>(sz);
-    }
-
-    // UDP sink
-    if (cfg.udp.enabled)
-    {
-        g_state.udp_fd = udp_connect(cfg.udp.host, cfg.udp.port);
-        if (g_state.udp_fd < 0)
-        {
-            return std::unexpected(
-                std::format("log: UDP connect to {}:{} failed: {}",
-                            cfg.udp.host,
-                            cfg.udp.port,
-                            std::strerror(errno)));
-        }
-    }
-
-    // TCP sink – connection failure is deferred to first write attempt.
-    if (cfg.tcp.enabled)
-        g_state.tcp_fd = tcp_connect(cfg.tcp.host, cfg.tcp.port);
-
-    // Local syslog sink.
-    // The ident pointer (app_name.c_str()) must remain valid until closelog();
-    // it points into g_state.cfg.app_name which is never modified after this.
-    if (cfg.local_syslog.enabled)
-    {
-        ::openlog(g_state.cfg.app_name.c_str(),
-                  cfg.local_syslog.options | LOG_PID,
-                  to_posix_facility(cfg.facility));
-        g_state.local_syslog_open = true;
-    }
-
-    g_state.initialised = true;
-
-    // Publish the severity threshold and signal readiness.  The release store
-    // on g_ready pairs with the acquire load in log() / is_enabled() so that
-    // all sink state written above is visible to other threads before they
-    // observe g_ready == true.
-    g_min_sev.store(static_cast<std::uint8_t>(cfg.min_severity),
-                    std::memory_order_relaxed);
-    g_ready.store(true, std::memory_order_release);
-    return {};
-}
-
-// ---------------------------------------------------------------------------
-// Public: shutdown
-// ---------------------------------------------------------------------------
-
-void shutdown() noexcept
-{
-    std::lock_guard lock(g_mutex);
-    if (!g_state.initialised)
-        return;
-    // Quiesce the fast path first; any log() that already passed the atomic
-    // check will find initialised==false after acquiring g_mutex below.
-    g_ready.store(false, std::memory_order_release);
-    close_sinks(g_state);
-    g_state = State{};
-}
-
-// ---------------------------------------------------------------------------
-// Public: log
-// ---------------------------------------------------------------------------
-
-void log(Severity sev,
-         std::string_view msg_id,
-         std::string_view msg,
-         std::vector<SdElement> sd)
-{
-    // --- Lock-free fast path -------------------------------------------------
-    // Avoids taking g_mutex when the logger is not ready or the severity is
-    // filtered out.  The acquire load on g_ready synchronises with the release
-    // store in init() / shutdown() so all sink state is visible if g_ready is
-    // true.  g_min_sev is read relaxed because it is always written while
-    // g_ready is false (or under g_mutex), so the acquire on g_ready provides
-    // sufficient ordering.
-    if (!g_ready.load(std::memory_order_acquire))
-        return;
-    if (static_cast<std::uint8_t>(sev) >
-        g_min_sev.load(std::memory_order_relaxed))
-        return;
-
-    // --- Locked slow path ----------------------------------------------------
-    std::lock_guard lock(g_mutex);
-
-    // Re-validate after acquiring the mutex: shutdown() may have raced between
-    // the atomic check above and this point.
-    if (!g_state.initialised)
-        return;
-    if (static_cast<std::uint8_t>(sev) >
-        static_cast<std::uint8_t>(g_state.cfg.min_severity))
-        return;
-
     const Config& cfg = g_state.cfg;
     std::string ts = current_timestamp();
 
@@ -796,6 +679,229 @@ void log(Severity sev,
             text = std::string(msg);
         ::syslog(to_posix_priority(sev), "%s", text.c_str());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Logging thread worker
+// ---------------------------------------------------------------------------
+
+void log_worker()
+{
+    while (true)
+    {
+        std::unique_lock qlock(g_queue_mutex);
+        g_queue_cv.wait(qlock,
+                        [] { return !g_log_queue.empty() || g_thread_stop; });
+
+        // Drain all queued entries before checking stop.
+        if (g_log_queue.empty())
+            break; // g_thread_stop is true and no pending entries remain
+
+        LogEntry entry = std::move(g_log_queue.front());
+        g_log_queue.pop();
+        qlock.unlock();
+
+        // Write to sinks under the sink state lock.
+        std::lock_guard slock(g_mutex);
+        if (!g_state.initialised)
+            continue;
+        if (static_cast<std::uint8_t>(entry.sev) >
+            static_cast<std::uint8_t>(g_state.cfg.min_severity))
+            continue;
+        write_entry_locked(entry.sev, entry.msg_id, entry.msg, entry.sd);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stop and join the logging thread (called without holding any lock)
+// ---------------------------------------------------------------------------
+
+void stop_log_thread() noexcept
+{
+    {
+        std::lock_guard qlock(g_queue_mutex);
+        if (!g_queue_active && !g_log_thread.joinable())
+            return; // already stopped
+        g_queue_active = false;
+        g_thread_stop = true;
+    }
+    g_queue_cv.notify_one();
+    if (g_log_thread.joinable())
+        g_log_thread.join();
+}
+
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// Public: format_message
+// ---------------------------------------------------------------------------
+
+std::string format_message(Facility facility,
+                           Severity severity,
+                           std::string_view hostname,
+                           std::string_view app_name,
+                           std::int32_t procid,
+                           std::string_view msg_id,
+                           const std::vector<SdElement>& sd,
+                           std::string_view msg)
+{
+    return build_rfc5424(facility,
+                         severity,
+                         hostname,
+                         app_name,
+                         procid,
+                         msg_id,
+                         sd,
+                         msg,
+                         current_timestamp());
+}
+
+// ---------------------------------------------------------------------------
+// Public: init
+// ---------------------------------------------------------------------------
+
+std::expected<void, std::string> init(const Config& cfg)
+{
+    // Stop any previously running logging thread before touching sink state.
+    // This must be done without holding g_mutex to avoid deadlocking with the
+    // worker thread that acquires g_mutex to write entries.
+    stop_log_thread();
+
+    std::lock_guard lock(g_mutex);
+
+    if (g_state.initialised)
+    {
+        g_ready.store(false, std::memory_order_release);
+        close_sinks(g_state);
+        g_state = State{};
+    }
+
+    g_state.cfg = cfg;
+    g_state.procid = static_cast<std::int32_t>(::getpid());
+    g_state.hostname = cfg.hostname.empty() ? resolve_hostname() : cfg.hostname;
+
+    if (g_state.cfg.app_name.size() > 48)
+        g_state.cfg.app_name.resize(48);
+
+    // File sink
+    if (cfg.file.enabled)
+    {
+        g_state.file_stream.open(cfg.file.path, std::ios::out | std::ios::app);
+        if (!g_state.file_stream.is_open())
+        {
+            return std::unexpected(
+                std::format("log: cannot open log file '{}'", cfg.file.path));
+        }
+        std::error_code ec;
+        auto sz = std::filesystem::file_size(cfg.file.path, ec);
+        g_state.file_bytes = ec ? 0 : static_cast<std::size_t>(sz);
+    }
+
+    // UDP sink
+    if (cfg.udp.enabled)
+    {
+        g_state.udp_fd = udp_connect(cfg.udp.host, cfg.udp.port);
+        if (g_state.udp_fd < 0)
+        {
+            return std::unexpected(
+                std::format("log: UDP connect to {}:{} failed: {}",
+                            cfg.udp.host,
+                            cfg.udp.port,
+                            std::strerror(errno)));
+        }
+    }
+
+    // TCP sink – connection failure is deferred to first write attempt.
+    if (cfg.tcp.enabled)
+        g_state.tcp_fd = tcp_connect(cfg.tcp.host, cfg.tcp.port);
+
+    // Local syslog sink.
+    // The ident pointer (app_name.c_str()) must remain valid until closelog();
+    // it points into g_state.cfg.app_name which is never modified after this.
+    if (cfg.local_syslog.enabled)
+    {
+        ::openlog(g_state.cfg.app_name.c_str(),
+                  cfg.local_syslog.options | LOG_PID,
+                  to_posix_facility(cfg.facility));
+        g_state.local_syslog_open = true;
+    }
+
+    g_state.initialised = true;
+
+    // Start the logging thread.
+    {
+        std::lock_guard qlock(g_queue_mutex);
+        // Discard any leftover entries from a previous init cycle.
+        g_log_queue = {};
+        g_thread_stop = false;
+        g_queue_active = true;
+    }
+    g_log_thread = std::thread(log_worker);
+
+    // Publish the severity threshold and signal readiness.  The release store
+    // on g_ready pairs with the acquire load in log() / is_enabled() so that
+    // all sink state written above is visible to other threads before they
+    // observe g_ready == true.
+    g_min_sev.store(static_cast<std::uint8_t>(cfg.min_severity),
+                    std::memory_order_relaxed);
+    g_ready.store(true, std::memory_order_release);
+
+    // Register shutdown() with atexit so the logging thread is always joined
+    // on program exit, even if the caller never calls shutdown() explicitly.
+    static std::once_flag atexit_once;
+    std::call_once(atexit_once,
+                   [] { std::atexit([] { rtsrv::log::shutdown(); }); });
+
+    return {};
+}
+
+// ---------------------------------------------------------------------------
+// Public: shutdown
+// ---------------------------------------------------------------------------
+
+void shutdown() noexcept
+{
+    // Prevent new entries from being enqueued (fast path).
+    g_ready.store(false, std::memory_order_release);
+
+    // Signal and join the logging thread so it drains remaining entries.
+    stop_log_thread();
+
+    // Now safe to close sinks – the thread is no longer writing.
+    std::lock_guard lock(g_mutex);
+    if (!g_state.initialised)
+        return;
+    close_sinks(g_state);
+    g_state = State{};
+}
+
+// ---------------------------------------------------------------------------
+// Public: log
+// ---------------------------------------------------------------------------
+
+void log(Severity sev,
+         std::string_view msg_id,
+         std::string_view msg,
+         std::vector<SdElement> sd)
+{
+    // --- Lock-free fast path -------------------------------------------------
+    // Avoids taking any lock when the logger is not ready or the severity is
+    // filtered out.
+    if (!g_ready.load(std::memory_order_acquire))
+        return;
+    if (static_cast<std::uint8_t>(sev) >
+        g_min_sev.load(std::memory_order_relaxed))
+        return;
+
+    // --- Enqueue under queue lock --------------------------------------------
+    {
+        std::lock_guard qlock(g_queue_mutex);
+        if (!g_queue_active)
+            return;
+        g_log_queue.push(
+            {sev, std::string(msg_id), std::string(msg), std::move(sd)});
+    }
+    g_queue_cv.notify_one();
 }
 
 // ---------------------------------------------------------------------------

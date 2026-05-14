@@ -60,6 +60,7 @@
 #include "client/udp_table_server.hpp"
 #include "client/vrf_table.hpp"
 #include "common/config.hpp"
+#include "common/log.hpp"
 #include "lib/cmd_proto.hpp"
 #include "lib/logger.hpp"
 #include "server/netlink.h"
@@ -3418,6 +3419,21 @@ int main(int argc, char* argv[])
     std::ios::sync_with_stdio(true);
 
     // -----------------------------------------------------------------------
+    // Phase 1: Early logging – console sink active before config is loaded.
+    // -----------------------------------------------------------------------
+    {
+        rtsrv::log::Config early;
+        early.app_name               = "sra";
+        early.facility               = rtsrv::log::Facility::User;
+        early.min_severity           = rtsrv::log::Severity::Debug;
+        early.console.enabled        = true;
+        early.console.human_readable = true;
+        if (auto r = rtsrv::log::init(early); !r)
+            std::fprintf(stderr, "[sra] early log init failed: %s\n",
+                         r.error().c_str());
+    }
+
+    // -----------------------------------------------------------------------
     // Global options
     // -----------------------------------------------------------------------
     po::options_description global("sra – Switch Route Application");
@@ -3489,45 +3505,59 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    // Initialise the unix_domain protocol-layer logger as early as possible so
-    // that all logger::log / logger::log_hex calls (including those in
-    // sra_udp_client, cmd_proto, etc.) are active for the lifetime of the run.
+    // Phase 2: Re-initialise the RFC 5424 logger with the configured file sink.
     // Logs always go to /var/log/sra.log.<timestamp> (symlinked from
     // /var/log/sra.log).  --logstream stdout/stderr additionally mirrors
     // every log line to that stream.
     {
-        const std::string& lvlStr = vm["loglevel"].as<std::string>();
-        int lvl = logger::DEBUG;
-        if (lvlStr == "DEBUG" || lvlStr == "1")
-            lvl = logger::DEBUG;
-        else if (lvlStr == "INFO" || lvlStr == "2")
-            lvl = logger::INFO;
-        else if (lvlStr == "NOTICE" || lvlStr == "3")
-            lvl = logger::NOTICE;
-        else if (lvlStr == "WARNING" || lvlStr == "4")
-            lvl = logger::WARNING;
-        else if (lvlStr == "ERR" || lvlStr == "5")
-            lvl = logger::ERR;
-        else
-        {
-            try
-            {
-                lvl = std::stoi(lvlStr);
-            }
-            catch (...)
-            {}
-        }
-        static constexpr std::string_view kLogFileBase = "/var/log/sra.log";
+        const std::string& lvlStr    = vm["loglevel"].as<std::string>();
         const std::string& extraStream = vm["logstream"].as<std::string>();
-        logger::init(std::string{kLogFileBase}, lvl, extraStream);
-        logger::log(
-            logger::DEBUG,
-            "sra",
-            std::format("logger active: file='{}.{}' extra='{}' level={}",
-                        kLogFileBase,
-                        static_cast<long long>(std::time(nullptr)),
-                        extraStream,
-                        lvl));
+
+        rtsrv::log::Severity sev = rtsrv::log::Severity::Debug;
+        if (lvlStr == "INFO" || lvlStr == "2")
+            sev = rtsrv::log::Severity::Info;
+        else if (lvlStr == "NOTICE" || lvlStr == "3")
+            sev = rtsrv::log::Severity::Notice;
+        else if (lvlStr == "WARNING" || lvlStr == "4")
+            sev = rtsrv::log::Severity::Warning;
+        else if (lvlStr == "ERR" || lvlStr == "5")
+            sev = rtsrv::log::Severity::Error;
+
+        static constexpr std::string_view kLogFileBase = "/var/log/sra.log";
+        const auto ts = static_cast<long long>(std::time(nullptr));
+        const std::string timestampedPath =
+            std::string{kLogFileBase} + "." + std::to_string(ts);
+
+        ::unlink(std::string{kLogFileBase}.c_str());
+        if (::symlink(timestampedPath.c_str(),
+                      std::string{kLogFileBase}.c_str()) != 0)
+        {
+            std::fprintf(stderr,
+                         "[sra] cannot create symlink '%s' -> '%s': %s\n",
+                         std::string{kLogFileBase}.c_str(),
+                         timestampedPath.c_str(),
+                         std::strerror(errno));
+        }
+
+        rtsrv::log::Config cfg;
+        cfg.app_name               = "sra";
+        cfg.facility               = rtsrv::log::Facility::User;
+        cfg.min_severity           = sev;
+        cfg.file.enabled           = true;
+        cfg.file.path              = timestampedPath;
+        cfg.file.human_readable    = true;
+        if (extraStream == "stderr" || extraStream == "stdout")
+        {
+            cfg.console.enabled        = true;
+            cfg.console.human_readable = true;
+        }
+        if (auto r = rtsrv::log::init(cfg); !r)
+            std::fprintf(stderr, "[sra] log init failed: %s\n",
+                         r.error().c_str());
+
+        rtsrv::log::dbg(std::format(
+            "sra logger active: file='{}' extra='{}' level={}",
+            timestampedPath, extraStream, static_cast<int>(sev)));
     }
 
     if (vm.count("help") || !vm.count("command"))
