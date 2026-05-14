@@ -142,7 +142,7 @@ SwitchRouteManagerImpl::AddRoute(grpc::ServerContext* ctx,
 
     rtsrv::log::info(std::format(
         "[AddRoute] peer='{}' id='{}' dst='{}' via='{}'",
-        ctx->peer(), result->id(), result->destination(), result->nexthop()));
+        ctx->peer(), result->id(), result->destination(), result->gateway()));
 
     resp->set_code(srmd::v1::STATUS_CODE_OK);
     resp->set_message("Route added successfully");
