@@ -3,8 +3,8 @@
  * @brief Entry point for srmd – the Switch Route Manager Daemon.
  *
  * Start-up sequence:
- *  1. Parse CLI flags (--config, --sot, --foreground, --version, --help).
- *  2. Initialise the RFC 5424 logging API (console sink for early messages).
+ *  1. Initialise the RFC 5424 logging API (console sink for early messages).
+ *  2. Parse CLI flags (--config, --sot, --foreground, --version, --help).
  *  3. Load and parse the Source-of-Truth (SOT) JSON file.
  *  4. Load and validate the JSON configuration file.
  *  5. Re-initialise logging with the configured file sink (and optional console).
@@ -14,7 +14,7 @@
  *  9. Enter the main event loop (SIGTERM/SIGINT → stop; SIGHUP → reload).
  * 10. Graceful shutdown: stop the gRPC server, flush logging, and exit.
  *
- * @version 1.1
+ * @version 1.2
  */
 
 #include "build_info.hpp"
@@ -58,9 +58,6 @@ static constexpr std::string_view kDefaultConfig = "/etc/srmd/srmd.json";
 
 /**
  * @brief Maps a log-level name to the RFC 5424 Severity enum.
- *
- * @param level  One of: trace, debug, info, warning/warn, error, fatal.
- * @return Corresponding Severity; defaults to Info on unknown input.
  */
 static rtsrv::log::Severity mapLogLevel(const std::string& level) noexcept
 {
@@ -76,15 +73,11 @@ static rtsrv::log::Severity mapLogLevel(const std::string& level) noexcept
 }
 
 /**
- * @brief (Re-)initialises the RFC 5424 logging API.
+ * @brief (Re-)initialises the RFC 5424 logging API with a file sink.
  *
- * Always writes to @p logBasePath.<epoch_seconds> with a symlink at
- * @p logBasePath.  If @p extraStream is "stdout" or "stderr" a console
- * sink is also enabled so every log line is duplicated there.
- *
- * @param logBasePath  Base path for the log file (e.g. /var/log/srmd.log).
- * @param sev          Minimum RFC 5424 severity to emit.
- * @param extraStream  Extra output: "stdout", "stderr", or "" (none).
+ * Always writes to @p logBasePath.<epoch_seconds> (RFC 5424 wire format)
+ * with a symlink at @p logBasePath.  If @p extraStream is "stdout" or
+ * "stderr" a console sink is also enabled.
  */
 static void initLogs(const std::string& logBasePath,
                      rtsrv::log::Severity sev,
@@ -94,7 +87,6 @@ static void initLogs(const std::string& logBasePath,
     const std::string timestampedPath =
         logBasePath + "." + std::to_string(ts);
 
-    // Update symlink: remove stale link then create the new one.
     ::unlink(logBasePath.c_str());
     if (::symlink(timestampedPath.c_str(), logBasePath.c_str()) != 0)
     {
@@ -110,15 +102,13 @@ static void initLogs(const std::string& logBasePath,
     cfg.facility     = rtsrv::log::Facility::Daemon;
     cfg.min_severity = sev;
 
-    cfg.file.enabled        = true;
-    cfg.file.path           = timestampedPath;
-    cfg.file.human_readable = true;
+    cfg.file.enabled = true;
+    cfg.file.path    = timestampedPath;
+    // human_readable defaults to false → RFC 5424 wire format in the file.
 
     if (extraStream == "stderr" || extraStream == "stdout")
-    {
-        cfg.console.enabled        = true;
-        cfg.console.human_readable = true;
-    }
+        cfg.console.enabled = true;
+    // human_readable defaults to false → RFC 5424 wire format on the console.
 
     if (auto r = rtsrv::log::init(cfg); !r)
         std::fprintf(stderr, "[srmd] log init failed: %s\n", r.error().c_str());
@@ -128,9 +118,6 @@ static void initLogs(const std::string& logBasePath,
 // Hostname helper
 // ---------------------------------------------------------------------------
 
-/**
- * @brief Returns the hostname of the local machine.
- */
 static std::string getHostname()
 {
     char buf[256]{};
@@ -140,62 +127,55 @@ static std::string getHostname()
 }
 
 // ---------------------------------------------------------------------------
-// SOT sync helpers
+// SOT summary (all output through the logging API)
 // ---------------------------------------------------------------------------
 
-/**
- * @brief Prints a parsed @c SotConfig summary to stdout.
- */
-static void printSotSummary(const srmd::SotConfig& cfg)
+static void logSotSummary(const srmd::SotConfig& cfg)
 {
-    std::println("SOT parsed: {} node(s), {} prefix(es) total",
-                 cfg.nodes.size(),
-                 cfg.totalPrefixCount());
-    std::println("{}", std::string(60, '-'));
+    rtsrv::log::info(std::format("SOT parsed: {} node(s), {} prefix(es) total",
+                                 cfg.nodes.size(),
+                                 cfg.totalPrefixCount()));
 
     for (const auto& node : cfg.nodes)
     {
-        std::size_t ifaceCount = 0;
-        std::size_t prefixCount = 0;
+        std::size_t ifaceCount   = 0;
+        std::size_t prefixCount  = 0;
         for (const auto& vrf : node.vrfs)
         {
             ifaceCount += vrf.ipv4.interfaces.size();
             for (const auto& iface : vrf.ipv4.interfaces)
-            {
                 prefixCount += iface.prefixes.size();
-            }
         }
 
-        std::println("  {} ({})  lo4={}  vrfs={}  ifaces={}  prefixes={}",
-                     node.hostname,
-                     node.management_ip,
-                     node.loopbacks.ipv4,
-                     node.vrfs.size(),
-                     ifaceCount,
-                     prefixCount);
+        rtsrv::log::info(
+            std::format("SOT node: {} ({})  lo4={}  vrfs={}  ifaces={}  prefixes={}",
+                        node.hostname,
+                        node.management_ip,
+                        node.loopbacks.ipv4,
+                        node.vrfs.size(),
+                        ifaceCount,
+                        prefixCount));
     }
-    std::println("{}", std::string(60, '-'));
 }
 
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
-/**
- * @brief srmd entry point.
- */
 int main(int argc, char* argv[])
 {
     // -----------------------------------------------------------------------
-    // Phase 1: Early logging – console sink active before config is loaded.
+    // Phase 1: Early logging (RFC 5424 console sink active immediately).
+    // This runs before CLI parsing so that all subsequent messages, including
+    // errors from option parsing, already use the logging API.
     // -----------------------------------------------------------------------
     {
         rtsrv::log::Config early;
         early.app_name        = "srmd";
         early.facility        = rtsrv::log::Facility::Daemon;
         early.min_severity    = rtsrv::log::Severity::Debug;
-        early.console.enabled        = true;
-        early.console.human_readable = true;
+        early.console.enabled = true;
+        // human_readable defaults to false → RFC 5424 format from the start.
         if (auto r = rtsrv::log::init(early); !r)
             std::fprintf(stderr, "[srmd] early log init failed: %s\n",
                          r.error().c_str());
@@ -232,7 +212,8 @@ int main(int argc, char* argv[])
     }
     catch (const po::error& ex)
     {
-        std::cerr << "Error: " << ex.what() << "\n\n" << desc << '\n';
+        rtsrv::log::err(std::format("Command-line error: {}", ex.what()));
+        std::cerr << desc << '\n';
         return EXIT_FAILURE;
     }
 
@@ -243,6 +224,7 @@ int main(int argc, char* argv[])
     }
     if (vm.count("version"))
     {
+        // Version output goes to stdout as plain text (user-facing).
         std::println("srmd (Switch Route Manager Daemon) {}",
                      rtsrv::build::kProjectVersion);
         std::println("  Build : #{} ({})",
@@ -262,23 +244,24 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     if (sotPath.empty())
     {
-        std::println(std::cerr, "Error: server requires --sot <path>");
+        rtsrv::log::err("server requires --sot <path>");
         return EXIT_FAILURE;
     }
 
-    std::println("srmd  build #{}  Parsing SOT: {}",
-                 rtsrv::build::kBuildNumber,
-                 sotPath);
+    rtsrv::log::info(std::format("srmd  build #{}  parsing SOT: {}",
+                                 rtsrv::build::kBuildNumber,
+                                 sotPath));
 
     auto sotResult = srmd::loadSotConfig(sotPath);
     if (!sotResult)
     {
-        std::println(
-            std::cerr, "Error loading SOT config: {}", sotResult.error());
+        rtsrv::log::err(
+            std::format("Error loading SOT config: {}", sotResult.error()));
         return EXIT_FAILURE;
     }
 
-    printSotSummary(*sotResult);
+    logSotSummary(*sotResult);
+
 #if 0
     // Multi-server sync via switch_config.json
     if (!switchesPath.empty())
@@ -286,28 +269,18 @@ int main(int argc, char* argv[])
         auto cfgResult = sra::loadSwitchConfig(switchesPath);
         if (!cfgResult)
         {
-            std::println(std::cerr,
-                            "Error loading switch config: {}",
-                            cfgResult.error());
+            rtsrv::log::err(std::format("Error loading switch config: {}",
+                                        cfgResult.error()));
             return EXIT_FAILURE;
         }
-        return cmdSyncMulti(
-            *sotResult, *cfgResult, useTls, caCert, timeout);
+        return cmdSyncMulti(*sotResult, *cfgResult, useTls, caCert, timeout);
     }
 
-    // Single-server sync: --server + --node-ip required
     if (nodeIp.empty())
     {
-        std::println(
-            std::cerr,
-            "Error: single-server sync requires --node-ip <management-ip>"
-            " (the key used in nodes_by_loopback)");
+        rtsrv::log::err("single-server sync requires --node-ip <management-ip>");
         return EXIT_FAILURE;
     }
-
-    std::println("\n{}", std::string(60, '='));
-    std::println("Switch : {}  node-ip={}", server, nodeIp);
-    std::println("{}", std::string(60, '='));
 
     sra::RouteClient client(server, useTls, caCert, timeout);
     return syncOneServer(client, nodeIp, server, *sotResult);
@@ -319,13 +292,15 @@ int main(int argc, char* argv[])
     auto cfgResult = common::loadServerConfig(configPath);
     if (!cfgResult)
     {
-        std::cerr << "Configuration error: " << cfgResult.error() << '\n';
+        rtsrv::log::err(
+            std::format("Configuration error: {}", cfgResult.error()));
         return EXIT_FAILURE;
     }
     const auto& cfg = *cfgResult;
 
     // -----------------------------------------------------------------------
     // Phase 2: Re-initialise logging with the configured file sink.
+    // RFC 5424 format is used for both the file and the optional console.
     // -----------------------------------------------------------------------
     initLogs(cfg.daemon.log_file,
              mapLogLevel(cfg.daemon.log_level),
@@ -339,7 +314,7 @@ int main(int argc, char* argv[])
                     ::getpid()));
 
     rtsrv::log::info(std::format(
-        "Listening on {}  foreground={}", cfg.server.target(), foreground));
+        "listening on {}  foreground={}", cfg.server.target(), foreground));
 
     // -----------------------------------------------------------------------
     // Daemonise or stay in foreground
@@ -354,20 +329,18 @@ int main(int argc, char* argv[])
         }
         catch (const std::exception& ex)
         {
-            std::cerr << "daemonise() failed: " << ex.what() << '\n';
+            rtsrv::log::crit(
+                std::format("daemonise() failed: {}", ex.what()));
             return EXIT_FAILURE;
         }
     }
 
     // -----------------------------------------------------------------------
-    // Build server identity string
+    // Construct core objects
     // -----------------------------------------------------------------------
     const std::string serverId =
         std::format("{}@{}", rtsrv::build::kVersionedBinaryName, getHostname());
 
-    // -----------------------------------------------------------------------
-    // Construct core objects
-    // -----------------------------------------------------------------------
     srmd::RouteManager routeManager;
 
     srmd::SwitchRouteManagerImpl service(
@@ -409,7 +382,7 @@ int main(int argc, char* argv[])
     if (!grpcServer)
     {
         rtsrv::log::crit(std::format(
-            "Failed to start gRPC server on {}", cfg.server.target()));
+            "failed to start gRPC server on {}", cfg.server.target()));
         return EXIT_FAILURE;
     }
 
@@ -424,17 +397,16 @@ int main(int argc, char* argv[])
         rtsrv::log::info("SIGHUP – reloading configuration");
         auto newCfg = common::loadServerConfig(configPath);
         if (!newCfg)
-            rtsrv::log::err(
-                std::format("Reload failed: {}", newCfg.error()));
+            rtsrv::log::err(std::format("reload failed: {}", newCfg.error()));
         else
-            rtsrv::log::info("Configuration reloaded");
+            rtsrv::log::info("configuration reloaded");
     });
 
     // -----------------------------------------------------------------------
-    // Main event loop
+    // Main event loop — runs until SIGTERM/SIGINT (CTRL+C)
     // -----------------------------------------------------------------------
     using namespace std::chrono_literals;
-    rtsrv::log::info("Entering main event loop");
+    rtsrv::log::info("entering main event loop");
 
     while (!srmd::Daemon::shouldStop())
     {
@@ -444,16 +416,14 @@ int main(int argc, char* argv[])
     }
 
     // -----------------------------------------------------------------------
-    // Graceful shutdown
+    // Graceful shutdown — logging thread is joined before process exits
     // -----------------------------------------------------------------------
-    rtsrv::log::info("Shutdown signal received – stopping gRPC server");
+    rtsrv::log::info("shutdown signal received – stopping gRPC server");
     grpcServer->Shutdown(std::chrono::system_clock::now() + 10s);
     grpcServer->Wait();
 
     rtsrv::log::info(std::format("srmd build #{} exiting cleanly",
                                  rtsrv::build::kBuildNumber));
-
-    // Flush and join the logging thread before the process exits.
     rtsrv::log::shutdown();
 
     return EXIT_SUCCESS;

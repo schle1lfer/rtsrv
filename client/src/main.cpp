@@ -202,7 +202,7 @@ static int cmdTest(sra::RouteClient& client)
     // ------------------------------------------------------------------
     // Step 1: Echo
     // ------------------------------------------------------------------
-    std::println("\n─── Step 1: Echo ─────────────────────────────────────");
+    rtsrv::log::info("Step 1: Echo");
     const std::string echoMsg =
         "Hello from sra! Switch Route Application test.";
     const auto t0 = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -212,7 +212,7 @@ static int cmdTest(sra::RouteClient& client)
     auto echoResult = client.echo(echoMsg);
     if (!echoResult)
     {
-        std::println(std::cerr, "  [FAIL] Echo: {}", echoResult.error());
+        rtsrv::log::err(std::format("[FAIL] Echo: {}", echoResult.error()));
         return EXIT_FAILURE;
     }
 
@@ -220,78 +220,86 @@ static int cmdTest(sra::RouteClient& client)
                         std::chrono::system_clock::now().time_since_epoch())
                         .count();
 
-    std::println("  [OK]   Echo received back  : '{}'", echoResult->message());
-    std::println("  [OK]   Server ID           : {}", echoResult->server_id());
-    std::println("  [OK]   Server version      : {}",
-                 echoResult->server_version());
-    std::println("  [OK]   Round-trip latency  : {} µs", t1 - t0);
+    rtsrv::log::info(std::format("[OK] Echo received back  : '{}'",
+                                 echoResult->message()));
+    rtsrv::log::info(std::format("[OK] Server ID           : {}",
+                                 echoResult->server_id()));
+    rtsrv::log::info(std::format("[OK] Server version      : {}",
+                                 echoResult->server_version()));
+    rtsrv::log::info(std::format("[OK] Round-trip latency  : {} us", t1 - t0));
 
     // ------------------------------------------------------------------
     // Step 2: Heartbeat
     // ------------------------------------------------------------------
-    std::println("\n─── Step 2: Heartbeat ────────────────────────────────");
+    rtsrv::log::info("Step 2: Heartbeat");
     auto hbResult = client.heartbeat(1);
     if (!hbResult)
     {
-        std::println(std::cerr, "  [FAIL] Heartbeat: {}", hbResult.error());
+        rtsrv::log::err(
+            std::format("[FAIL] Heartbeat: {}", hbResult.error()));
         allOk = false;
     }
     else
     {
-        std::println("  [OK]   Sequence: {}  server_ts: {} µs",
-                     hbResult->sequence(),
-                     hbResult->server_ts_us());
+        rtsrv::log::info(std::format("[OK] Sequence: {}  server_ts: {} us",
+                                     hbResult->sequence(),
+                                     hbResult->server_ts_us()));
     }
 
     // ------------------------------------------------------------------
     // Step 3: AddRoute (IPv4 default)
     // ------------------------------------------------------------------
-    std::println("\n─── Step 3: AddRoute (default via 192.168.1.1) ──────────");
+    rtsrv::log::info("Step 3: AddRoute (default via 192.168.1.1)");
     auto addResult = client.addRoute("default", "192.168.1.1", "eth0", 100);
     if (!addResult)
     {
-        std::println(std::cerr, "  [FAIL] AddRoute: {}", addResult.error());
+        rtsrv::log::err(std::format("[FAIL] AddRoute: {}", addResult.error()));
         allOk = false;
     }
     else
     {
-        std::println("  [OK]   Route created:");
-        printRoute(*addResult, 8);
+        rtsrv::log::info(std::format("[OK] Route created: id={}",
+                                     addResult->id()));
     }
 
     // ------------------------------------------------------------------
     // Step 4: AddRoute (10.0.0.0/8)
     // ------------------------------------------------------------------
-    std::println("\n─── Step 4: AddRoute (10.0.0.0/8 via 10.0.0.1) ─────");
+    rtsrv::log::info("Step 4: AddRoute (10.0.0.0/8 via 10.0.0.1)");
     auto addResult2 = client.addRoute("10.0.0.0/8", "10.0.0.1", "eth1", 50);
     if (!addResult2)
     {
-        std::println(std::cerr, "  [FAIL] AddRoute2: {}", addResult2.error());
+        rtsrv::log::err(
+            std::format("[FAIL] AddRoute2: {}", addResult2.error()));
         allOk = false;
     }
     else
     {
-        std::println("  [OK]   Route created:");
-        printRoute(*addResult2, 8);
+        rtsrv::log::info(std::format("[OK] Route created: id={}",
+                                     addResult2->id()));
     }
 
     // ------------------------------------------------------------------
     // Step 5: ListRoutes
     // ------------------------------------------------------------------
-    std::println("\n─── Step 5: ListRoutes ───────────────────────────────");
+    rtsrv::log::info("Step 5: ListRoutes");
     auto listResult = client.listRoutes();
     if (!listResult)
     {
-        std::println(std::cerr, "  [FAIL] ListRoutes: {}", listResult.error());
+        rtsrv::log::err(
+            std::format("[FAIL] ListRoutes: {}", listResult.error()));
         allOk = false;
     }
     else
     {
-        std::println("  [OK]   {} route(s) in table:", listResult->size());
+        rtsrv::log::info(std::format("[OK] {} route(s) in table:",
+                                     listResult->size()));
         for (const auto& r : *listResult)
         {
-            std::println("  ----");
-            printRoute(r, 6);
+            rtsrv::log::info(std::format("  route id={} dest={} gw={} "
+                                         "iface={} metric={}",
+                                         r.id(), r.destination(), r.gateway(),
+                                         r.interface_name(), r.metric()));
         }
     }
 
@@ -300,18 +308,20 @@ static int cmdTest(sra::RouteClient& client)
     // ------------------------------------------------------------------
     if (addResult)
     {
-        std::println("\n─── Step 6: GetRoute ({}) ────────────────────────────",
-                     addResult->id().substr(0, 8) + "…");
+        rtsrv::log::info(std::format("Step 6: GetRoute ({}...)",
+                                     addResult->id().substr(0, 8)));
         auto getResult = client.getRoute(addResult->id());
         if (!getResult)
         {
-            std::println(std::cerr, "  [FAIL] GetRoute: {}", getResult.error());
+            rtsrv::log::err(
+                std::format("[FAIL] GetRoute: {}", getResult.error()));
             allOk = false;
         }
         else
         {
-            std::println("  [OK]   Retrieved:");
-            printRoute(*getResult, 8);
+            rtsrv::log::info(std::format("[OK] Retrieved: id={} dest={}",
+                                         getResult->id(),
+                                         getResult->destination()));
         }
     }
 
@@ -320,47 +330,50 @@ static int cmdTest(sra::RouteClient& client)
     // ------------------------------------------------------------------
     if (addResult)
     {
-        std::println("\n─── Step 7: RemoveRoute ({}) ─────────────────────────",
-                     addResult->id().substr(0, 8) + "…");
+        rtsrv::log::info(std::format("Step 7: RemoveRoute ({}...)",
+                                     addResult->id().substr(0, 8)));
         auto removeResult = client.removeRoute(addResult->id());
         if (!removeResult)
         {
-            std::println(
-                std::cerr, "  [FAIL] RemoveRoute: {}", removeResult.error());
+            rtsrv::log::err(std::format("[FAIL] RemoveRoute: {}",
+                                        removeResult.error()));
             allOk = false;
         }
         else
         {
-            std::println("  [OK]   Route removed");
+            rtsrv::log::info("[OK] Route removed");
         }
     }
 
     // ------------------------------------------------------------------
     // Step 8: ListRoutes again (should be 1 remaining)
     // ------------------------------------------------------------------
-    std::println("\n─── Step 8: ListRoutes (after remove) ───────────────");
+    rtsrv::log::info("Step 8: ListRoutes (after remove)");
     auto listResult2 = client.listRoutes();
     if (!listResult2)
     {
-        std::println(
-            std::cerr, "  [FAIL] ListRoutes2: {}", listResult2.error());
+        rtsrv::log::err(
+            std::format("[FAIL] ListRoutes2: {}", listResult2.error()));
         allOk = false;
     }
     else
     {
-        std::println("  [OK]   {} route(s) remaining:", listResult2->size());
+        rtsrv::log::info(std::format("[OK] {} route(s) remaining:",
+                                     listResult2->size()));
         for (const auto& r : *listResult2)
         {
-            std::println("  ----");
-            printRoute(r, 6);
+            rtsrv::log::info(std::format("  route id={} dest={} gw={} "
+                                         "iface={} metric={}",
+                                         r.id(), r.destination(), r.gateway(),
+                                         r.interface_name(), r.metric()));
         }
     }
 
     // ------------------------------------------------------------------
     // Summary
     // ------------------------------------------------------------------
-    std::println("\n─── Test result: {} ──────────────────────────────────",
-                 allOk ? "ALL PASSED" : "SOME FAILURES");
+    rtsrv::log::info(std::format("Test result: {}",
+                                 allOk ? "ALL PASSED" : "SOME FAILURES"));
     return allOk ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
@@ -377,12 +390,11 @@ static int cmdTest(sra::RouteClient& client)
  *
  * @param cfg  Parsed SOT configuration.
  */
-static void printSotSummary(const sra::SotConfig& cfg)
+static void logSotSummary(const sra::SotConfig& cfg)
 {
-    std::println("SOT parsed: {} node(s), {} prefix(es) total",
-                 cfg.nodes.size(),
-                 cfg.totalPrefixCount());
-    std::println("{}", std::string(60, '-'));
+    rtsrv::log::info(std::format("SOT parsed: {} node(s), {} prefix(es) total",
+                                 cfg.nodes.size(),
+                                 cfg.totalPrefixCount()));
 
     for (const auto& node : cfg.nodes)
     {
@@ -397,15 +409,15 @@ static void printSotSummary(const sra::SotConfig& cfg)
             }
         }
 
-        std::println("  {} ({})  lo4={}  vrfs={}  ifaces={}  prefixes={}",
-                     node.hostname,
-                     node.management_ip,
-                     node.loopbacks.ipv4,
-                     node.vrfs.size(),
-                     ifaceCount,
-                     prefixCount);
+        rtsrv::log::info(
+            std::format("SOT node: {} ({})  lo4={}  vrfs={}  ifaces={}  prefixes={}",
+                        node.hostname,
+                        node.management_ip,
+                        node.loopbacks.ipv4,
+                        node.vrfs.size(),
+                        ifaceCount,
+                        prefixCount));
     }
-    std::println("{}", std::string(60, '-'));
 }
 
 /**
@@ -435,23 +447,23 @@ static std::size_t pushNodeRoutes(sra::RouteClient& client,
                     pfx.prefix, iface.nexthop, iface.name, pfx.weight);
                 if (!result)
                 {
-                    std::println(std::cerr,
-                                 "  [FAIL] AddRoute {}/{} via {} ({}): {}",
-                                 pfx.prefix,
-                                 iface.name,
-                                 iface.nexthop,
-                                 vrf.name,
-                                 result.error());
+                    rtsrv::log::err(std::format(
+                        "[FAIL] AddRoute {}/{} via {} ({}): {}",
+                        pfx.prefix,
+                        iface.name,
+                        iface.nexthop,
+                        vrf.name,
+                        result.error()));
                 }
                 else
                 {
-                    std::println("  [OK]   {} via {} iface={} metric={}  "
-                                 "id={}",
-                                 pfx.prefix,
-                                 iface.nexthop,
-                                 iface.name,
-                                 pfx.weight,
-                                 result->id().substr(0, 8) + "…");
+                    rtsrv::log::info(std::format(
+                        "[OK] {} via {} iface={} metric={}  id={}...",
+                        pfx.prefix,
+                        iface.nexthop,
+                        iface.name,
+                        pfx.weight,
+                        result->id().substr(0, 8)));
                     ++pushed;
                 }
             }
@@ -483,20 +495,20 @@ static int syncOneServer(sra::RouteClient& client,
     const sra::SotNode* node = sot.findByManagementIp(managementIp);
     if (!node)
     {
-        std::println(std::cerr,
-                     "  [WARN] {} ({}): no SOT entry found – skipping",
-                     label,
-                     managementIp);
+        rtsrv::log::warn(std::format(
+            "[WARN] {} ({}): no SOT entry found — skipping",
+            label,
+            managementIp));
         return EXIT_FAILURE;
     }
 
-    std::println("  SOT node  : {} ({})", node->hostname, node->management_ip);
-    std::println("  Loopback  : ipv4={} ipv6={}",
-                 node->loopbacks.ipv4,
-                 node->loopbacks.ipv6);
+    rtsrv::log::info(std::format("SOT node  : {} ({})",
+                                 node->hostname, node->management_ip));
+    rtsrv::log::info(std::format("Loopback  : ipv4={} ipv6={}",
+                                 node->loopbacks.ipv4, node->loopbacks.ipv6));
 
     const std::size_t pushed = pushNodeRoutes(client, *node);
-    std::println("  => {} route(s) pushed", pushed);
+    rtsrv::log::info(std::format("=> {} route(s) pushed", pushed));
 
     return EXIT_SUCCESS;
 }
@@ -533,9 +545,8 @@ static int cmdSyncMulti(const sra::SotConfig& sot,
 
     for (const auto& sw : switches)
     {
-        std::println("\n{}", std::string(60, '='));
-        std::println("Switch : {}  ({})", sw.label(), sw.target());
-        std::println("{}", std::string(60, '='));
+        rtsrv::log::info(std::format("Switch: {}  ({})", sw.label(),
+                                     sw.target()));
 
         sra::RouteClient client(
             sw.target(), useTls, caCert, timeout, sw.login, sw.password);
@@ -545,9 +556,8 @@ static int cmdSyncMulti(const sra::SotConfig& sot,
     }
 
     // Aggregate summary
-    std::println("\n{}", std::string(60, '='));
-    std::println("SOT sync summary  ({} server(s))", switches.size());
-    std::println("{}", std::string(60, '-'));
+    rtsrv::log::info(std::format("SOT sync summary  ({} server(s))",
+                                 switches.size()));
     bool anyFailed = false;
     for (const auto& r : results)
     {
@@ -556,9 +566,9 @@ static int cmdSyncMulti(const sra::SotConfig& sot,
         {
             anyFailed = true;
         }
-        std::println("  {}  {}", ok ? "[OK  ]" : "[FAIL]", r.label);
+        rtsrv::log::info(std::format("  {}  {}",
+                                     ok ? "[OK  ]" : "[FAIL]", r.label));
     }
-    std::println("{}", std::string(60, '='));
     return anyFailed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
@@ -594,11 +604,8 @@ static int cmdMultiTest(const std::vector<sra::SwitchEntry>& switches,
 
     for (const auto& sw : switches)
     {
-        const std::string header(60, '=');
-        std::println("\n{}", header);
-        std::println("Switch : {}  ({})", sw.label(), sw.target());
-        std::println("Login  : {}", sw.login);
-        std::println("{}", header);
+        rtsrv::log::info(std::format("Switch: {}  ({})  login={}",
+                                     sw.label(), sw.target(), sw.login));
 
         sra::RouteClient client(
             sw.target(), useTls, caCert, timeout, sw.login, sw.password);
@@ -608,9 +615,8 @@ static int cmdMultiTest(const std::vector<sra::SwitchEntry>& switches,
     }
 
     // Print aggregate summary
-    std::println("\n{}", std::string(60, '='));
-    std::println("Multi-server test summary  ({} server(s))", switches.size());
-    std::println("{}", std::string(60, '-'));
+    rtsrv::log::info(std::format("Multi-server test summary  ({} server(s))",
+                                 switches.size()));
 
     bool anyFailed = false;
     for (const auto& r : results)
@@ -620,9 +626,9 @@ static int cmdMultiTest(const std::vector<sra::SwitchEntry>& switches,
         {
             anyFailed = true;
         }
-        std::println("  {}  {}", passed ? "[PASS]" : "[FAIL]", r.label);
+        rtsrv::log::info(std::format("  {}  {}",
+                                     passed ? "[PASS]" : "[FAIL]", r.label));
     }
-    std::println("{}", std::string(60, '='));
 
     return anyFailed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
@@ -1030,21 +1036,22 @@ static void nlWatchCb(netlink_event_t event,
         if (it == g_loopback_cb_map.end())
             return;
         LoopbackCbEntry& entry = it->second;
-        std::println("{} [OSPF/32] {} loopback='{}' (hostname='{}')"
-                     " nhid={} — sending ROUTE_ADD",
-                     ts,
-                     (event == NETLINK_ROUTE_ADDED)     ? "ADD"
-                     : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
-                                                        : "CHG",
-                     loKey,
-                     entry.hostname,
-                     nhid);
+        rtsrv::log::info(std::format(
+            "{} [OSPF/32] {} loopback='{}' (hostname='{}') nhid={} — "
+            "sending ROUTE_ADD",
+            ts,
+            (event == NETLINK_ROUTE_ADDED)     ? "ADD"
+            : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
+                                               : "CHG",
+            loKey,
+            entry.hostname,
+            nhid));
         if (entry.prefixes.empty())
         {
-            std::println(
+            rtsrv::log::info(std::format(
                 "{} [OSPF/32] no prefixes for '{}' — skipping ROUTE_ADD",
                 ts,
-                loKey);
+                loKey));
             return;
         }
         struct in_addr nhAddr
@@ -1063,12 +1070,12 @@ static void nlWatchCb(netlink_event_t event,
         cmdproto::SingleRouteRequest req;
         req.vrfs_name = "RemainLoopbaks";
         req.interfaces.push_back(std::move(iface_entry));
-        std::println("{} [OSPF/32] submitting ROUTE_ADD for '{}'"
-                     " nhid={} prefixes={}",
-                     ts,
-                     loKey,
-                     nhid,
-                     req.interfaces[0].prefixes.size());
+        rtsrv::log::info(std::format(
+            "{} [OSPF/32] submitting ROUTE_ADD for '{}' nhid={} prefixes={}",
+            ts,
+            loKey,
+            nhid,
+            req.interfaces[0].prefixes.size()));
         ctx->sraClient->submitAdd(std::move(req));
     };
 
@@ -1092,16 +1099,13 @@ static void nlWatchCb(netlink_event_t event,
             if (result)
             {
                 ctx->routes[key] = makeWatchRoute(result->id());
-                std::println("{} [ADDED]   {} via {} dev {} metric {} → id={}",
-                             ts,
-                             dest,
-                             gw,
-                             iface,
-                             route->metric,
-                             result->id().substr(0, 8) + "…");
+                rtsrv::log::info(std::format(
+                    "{} [ADDED]   {} via {} dev {} metric {} -> id={}...",
+                    ts, dest, gw, iface, route->metric,
+                    result->id().substr(0, 8)));
 
                 /* If we know our own loopback, ask the server for the full
-                 * interface+prefix list and print the entry matching this
+                 * interface+prefix list and log the entry matching this
                  * nexthop (gateway). */
                 if (!ctx->loopback.empty() && !gw.empty())
                 {
@@ -1116,40 +1120,34 @@ static void nlWatchCb(netlink_event_t event,
                                 continue;
                             }
                             found = true;
-                            std::println("{}   SOT nexthop {} → iface \"{}\" "
-                                         "(type={} local={} weight={} desc={})",
-                                         ts,
-                                         gw,
-                                         intf.name(),
-                                         intf.type(),
-                                         intf.local_address(),
-                                         intf.weight(),
-                                         intf.description());
+                            rtsrv::log::info(std::format(
+                                "{}   SOT nexthop {} -> iface \"{}\" "
+                                "(type={} local={} weight={} desc={})",
+                                ts, gw, intf.name(), intf.type(),
+                                intf.local_address(), intf.weight(),
+                                intf.description()));
                             for (const auto& pfx : intf.prefixes())
                             {
-                                std::println("{}     prefix {} weight={} "
-                                             "role={} desc={}",
-                                             ts,
-                                             pfx.prefix(),
-                                             pfx.weight(),
-                                             pfx.role(),
-                                             pfx.description());
+                                rtsrv::log::info(std::format(
+                                    "{}     prefix {} weight={} role={} "
+                                    "desc={}",
+                                    ts, pfx.prefix(), pfx.weight(),
+                                    pfx.role(), pfx.description()));
                             }
                         }
                         if (!found)
                         {
-                            std::println("{} [ADDED]   SOT: no interface with "
-                                         "nexthop {} found for loopback {}",
-                                         ts,
-                                         gw,
-                                         ctx->loopback);
+                            rtsrv::log::info(std::format(
+                                "{} [ADDED]   SOT: no interface with nexthop "
+                                "{} found for loopback {}",
+                                ts, gw, ctx->loopback));
                         }
                     }
                     else
                     {
-                        std::println("{} [ADDED]   GetLoopbacks FAILED: {}",
-                                     ts,
-                                     lbResult.error());
+                        rtsrv::log::warn(std::format(
+                            "{} [ADDED]   GetLoopbacks FAILED: {}",
+                            ts, lbResult.error()));
                     }
                 }
             }
@@ -1157,10 +1155,9 @@ static void nlWatchCb(netlink_event_t event,
             {
                 /* Track with empty srmdId so REMOVED events still clean up. */
                 ctx->routes[key] = makeWatchRoute({});
-                std::println("{} [ADDED]   {} → gRPC FAILED: {}",
-                             ts,
-                             dest,
-                             result.error());
+                rtsrv::log::err(std::format(
+                    "{} [ADDED]   {} -> gRPC FAILED: {}",
+                    ts, dest, result.error()));
             }
             sendRouteAdd(route->nhid);
         }
@@ -1177,10 +1174,9 @@ static void nlWatchCb(netlink_event_t event,
                     ctx->client->removeRoute(existing->second.srmdId);
                 if (!rmResult)
                 {
-                    std::println("{} [CHANGED] {} stale-remove failed: {}",
-                                 ts,
-                                 dest,
-                                 rmResult.error());
+                    rtsrv::log::warn(std::format(
+                        "{} [CHANGED] {} stale-remove failed: {}",
+                        ts, dest, rmResult.error()));
                 }
                 ctx->routes.erase(existing);
             }
@@ -1195,21 +1191,17 @@ static void nlWatchCb(netlink_event_t event,
             if (result)
             {
                 ctx->routes[key] = makeWatchRoute(result->id());
-                std::println("{} [CHANGED] {} via {} dev {} metric {} → id={}",
-                             ts,
-                             dest,
-                             gw,
-                             iface,
-                             route->metric,
-                             result->id().substr(0, 8) + "…");
+                rtsrv::log::info(std::format(
+                    "{} [CHANGED] {} via {} dev {} metric {} -> id={}...",
+                    ts, dest, gw, iface, route->metric,
+                    result->id().substr(0, 8)));
             }
             else
             {
                 ctx->routes[key] = makeWatchRoute({});
-                std::println("{} [CHANGED] {} → gRPC FAILED: {}",
-                             ts,
-                             dest,
-                             result.error());
+                rtsrv::log::err(std::format(
+                    "{} [CHANGED] {} -> gRPC FAILED: {}",
+                    ts, dest, result.error()));
             }
             sendRouteAdd(route->nhid);
         }
@@ -1220,8 +1212,8 @@ static void nlWatchCb(netlink_event_t event,
             auto it = ctx->routes.find(key);
             if (it == ctx->routes.end())
             {
-                std::println(
-                    "{} [REMOVED] {} (not tracked – no gRPC call)", ts, dest);
+                rtsrv::log::info(std::format(
+                    "{} [REMOVED] {} (not tracked — no gRPC call)", ts, dest));
             }
             else
             {
@@ -1230,27 +1222,24 @@ static void nlWatchCb(netlink_event_t event,
 
                 if (id.empty())
                 {
-                    std::println(
-                        "{} [REMOVED] {} (no server ID – no gRPC call)",
-                        ts,
-                        dest);
+                    rtsrv::log::info(std::format(
+                        "{} [REMOVED] {} (no server ID — no gRPC call)",
+                        ts, dest));
                 }
                 else
                 {
                     auto result = ctx->client->removeRoute(id);
                     if (result)
                     {
-                        std::println("{} [REMOVED] {} id={}",
-                                     ts,
-                                     dest,
-                                     id.substr(0, 8) + "…");
+                        rtsrv::log::info(std::format(
+                            "{} [REMOVED] {} id={}...",
+                            ts, dest, id.substr(0, 8)));
                     }
                     else
                     {
-                        std::println("{} [REMOVED] {} → gRPC FAILED: {}",
-                                     ts,
-                                     dest,
-                                     result.error());
+                        rtsrv::log::err(std::format(
+                            "{} [REMOVED] {} -> gRPC FAILED: {}",
+                            ts, dest, result.error()));
                     }
                 }
             }
@@ -1447,12 +1436,13 @@ static void addDelListOspfCb(netlink_event_t event,
     if (route->gateway.s_addr != 0)
         inet_ntop(AF_INET, &route->gateway, gw, sizeof(gw));
 
-    std::println("[add-del-list] [OSPF/32] {} {}/32 via {} dev {} metric {}",
-                 evLabel,
-                 dst,
-                 gw[0] ? gw : "(none)",
-                 route->ifname[0] ? route->ifname : "?",
-                 route->metric);
+    rtsrv::log::info(std::format(
+        "[add-del-list] [OSPF/32] {} {}/32 via {} dev {} metric {}",
+        evLabel,
+        dst,
+        gw[0] ? gw : "(none)",
+        route->ifname[0] ? route->ifname : "?",
+        route->metric));
 
     auto it = g_loopback_cb_map.find(dst);
     if (it == g_loopback_cb_map.end())
@@ -1466,18 +1456,20 @@ static void addDelListOspfCb(netlink_event_t event,
 
     if (entry.prefixes.empty())
     {
-        std::println("[add-del-list] [OSPF/32] no prefixes for '{}' — "
-                     "skipping ROUTE_ADD",
-                     dst);
+        rtsrv::log::info(std::format(
+            "[add-del-list] [OSPF/32] no prefixes for '{}' — "
+            "skipping ROUTE_ADD",
+            dst));
         return;
     }
 
-    std::println("[add-del-list] [OSPF/32] {} loopback='{}' (hostname='{}')"
-                 " nhid={} — sending ROUTE_ADD",
-                 evLabel,
-                 dst,
-                 entry.hostname,
-                 route->nhid);
+    rtsrv::log::info(std::format(
+        "[add-del-list] [OSPF/32] {} loopback='{}' (hostname='{}') nhid={} — "
+        "sending ROUTE_ADD",
+        evLabel,
+        dst,
+        entry.hostname,
+        route->nhid));
 
     // Build nexthop address bytes from the loopback IP (dst).
     struct in_addr nhAddr
@@ -1499,11 +1491,12 @@ static void addDelListOspfCb(netlink_event_t event,
     req.vrfs_name = "RemainLoopbaks";
     req.interfaces.push_back(std::move(iface));
 
-    std::println("[add-del-list] [OSPF/32] submitting ROUTE_ADD for '{}'"
-                 " nhid={} prefixes={}",
-                 dst,
-                 route->nhid,
-                 req.interfaces[0].prefixes.size());
+    rtsrv::log::info(std::format(
+        "[add-del-list] [OSPF/32] submitting ROUTE_ADD for '{}' nhid={} "
+        "prefixes={}",
+        dst,
+        route->nhid,
+        req.interfaces[0].prefixes.size()));
 
     if (ctx->redisRib && ctx->redisRib->connected())
     {
@@ -1544,7 +1537,8 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                            sra::UdpTableServer& udpServer)
 {
     // ── Step 1: Read existing kernel /32 OSPF routes ─────────────────────
-    std::println("[Watch] Reading /32 OSPF routes from kernel routing table…");
+    rtsrv::log::info(
+        "[Watch] Reading /32 OSPF routes from kernel routing table...");
 
     WatchCtx ctx{&client, {}, configLoopback, &udpServer};
 
@@ -1606,29 +1600,28 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                 }
                 else
                 {
-                    std::println(std::cerr,
-                                 "[Startup]   AddRoute {} failed: {}",
-                                 kr.destination,
-                                 result.error());
+                    rtsrv::log::err(std::format(
+                        "[Startup]   AddRoute {} failed: {}",
+                        kr.destination,
+                        result.error()));
                 }
                 ctx.routes[kr.destination] = std::move(wr);
                 ++found;
             }
-            std::println("[Startup] Found {} /32 OSPF route(s) in kernel.",
-                         found);
+            rtsrv::log::info(std::format(
+                "[Startup] Found {} /32 OSPF route(s) in kernel.", found));
         }
         else
         {
-            std::println(std::cerr,
-                         "[Startup] Warning: could not read kernel routes: {}",
-                         routesResult.error());
+            rtsrv::log::warn(std::format(
+                "[Startup] could not read kernel routes: {}",
+                routesResult.error()));
         }
     }
     catch (const std::exception& e)
     {
-        std::println(std::cerr,
-                     "[Startup] Warning: RoutingManager init failed: {}",
-                     e.what());
+        rtsrv::log::warn(std::format(
+            "[Startup] RoutingManager init failed: {}", e.what()));
     }
 
     // ── Step 1b: Dump kernel nexthop table for nhid resolution ───────────
@@ -1651,70 +1644,73 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     udpServer.setRouteData(serializeRouteTable(ctx.routes));
 
     // ── Step 3: Request loopback from server ─────────────────────────────
-    std::println("\n[Startup] Requesting loopback from server…");
+    rtsrv::log::info("[Startup] Requesting loopback from server...");
     auto lbResult = client.requestLoopback();
     if (lbResult)
     {
         ctx.loopback = *lbResult;
-        std::println("[Startup] Loopback from server: '{}'", ctx.loopback);
+        rtsrv::log::info(std::format("[Startup] Loopback from server: '{}'",
+                                     ctx.loopback));
     }
     else
     {
-        std::println("[Startup] No loopback from server ({}); "
-                     "using config loopback: '{}'",
-                     lbResult.error(),
-                     ctx.loopback);
+        rtsrv::log::info(std::format(
+            "[Startup] No loopback from server ({}); using config loopback: '{}'",
+            lbResult.error(),
+            ctx.loopback));
     }
 
     // ── Step 3b: GetLoopbacks then GetAllRoutes ───────────────────────────
     if (!ctx.loopback.empty())
     {
-        std::println("[Startup] GetLoopbacks for loopback '{}'…", ctx.loopback);
+        rtsrv::log::info(std::format(
+            "[Startup] GetLoopbacks for loopback '{}'...", ctx.loopback));
         auto glResult = client.getLoopbacks(ctx.loopback);
         if (glResult)
         {
-            std::println("[Startup] GetLoopbacks: {} — {} interface(s)",
-                         glResult->message(),
-                         glResult->interfaces_size());
+            rtsrv::log::info(std::format(
+                "[Startup] GetLoopbacks: {} — {} interface(s)",
+                glResult->message(),
+                glResult->interfaces_size()));
         }
         else
         {
-            std::println("[Startup] GetLoopbacks failed: {}", glResult.error());
+            rtsrv::log::warn(std::format("[Startup] GetLoopbacks failed: {}",
+                                         glResult.error()));
         }
 
-        std::println("[Startup] GetAllRoutes…");
+        rtsrv::log::info("[Startup] GetAllRoutes...");
         auto arResult = client.getAllRoutes();
-        if (arResult)
+        if (!arResult)
         {
-            printAllRoutes(*arResult);
-        }
-        else
-        {
-            std::println("[Startup] GetAllRoutes failed: {}", arResult.error());
+            rtsrv::log::warn(std::format("[Startup] GetAllRoutes failed: {}",
+                                         arResult.error()));
         }
     }
 
     // ── Step 3c: GetRemainingLoopbacks → populate global loopback map ────
     {
-        std::println("[Watch] fetching remaining nodes for loopback map…");
+        rtsrv::log::info(
+            "[Watch] fetching remaining nodes for loopback map...");
         auto rnResult = client.getRemainingNodes();
         if (!rnResult)
         {
-            std::println("[Watch] GetRemainingNodes failed: {}",
-                         rnResult.error());
+            rtsrv::log::warn(std::format("[Watch] GetRemainingNodes failed: {}",
+                                         rnResult.error()));
         }
         else
         {
-            std::println("[Watch] remaining nodes: {}", rnResult->nodes_size());
+            rtsrv::log::info(std::format("[Watch] remaining nodes: {}",
+                                         rnResult->nodes_size()));
             for (const auto& node : rnResult->nodes())
             {
                 auto nodeGl = client.getLoopbacksByNodeIp(node.management_ip());
                 if (!nodeGl)
                 {
-                    std::println(
+                    rtsrv::log::warn(std::format(
                         "[Watch]   GetLoopbacksByNodeIp '{}' failed: {}",
                         node.management_ip(),
-                        nodeGl.error());
+                        nodeGl.error()));
                     continue;
                 }
                 LoopbackCbEntry cbEntry;
@@ -1751,12 +1747,13 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                         break;
                     }
                 }
-                std::println("[Watch] global map: loopback='{}' hostname='{}'"
-                             " prefixes={} initial_nhid={}",
-                             loopback,
-                             cbEntry.hostname,
-                             cbEntry.prefixes.size(),
-                             cbEntry.last_nhid);
+                rtsrv::log::info(std::format(
+                    "[Watch] global map: loopback='{}' hostname='{}'"
+                    " prefixes={} initial_nhid={}",
+                    loopback,
+                    cbEntry.hostname,
+                    cbEntry.prefixes.size(),
+                    cbEntry.last_nhid));
                 g_loopback_cb_map[loopback] = std::move(cbEntry);
             }
         }
@@ -1766,7 +1763,7 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     sra::SraUdpClient watchSraClient("/tmp/ud_server.sock");
     watchSraClient.start();
     ctx.sraClient = &watchSraClient;
-    std::println("[Watch] SraUdpClient started (/tmp/ud_server.sock)");
+    rtsrv::log::info("[Watch] SraUdpClient started (/tmp/ud_server.sock)");
 
     // ── Step 4: Start monitoring ──────────────────────────────────────────
     /* Install signal handlers. */
@@ -1780,23 +1777,23 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
     int fd = netlink_init();
     if (fd < 0)
     {
-        std::println(std::cerr,
-                     "[Monitor] Error: netlink_init failed: {}",
-                     std::strerror(errno));
+        rtsrv::log::err(std::format("[Monitor] netlink_init failed: {}",
+                                    std::strerror(errno)));
         watchSraClient.stop();
         return EXIT_FAILURE;
     }
     g_watch_fd = fd;
 
-    std::println("\n[Monitor] Watching for IPv4 /32 OSPF route events"
-                 " → forwarding to srmd …");
+    rtsrv::log::info(
+        "[Monitor] Watching for IPv4 /32 OSPF route events — forwarding to "
+        "srmd...");
     if (!ctx.loopback.empty())
     {
-        std::println("[Monitor] Loopback {} → GetLoopbacks on each OSPF ADDED"
-                     " event",
-                     ctx.loopback);
+        rtsrv::log::info(std::format(
+            "[Monitor] Loopback {} — GetLoopbacks on each OSPF ADDED event",
+            ctx.loopback));
     }
-    std::println("[Monitor] (Ctrl-C to stop)\n");
+    rtsrv::log::info("[Monitor] running (Ctrl-C to stop)");
     std::cout.flush();
 
     netlink_run(fd, nlWatchCb, &ctx);
@@ -1805,7 +1802,7 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
 
     watchSraClient.stop();
 
-    std::println("\n[Monitor] Stopped.");
+    rtsrv::log::info("[Monitor] Stopped.");
     return EXIT_SUCCESS;
 }
 
@@ -2206,19 +2203,18 @@ static void nlNeighCb(netlink_neigh_event_t event,
     const char* evLabel = (event == NETLINK_NEIGH_ADDED)     ? "ADDED"
                           : (event == NETLINK_NEIGH_REMOVED) ? "REMOVED"
                                                              : "CHANGED";
-    std::println("[Neighbors] {} {} on {} (state={})",
-                 evLabel,
-                 n->dst[0] ? n->dst : "(no dst)",
-                 n->ifname[0] ? n->ifname : std::to_string(n->ifindex).c_str(),
-                 nudStateLabel(n->state));
+    rtsrv::log::info(std::format(
+        "[Neighbors] {} {} on {} (state={})",
+        evLabel,
+        n->dst[0] ? n->dst : "(no dst)",
+        n->ifname[0] ? n->ifname : std::to_string(n->ifindex).c_str(),
+        nudStateLabel(n->state)));
 
     nlNeighUpdate(event, n, ctx);
 
     /* Publish updated snapshot to UDP subscribers (port 9001). */
     if (ctx->udpServer)
         ctx->udpServer->setNeighborData(serializeNeighborTable(ctx->neighbors));
-
-    std::cout.flush();
 }
 
 /* File-scope fd used by the neighbor signal handler. */
@@ -2264,16 +2260,15 @@ static void neighSigHandler(int /*signo*/)
  */
 static int cmdWatchNeighbors(sra::UdpTableServer& udpServer)
 {
-    std::println("[Neighbors] Opening netlink neighbor monitor…");
-    std::println("[Neighbors] Table available via UDP port {}",
-                 sra::UDP_PORT_NEIGHBORS);
+    rtsrv::log::info("[Neighbors] Opening netlink neighbor monitor...");
+    rtsrv::log::info(std::format("[Neighbors] Table available via UDP port {}",
+                                 sra::UDP_PORT_NEIGHBORS));
 
     int fd = netlink_neigh_init();
     if (fd < 0)
     {
-        std::println(std::cerr,
-                     "[Neighbors] Error: netlink_neigh_init failed: {}",
-                     std::strerror(errno));
+        rtsrv::log::err(std::format("[Neighbors] netlink_neigh_init failed: {}",
+                                    std::strerror(errno)));
         return EXIT_FAILURE;
     }
     g_neigh_fd = fd;
@@ -2286,34 +2281,33 @@ static int cmdWatchNeighbors(sra::UdpTableServer& udpServer)
     sigaction(SIGTERM, &sa, nullptr);
 
     // ── Step 1: Read the current neighbor table from the kernel ──────────
-    std::println("[Neighbors] Reading neighbor table from kernel…");
+    rtsrv::log::info("[Neighbors] Reading neighbor table from kernel...");
     NeighCtx ctx;
     ctx.udpServer = &udpServer;
     const int dumped = netlink_neigh_dump(fd, nlNeighPopulateCb, &ctx);
     if (dumped < 0)
     {
-        std::println(std::cerr,
-                     "[Neighbors] Warning: initial read failed: {}",
-                     std::strerror(errno));
+        rtsrv::log::warn(std::format("[Neighbors] initial read failed: {}",
+                                     std::strerror(errno)));
     }
     else
     {
-        std::println("[Neighbors] Read complete: {} entry/entries.", dumped);
+        rtsrv::log::info(std::format("[Neighbors] Read complete: {} entry/entries.",
+                                     dumped));
     }
 
     // ── Step 2: Publish initial snapshot via UDP ─────────────────────────
     udpServer.setNeighborData(serializeNeighborTable(ctx.neighbors));
 
     // ── Enter live-event loop ─────────────────────────────────────────────
-    std::println("\n[Neighbors] Watching for kernel neighbor events…");
-    std::println("[Neighbors] (Ctrl-C to stop)\n");
-    std::cout.flush();
+    rtsrv::log::info("[Neighbors] Watching for kernel neighbor events...");
+    rtsrv::log::info("[Neighbors] running (Ctrl-C to stop)");
 
     netlink_neigh_run(fd, nlNeighCb, &ctx);
 
     netlink_neigh_close(g_neigh_fd);
 
-    std::println("\n[Neighbors] Stopped.");
+    rtsrv::log::info("[Neighbors] Stopped.");
     return EXIT_SUCCESS;
 }
 
@@ -2700,20 +2694,18 @@ static void nlNexthopCb(netlink_nexthop_event_t event,
     const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)     ? "ADDED"
                           : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
                                                                : "CHANGED";
-    std::println("[Nexthops] {} id={} gw={} oif={}",
-                 evLabel,
-                 nh->id,
-                 nh->gateway[0] ? nh->gateway : "-",
-                 nh->oif_name[0] ? nh->oif_name
-                                 : std::to_string(nh->oif).c_str());
+    rtsrv::log::info(std::format(
+        "[Nexthops] {} id={} gw={} oif={}",
+        evLabel,
+        nh->id,
+        nh->gateway[0] ? nh->gateway : "-",
+        nh->oif_name[0] ? nh->oif_name : std::to_string(nh->oif).c_str()));
 
     nlNexthopUpdate(event, nh, ctx);
 
     /* Publish updated snapshot to UDP subscribers (port 9002). */
     if (ctx->udpServer)
         ctx->udpServer->setNexthopData(serializeNexthopTable(ctx->nexthops));
-
-    std::cout.flush();
 }
 
 /* File-scope fd used by the nexthop signal handler. */
@@ -2759,16 +2751,16 @@ static void nexthopSigHandler(int /*signo*/)
  */
 static int cmdWatchNexthops(sra::UdpTableServer& udpServer)
 {
-    std::println("[Nexthops] Opening netlink nexthop monitor…");
-    std::println("[Nexthops] Table available via UDP port {}",
-                 sra::UDP_PORT_NEXTHOPS);
+    rtsrv::log::info("[Nexthops] Opening netlink nexthop monitor...");
+    rtsrv::log::info(std::format("[Nexthops] Table available via UDP port {}",
+                                 sra::UDP_PORT_NEXTHOPS));
 
     int fd = netlink_nexthop_init();
     if (fd < 0)
     {
-        std::println(std::cerr,
-                     "[Nexthops] Error: netlink_nexthop_init failed: {}",
-                     std::strerror(errno));
+        rtsrv::log::err(std::format(
+            "[Nexthops] netlink_nexthop_init failed: {}",
+            std::strerror(errno)));
         return EXIT_FAILURE;
     }
     g_nexthop_fd = fd;
@@ -2781,35 +2773,35 @@ static int cmdWatchNexthops(sra::UdpTableServer& udpServer)
     sigaction(SIGTERM, &sa, nullptr);
 
     // ── Step 1: Read all nexthop objects from the kernel ─────────────────
-    std::println("[Nexthops] Reading nexthop objects from kernel…");
+    rtsrv::log::info("[Nexthops] Reading nexthop objects from kernel...");
     NexthopCtx ctx;
     ctx.udpServer = &udpServer;
     const int dumped = netlink_nexthop_dump(fd, nlNexthopPopulateCb, &ctx);
     if (dumped < 0)
     {
-        std::println(std::cerr,
-                     "[Nexthops] Warning: dump failed: {} "
-                     "(kernel may not support nexthop objects; requires 5.3+)",
-                     std::strerror(errno));
+        rtsrv::log::warn(std::format(
+            "[Nexthops] dump failed: {} "
+            "(kernel may not support nexthop objects; requires 5.3+)",
+            std::strerror(errno)));
     }
     else
     {
-        std::println("[Nexthops] Read complete: {} object(s).", dumped);
+        rtsrv::log::info(std::format("[Nexthops] Read complete: {} object(s).",
+                                     dumped));
     }
 
     // ── Step 2: Publish initial snapshot via UDP ──────────────────────────
     udpServer.setNexthopData(serializeNexthopTable(ctx.nexthops));
 
     // ── Step 3: Watch for live nexthop events ────────────────────────────
-    std::println("\n[Nexthops] Watching for kernel nexthop events…");
-    std::println("[Nexthops] (Ctrl-C to stop)\n");
-    std::cout.flush();
+    rtsrv::log::info("[Nexthops] Watching for kernel nexthop events...");
+    rtsrv::log::info("[Nexthops] running (Ctrl-C to stop)");
 
     netlink_nexthop_run(fd, nlNexthopCb, &ctx);
 
     netlink_nexthop_close(g_nexthop_fd);
 
-    std::println("\n[Nexthops] Stopped.");
+    rtsrv::log::info("[Nexthops] Stopped.");
     return EXIT_SUCCESS;
 }
 
@@ -2855,7 +2847,7 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    std::println("grpc-proc-demo: running (Ctrl-C to stop)");
+    rtsrv::log::info("[grpc-proc-demo] running (Ctrl-C to stop)");
 
     // ── Shared intermediate request queue ────────────────────────────────
     DemoRequestQueue demoQueue;
@@ -2871,8 +2863,8 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
                 std::lock_guard<std::mutex> lock(demoQueue.mutex);
                 demoQueue.items.push(sra::GetLoopbackParams{});
                 ++seq;
-                std::println("  [producer] Enqueued GetLoopback request #{}",
-                             seq);
+                rtsrv::log::info(std::format(
+                    "[grpc-proc-demo] Enqueued GetLoopback request #{}", seq));
             }
             demoQueue.cv.notify_one();
 
@@ -2887,7 +2879,7 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
 
     // ── Start the grpc_proc thread ────────────────────────────────────────
     sra::GrpcProc proc(client, /*autoStart=*/true);
-    std::println("  grpc_proc thread started.");
+    rtsrv::log::info("[grpc-proc-demo] grpc_proc thread started.");
 
     // IDs of requests submitted to GrpcProc but not yet retrieved.
     std::vector<uint64_t> inFlight;
@@ -2909,7 +2901,8 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
 
                 const uint64_t id = proc.submit(std::move(payload));
                 inFlight.push_back(id);
-                std::println("  [main] Submitted request id={}", id);
+                rtsrv::log::info(std::format(
+                    "[grpc-proc-demo] Submitted request id={}", id));
 
                 lock.lock(); // re-acquire before checking queue again
             }
@@ -2930,14 +2923,15 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
                         {
                             if (result)
                             {
-                                std::println(
-                                    "  [main] GetLoopback OK  → \"{}\"",
-                                    *result);
+                                rtsrv::log::info(std::format(
+                                    "[grpc-proc-demo] GetLoopback OK: \"{}\"",
+                                    *result));
                             }
                             else
                             {
-                                std::println("  [main] GetLoopback ERR → {}",
-                                             result.error());
+                                rtsrv::log::warn(std::format(
+                                    "[grpc-proc-demo] GetLoopback ERR: {}",
+                                    result.error()));
                             }
                         }
                     },
@@ -2959,7 +2953,7 @@ static int cmdGrpcProcDemo(sra::RouteClient& client)
     producer.join();
     proc.stop();
 
-    std::println("\ngrpc-proc-demo: stopped.");
+    rtsrv::log::info("[grpc-proc-demo] stopped.");
     return EXIT_SUCCESS;
 }
 
@@ -3155,10 +3149,8 @@ static void sendIcmpEchoRequest(const std::string& destIp)
     int sock = ::socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sock < 0)
     {
-        std::println(std::cerr,
-                     "[ICMP] socket() failed for {}: {}",
-                     destIp,
-                     ::strerror(errno));
+        rtsrv::log::warn(std::format("[ICMP] socket() failed for {}: {}",
+                                     destIp, ::strerror(errno)));
         return;
     }
 
@@ -3182,15 +3174,13 @@ static void sendIcmpEchoRequest(const std::string& destIp)
                  reinterpret_cast<const sockaddr*>(&dst),
                  sizeof(dst)) < 0)
     {
-        std::println(std::cerr,
-                     "[ICMP] sendto() to {} failed: {}",
-                     destIp,
-                     ::strerror(errno));
+        rtsrv::log::warn(std::format("[ICMP] sendto() to {} failed: {}",
+                                     destIp, ::strerror(errno)));
     }
     else
     {
-        std::println("[ICMP] sent echo request to {} to probe adjacency",
-                     destIp);
+        rtsrv::log::info(std::format(
+            "[ICMP] sent echo request to {} to probe adjacency", destIp));
     }
     ::close(sock);
 }
@@ -3227,10 +3217,9 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
 
     if (!vrfTable->hasNexthop(gateway))
     {
-        std::println(
+        rtsrv::log::info(std::format(
             "[Nexthops] nexthop id={} gw={} not found in VRF table — skip",
-            nh->id,
-            gateway);
+            nh->id, gateway));
         return;
     }
 
@@ -3239,28 +3228,26 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
     // would fail silently and serves no useful purpose here.
     if (neighCtx && neighborHasIp(*neighCtx, gateway))
     {
-        std::println("[Nexthops] nexthop gw={} id={} in adjacency table — "
-                     "sending ICMP echo request",
-                     gateway,
-                     nh->id);
+        rtsrv::log::info(std::format(
+            "[Nexthops] nexthop gw={} id={} in adjacency table — "
+            "sending ICMP echo request",
+            gateway, nh->id));
         sendIcmpEchoRequest(gateway);
     }
 
     const auto routes = vrfTable->findByNexthop(gateway);
-    std::println("[Nexthops] nexthop id={} gw={} matched {} entry/entries; "
-                 "generating SingleRouteRequest (SINGLE_ROUTE, type=1)",
-                 nh->id,
-                 gateway,
-                 routes.size());
+    rtsrv::log::info(std::format(
+        "[Nexthops] nexthop id={} gw={} matched {} entry/entries; "
+        "generating SingleRouteRequest (SINGLE_ROUTE, type=1)",
+        nh->id, gateway, routes.size()));
 
     // Parse gateway to binary (network byte order).
     struct in_addr nhAddr
     {};
     if (::inet_pton(AF_INET, gateway.c_str(), &nhAddr) != 1)
     {
-        std::println(std::cerr,
-                     "[Nexthops] invalid gateway address '{}' — skip",
-                     gateway);
+        rtsrv::log::warn(std::format(
+            "[Nexthops] invalid gateway address '{}' — skip", gateway));
         return;
     }
     const auto* nhBytes = reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
@@ -3311,29 +3298,25 @@ static void sendVrfRouteForNexthop(const netlink_nexthop_t* nh,
                 {pfxBytes[0], pfxBytes[1], pfxBytes[2], pfxBytes[3]}, maskLen});
         }
 
-        std::println("[Nexthops]   iface='{}' nexthop='{}' "
-                     "nexthop_id={} prefixes={}",
-                     route.interface_name(),
-                     gateway,
-                     nh->id,
-                     iface.prefixes.size());
+        rtsrv::log::info(std::format(
+            "[Nexthops]   iface='{}' nexthop='{}' nexthop_id={} prefixes={}",
+            route.interface_name(), gateway, nh->id, iface.prefixes.size()));
 
         req.interfaces.push_back(std::move(iface));
     }
 
     if (req.interfaces.empty())
     {
-        std::println("[Nexthops] no nni entries for nexthop gw={} id={} — skip",
-                     gateway,
-                     nh->id);
+        rtsrv::log::info(std::format(
+            "[Nexthops] no nni entries for nexthop gw={} id={} — skip",
+            gateway, nh->id));
         return;
     }
 
-    std::println("[Nexthops] submitting SingleRouteRequest "
-                 "({} interface(s)) to ud_server for nexthop gw={} id={}",
-                 req.interfaces.size(),
-                 gateway,
-                 nh->id);
+    rtsrv::log::info(std::format(
+        "[Nexthops] submitting SingleRouteRequest ({} interface(s)) "
+        "to ud_server for nexthop gw={} id={}",
+        req.interfaces.size(), gateway, nh->id));
 
     vrfClient->submitAdd(std::move(req));
 }
@@ -3355,12 +3338,12 @@ static void startupNexthopLiveCb(netlink_nexthop_event_t event,
     const char* evLabel = (event == NETLINK_NEXTHOP_ADDED)     ? "ADDED"
                           : (event == NETLINK_NEXTHOP_REMOVED) ? "REMOVED"
                                                                : "CHANGED";
-    std::println("[Nexthops] {} id={} gw={} oif={} — checking VRF table",
-                 evLabel,
-                 nh->id,
-                 nh->gateway[0] ? nh->gateway : "-",
-                 nh->oif_name[0] ? nh->oif_name
-                                 : std::to_string(nh->oif).c_str());
+    rtsrv::log::info(std::format(
+        "[Nexthops] {} id={} gw={} oif={} — checking VRF table",
+        evLabel,
+        nh->id,
+        nh->gateway[0] ? nh->gateway : "-",
+        nh->oif_name[0] ? nh->oif_name : std::to_string(nh->oif).c_str()));
 
     // Update in-memory nexthop table first so ctx->nexthops is current.
     nlNexthopUpdate(event, nh, ctx);
@@ -3426,8 +3409,8 @@ int main(int argc, char* argv[])
         early.app_name               = "sra";
         early.facility               = rtsrv::log::Facility::User;
         early.min_severity           = rtsrv::log::Severity::Debug;
-        early.console.enabled        = true;
-        early.console.human_readable = true;
+        early.console.enabled = true;
+        // human_readable defaults to false → RFC 5424 format from the start.
         if (auto r = rtsrv::log::init(early); !r)
             std::fprintf(stderr, "[sra] early log init failed: %s\n",
                          r.error().c_str());
@@ -3501,7 +3484,8 @@ int main(int argc, char* argv[])
     }
     catch (const po::error& ex)
     {
-        std::cerr << "Error: " << ex.what() << "\n\n" << global << '\n';
+        rtsrv::log::err(std::format("command-line error: {}", ex.what()));
+        std::cerr << global << '\n';
         return EXIT_FAILURE;
     }
 
@@ -3543,14 +3527,12 @@ int main(int argc, char* argv[])
         cfg.app_name               = "sra";
         cfg.facility               = rtsrv::log::Facility::User;
         cfg.min_severity           = sev;
-        cfg.file.enabled           = true;
-        cfg.file.path              = timestampedPath;
-        cfg.file.human_readable    = true;
+        cfg.file.enabled = true;
+        cfg.file.path    = timestampedPath;
+        // human_readable defaults to false → RFC 5424 wire format in file.
         if (extraStream == "stderr" || extraStream == "stdout")
-        {
-            cfg.console.enabled        = true;
-            cfg.console.human_readable = true;
-        }
+            cfg.console.enabled = true;
+        // human_readable defaults to false → RFC 5424 wire format on console.
         if (auto r = rtsrv::log::init(cfg); !r)
             std::fprintf(stderr, "[sra] log init failed: %s\n",
                          r.error().c_str());
@@ -3645,11 +3627,10 @@ int main(int argc, char* argv[])
         else
         {
             // Non-fatal: warn and continue with defaults
-            std::println(std::cerr,
-                         "Warning: could not load config '{}': {} "
-                         "(using defaults)",
-                         configPath,
-                         cfgResult.error());
+            rtsrv::log::warn(std::format(
+                "could not load config '{}': {} (using defaults)",
+                configPath,
+                cfgResult.error()));
         }
     }
 
@@ -3688,25 +3669,24 @@ int main(int argc, char* argv[])
     {
         if (sotPath.empty())
         {
-            std::println(std::cerr, "Error: 'sync' requires --sot <path>");
+            rtsrv::log::err("'sync' requires --sot <path>");
             return EXIT_FAILURE;
         }
 
         // Parse the SOT file first – no network connections yet
-        std::println("sra  build #{}  Parsing SOT: {}",
-                     rtsrv::build::kBuildNumber,
-                     sotPath);
+        rtsrv::log::info(std::format("sra  build #{}  Parsing SOT: {}",
+                                     rtsrv::build::kBuildNumber,
+                                     sotPath));
 
         auto sotResult = sra::loadSotConfig(sotPath);
         if (!sotResult)
         {
-            std::println(
-                std::cerr, "Error loading SOT config: {}", sotResult.error());
+            rtsrv::log::err(
+                std::format("Error loading SOT config: {}", sotResult.error()));
             return EXIT_FAILURE;
         }
 
-        // Print what was loaded so the operator can verify before pushing
-        printSotSummary(*sotResult);
+        logSotSummary(*sotResult);
 
         // Multi-server sync via switch_config.json
         if (!switchesPath.empty())
@@ -3714,9 +3694,8 @@ int main(int argc, char* argv[])
             auto cfgResult = sra::loadSwitchConfig(switchesPath);
             if (!cfgResult)
             {
-                std::println(std::cerr,
-                             "Error loading switch config: {}",
-                             cfgResult.error());
+                rtsrv::log::err(std::format("Error loading switch config: {}",
+                                            cfgResult.error()));
                 return EXIT_FAILURE;
             }
             return cmdSyncMulti(
@@ -3726,16 +3705,13 @@ int main(int argc, char* argv[])
         // Single-server sync: --server + --node-ip required
         if (nodeIp.empty())
         {
-            std::println(
-                std::cerr,
-                "Error: single-server sync requires --node-ip <management-ip>"
+            rtsrv::log::err(
+                "single-server sync requires --node-ip <management-ip>"
                 " (the key used in nodes_by_loopback)");
             return EXIT_FAILURE;
         }
 
-        std::println("\n{}", std::string(60, '='));
-        std::println("Switch : {}  node-ip={}", server, nodeIp);
-        std::println("{}", std::string(60, '='));
+        rtsrv::log::info(std::format("Switch: {}  node-ip={}", server, nodeIp));
 
         sra::RouteClient client(server, useTls, caCert, timeout);
         return syncOneServer(client, nodeIp, server, *sotResult);
@@ -3746,17 +3722,16 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     if (command == "test" && !switchesPath.empty())
     {
-        std::println("sra  build #{}  switches={}  tls={}",
-                     rtsrv::build::kBuildNumber,
-                     switchesPath,
-                     useTls);
+        rtsrv::log::info(std::format("sra  build #{}  switches={}  tls={}",
+                                     rtsrv::build::kBuildNumber,
+                                     switchesPath,
+                                     useTls));
 
         auto cfgResult = sra::loadSwitchConfig(switchesPath);
         if (!cfgResult)
         {
-            std::println(std::cerr,
-                         "Error loading switch config: {}",
-                         cfgResult.error());
+            rtsrv::log::err(std::format("Error loading switch config: {}",
+                                        cfgResult.error()));
             return EXIT_FAILURE;
         }
         return cmdMultiTest(*cfgResult, useTls, caCert, timeout);
@@ -3816,9 +3791,8 @@ int main(int argc, char* argv[])
     }
     catch (const std::exception& ex)
     {
-        std::println(std::cerr,
-                     "[Startup] Warning: RoutingManager init failed: {}",
-                     ex.what());
+        rtsrv::log::warn(std::format("[Startup] RoutingManager init failed: {}",
+                                     ex.what()));
     }
     startupUdpServer.setRouteData(serializeRouteTable(startupRouteCtx.routes));
 
@@ -3860,8 +3834,7 @@ int main(int argc, char* argv[])
     // ── Step 4: Start the UDP server (data is pre-populated) ─────────────
     if (!startupUdpServer.start())
     {
-        std::println(std::cerr,
-                     "[Startup] Warning: UDP table server failed to start");
+        rtsrv::log::warn("[Startup] UDP table server failed to start");
     }
 
     // ── Step 5: Open live monitoring fds ─────────────────────────────────
@@ -4000,10 +3973,10 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     // Single-server commands
     // -----------------------------------------------------------------------
-    std::println("sra  build #{}  server={}  tls={}",
-                 rtsrv::build::kBuildNumber,
-                 server,
-                 useTls);
+    rtsrv::log::info(std::format("sra  build #{}  server={}  tls={}",
+                                 rtsrv::build::kBuildNumber,
+                                 server,
+                                 useTls));
 
     sra::RouteClient client(server, useTls, caCert, timeout);
 
@@ -4016,23 +3989,25 @@ int main(int argc, char* argv[])
     if (command != "watch" && command != "neighbors" && command != "nexthops" &&
         command != "add-del-list")
     {
-        std::println(
+        rtsrv::log::info(
             "[Startup] Requesting loopback from server based on client IP...");
         auto lbResult = client.requestLoopback();
         if (lbResult)
         {
-            std::println("[Startup] Loopback received from server: '{}'",
-                         *lbResult);
+            rtsrv::log::info(std::format(
+                "[Startup] Loopback received from server: '{}'", *lbResult));
             activeLoopback = *lbResult;
         }
         else
         {
-            std::println("[Startup] No loopback from server ({}); "
-                         "falling back to config loopback: '{}'",
-                         lbResult.error(),
-                         activeLoopback);
+            rtsrv::log::warn(std::format(
+                "[Startup] No loopback from server ({}); "
+                "falling back to config loopback: '{}'",
+                lbResult.error(),
+                activeLoopback));
         }
-        std::println("[Startup] Active loopback set to: '{}'", activeLoopback);
+        rtsrv::log::info(std::format("[Startup] Active loopback set to: '{}'",
+                                     activeLoopback));
     }
 
     if (command == "test")
@@ -4046,7 +4021,7 @@ int main(int argc, char* argv[])
         auto result = client.echo(msg);
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("echo: {}", result.error()));
             return EXIT_FAILURE;
         }
         std::println("Echo response   : '{}'", result->message());
@@ -4060,9 +4035,8 @@ int main(int argc, char* argv[])
     {
         if (args.empty())
         {
-            std::println(std::cerr,
-                         "Usage: sra add <destination> [gateway] "
-                         "[interface] [metric]");
+            rtsrv::log::err(
+                "Usage: sra add <destination> [gateway] [interface] [metric]");
             return EXIT_FAILURE;
         }
         const std::string dest = args[0];
@@ -4074,7 +4048,7 @@ int main(int argc, char* argv[])
         auto result = client.addRoute(dest, gw, iface, metric);
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("add route: {}", result.error()));
             return EXIT_FAILURE;
         }
         std::println("Route added:");
@@ -4086,13 +4060,13 @@ int main(int argc, char* argv[])
     {
         if (args.empty())
         {
-            std::println(std::cerr, "Usage: sra remove <id>");
+            rtsrv::log::err("Usage: sra remove <id>");
             return EXIT_FAILURE;
         }
         auto result = client.removeRoute(args[0]);
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("remove route: {}", result.error()));
             return EXIT_FAILURE;
         }
         std::println("Route {} removed.", args[0]);
@@ -4103,13 +4077,13 @@ int main(int argc, char* argv[])
     {
         if (args.empty())
         {
-            std::println(std::cerr, "Usage: sra get <id>");
+            rtsrv::log::err("Usage: sra get <id>");
             return EXIT_FAILURE;
         }
         auto result = client.getRoute(args[0]);
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("get route: {}", result.error()));
             return EXIT_FAILURE;
         }
         printRoute(*result);
@@ -4123,7 +4097,7 @@ int main(int argc, char* argv[])
         auto result = client.listRoutes(activeOnly);
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("list routes: {}", result.error()));
             return EXIT_FAILURE;
         }
         std::println("{} route(s):", result->size());
@@ -4159,13 +4133,13 @@ int main(int argc, char* argv[])
     {
         if (args.empty())
         {
-            std::println(std::cerr, "Usage: sra set-loopback <address>");
+            rtsrv::log::err("Usage: sra set-loopback <address>");
             return EXIT_FAILURE;
         }
         auto result = client.setLoopback(args[0]);
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("set-loopback: {}", result.error()));
             return EXIT_FAILURE;
         }
         std::println("Loopback address set: {}", *result);
@@ -4177,7 +4151,7 @@ int main(int argc, char* argv[])
         auto result = client.getLoopback();
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("get-loopback: {}", result.error()));
             return EXIT_FAILURE;
         }
         std::println("Loopback address: {}",
@@ -4189,14 +4163,13 @@ int main(int argc, char* argv[])
     {
         if (args.empty())
         {
-            std::println(std::cerr,
-                         "Usage: sra get-loopbacks <loopback-address>");
+            rtsrv::log::err("Usage: sra get-loopbacks <loopback-address>");
             return EXIT_FAILURE;
         }
         auto result = client.getLoopbacks(args[0]);
         if (!result)
         {
-            std::println(std::cerr, "Error: {}", result.error());
+            rtsrv::log::err(std::format("get-loopbacks: {}", result.error()));
             return EXIT_FAILURE;
         }
         std::println("GetLoopbacks: {}", result->message());
@@ -4276,20 +4249,20 @@ int main(int argc, char* argv[])
             sigaction(SIGTERM, &sa, nullptr);
         }
 
-        std::println(
-            "[run] SRA daemon starting — server={} tls={}", server, useTls);
+        rtsrv::log::info(std::format(
+            "[run] SRA daemon starting — server={} tls={}", server, useTls));
 
         // ── Step 1: Start GrpcProc (non-blocking gRPC) ──────────────────────
         sra::GrpcProc grpcProc(client, /*autoStart=*/true);
-        std::println("[run] GrpcProc started (non-blocking gRPC thread)");
+        rtsrv::log::info("[run] GrpcProc started (non-blocking gRPC thread)");
 
         // ── Step 2: RequestLoopback ──────────────────────────────────────────
-        std::println("[run] [gRPC] Submitting RequestLoopback…");
+        rtsrv::log::info("[run] [gRPC] Submitting RequestLoopback...");
         const uint64_t lbId = grpcProc.submit(sra::RequestLoopbackParams{});
         auto lbResp = grpcProc.waitForResponse(lbId, std::chrono::seconds(30));
         if (!lbResp)
         {
-            std::println(std::cerr, "[run] RequestLoopback: timeout");
+            rtsrv::log::err("[run] RequestLoopback: timeout");
             return EXIT_FAILURE;
         }
 
@@ -4297,19 +4270,22 @@ int main(int argc, char* argv[])
             std::get<9>(lbResp->payload); // index 9 = RequestLoopbackResult
         if (!lbResult)
         {
-            std::println(std::cerr,
-                         "[run] RequestLoopback failed: {} — "
-                         "SRA IP not in SOT, closing gRPC connection",
-                         lbResult.error());
+            rtsrv::log::err(std::format(
+                "[run] RequestLoopback failed: {} — "
+                "SRA IP not in SOT, closing gRPC connection",
+                lbResult.error()));
             grpcProc.stop();
             return EXIT_FAILURE;
         }
 
         const std::string loopback = *lbResult;
-        std::println("[run] Loopback from SRMD: '{}'", loopback);
+        rtsrv::log::info(
+            std::format("[run] Loopback from SRMD: '{}'", loopback));
 
         // ── Step 3: GetLoopbacks ─────────────────────────────────────────────
-        std::println("[run] [gRPC] Submitting GetLoopbacks('{}')…", loopback);
+        rtsrv::log::info(
+            std::format("[run] [gRPC] Submitting GetLoopbacks('{}')...",
+                        loopback));
         const uint64_t glId =
             grpcProc.submit(sra::GetLoopbacksParams{loopback});
         auto glResp = grpcProc.waitForResponse(glId, std::chrono::seconds(30));
@@ -4319,59 +4295,62 @@ int main(int argc, char* argv[])
                 std::get<sra::GetLoopbacksResult>(glResp->payload);
             if (glResult)
             {
-                std::println("[run] GetLoopbacks: {} — {} interface(s)",
-                             glResult->message(),
-                             glResult->interfaces_size());
+                rtsrv::log::info(std::format(
+                    "[run] GetLoopbacks: {} — {} interface(s)",
+                    glResult->message(),
+                    glResult->interfaces_size()));
                 for (const auto& ifc : glResult->interfaces())
                 {
-                    std::println("[run]   iface='{}' type={} local={} "
-                                 "nexthop={} weight={}",
-                                 ifc.name(),
-                                 ifc.type(),
-                                 ifc.local_address(),
-                                 ifc.nexthop().empty() ? "(none)"
-                                                       : ifc.nexthop(),
-                                 ifc.weight());
+                    rtsrv::log::info(std::format(
+                        "[run]   iface='{}' type={} local={} "
+                        "nexthop={} weight={}",
+                        ifc.name(),
+                        ifc.type(),
+                        ifc.local_address(),
+                        ifc.nexthop().empty() ? "(none)" : ifc.nexthop(),
+                        ifc.weight()));
                     for (const auto& pfx : ifc.prefixes())
                     {
-                        std::println("[run]     prefix={} weight={} role={}",
-                                     pfx.prefix(),
-                                     pfx.weight(),
-                                     pfx.role());
+                        rtsrv::log::info(std::format(
+                            "[run]     prefix={} weight={} role={}",
+                            pfx.prefix(),
+                            pfx.weight(),
+                            pfx.role()));
                     }
                 }
             }
             else
             {
-                std::println("[run] GetLoopbacks failed: {}", glResult.error());
+                rtsrv::log::warn(std::format("[run] GetLoopbacks failed: {}",
+                                             glResult.error()));
             }
         }
 
         // ── Step 4: Log kernel tables (populated during startup) ─────────────
-        std::println("[run] Nexthop table : {} entry/entries",
-                     startupNhCtx.nexthops.size());
+        rtsrv::log::info(std::format("[run] Nexthop table : {} entry/entries",
+                                     startupNhCtx.nexthops.size()));
         for (const auto& [id, nh] : startupNhCtx.nexthops)
         {
-            std::println("[run]   nexthop id={} gw='{}' oif='{}' proto={}",
-                         id,
-                         nh.gateway.empty() ? "-" : nh.gateway,
-                         nh.oif_name.empty() ? std::to_string(nh.oif)
-                                             : nh.oif_name,
-                         static_cast<unsigned>(nh.protocol));
+            rtsrv::log::info(std::format(
+                "[run]   nexthop id={} gw='{}' oif='{}' proto={}",
+                id,
+                nh.gateway.empty() ? "-" : nh.gateway,
+                nh.oif_name.empty() ? std::to_string(nh.oif) : nh.oif_name,
+                static_cast<unsigned>(nh.protocol)));
         }
 
-        std::println("[run] Neighbor table: {} entry/entries",
-                     startupNeighCtx.neighbors.size());
-        std::println("[run] /32 route table: {} entry/entries",
-                     startupRouteCtx.routes.size());
+        rtsrv::log::info(std::format("[run] Neighbor table: {} entry/entries",
+                                     startupNeighCtx.neighbors.size()));
+        rtsrv::log::info(std::format("[run] /32 route table: {} entry/entries",
+                                     startupRouteCtx.routes.size()));
 
         // ── Step 5: GetAllRoutes ─────────────────────────────────────────────
-        std::println("[run] [gRPC] Submitting GetAllRoutes…");
+        rtsrv::log::info("[run] [gRPC] Submitting GetAllRoutes...");
         const uint64_t arId = grpcProc.submit(sra::GetAllRoutesParams{});
         auto arResp = grpcProc.waitForResponse(arId, std::chrono::seconds(30));
         if (!arResp)
         {
-            std::println(std::cerr, "[run] GetAllRoutes: timeout");
+            rtsrv::log::err("[run] GetAllRoutes: timeout");
             return EXIT_FAILURE;
         }
 
@@ -4379,8 +4358,8 @@ int main(int argc, char* argv[])
             std::get<sra::GetAllRoutesResult>(arResp->payload);
         if (!arResult)
         {
-            std::println(
-                std::cerr, "[run] GetAllRoutes failed: {}", arResult.error());
+            rtsrv::log::err(
+                std::format("[run] GetAllRoutes failed: {}", arResult.error()));
             return EXIT_FAILURE;
         }
 
@@ -4395,9 +4374,9 @@ int main(int argc, char* argv[])
 
         sra::SraUdpClient vrfClient(udSocketPath);
         vrfClient.start();
-        std::println(
+        rtsrv::log::info(std::format(
             "[run] SraUdpClient started (non-blocking Unix socket='{}')",
-            udSocketPath);
+            udSocketPath));
 
         // ── Load VRF table and arm the nexthop event handler ─────────────────
         // Future nexthop ADDED / CHANGED / REMOVED events will look up the
@@ -4408,9 +4387,10 @@ int main(int argc, char* argv[])
         startupNhCtx.vrfTable = &vrfTable;
         startupNhCtx.vrfClient = &vrfClient;
         startupNhCtx.neighCtx = &startupNeighCtx;
-        std::println("[run] VRF table loaded: {} entry/entries; "
-                     "nexthop event handler armed",
-                     vrfTable.size());
+        rtsrv::log::info(std::format(
+            "[run] VRF table loaded: {} entry/entries; "
+            "nexthop event handler armed",
+            vrfTable.size()));
 
         int nniCount = 0;
 
@@ -4420,9 +4400,10 @@ int main(int argc, char* argv[])
             // adjacency table (MAC known).
             if (neighborHasIp(startupNeighCtx, gateway))
             {
-                std::println("[run] nexthop '{}' in adjacency table — "
-                             "sending ICMP echo request",
-                             gateway);
+                rtsrv::log::info(std::format(
+                    "[run] nexthop '{}' in adjacency table — "
+                    "sending ICMP echo request",
+                    gateway));
                 sendIcmpEchoRequest(gateway);
             }
 
@@ -4442,9 +4423,8 @@ int main(int argc, char* argv[])
             {};
             if (::inet_pton(AF_INET, gateway.c_str(), &nhAddr) != 1)
             {
-                std::println(std::cerr,
-                             "[run] invalid nexthop address '{}' — skipping",
-                             gateway);
+                rtsrv::log::warn(std::format(
+                    "[run] invalid nexthop address '{}' — skipping", gateway));
                 continue;
             }
             const auto* nhBytes =
@@ -4497,12 +4477,13 @@ int main(int argc, char* argv[])
                         maskLen});
                 }
 
-                std::println("[run] nni interface: iface='{}' nexthop='{}' "
-                             "nexthop_id={} prefixes={}",
-                             route.interface_name(),
-                             gateway,
-                             nexthopId,
-                             iface.prefixes.size());
+                rtsrv::log::info(std::format(
+                    "[run] nni interface: iface='{}' nexthop='{}' "
+                    "nexthop_id={} prefixes={}",
+                    route.interface_name(),
+                    gateway,
+                    nexthopId,
+                    iface.prefixes.size()));
 
                 req.interfaces.push_back(std::move(iface));
                 ++nniCount;
@@ -4510,23 +4491,24 @@ int main(int argc, char* argv[])
 
             if (req.interfaces.empty())
             {
-                std::println("[run] nexthop '{}' has no nni interfaces — skip",
-                             gateway);
+                rtsrv::log::info(std::format(
+                    "[run] nexthop '{}' has no nni interfaces — skip",
+                    gateway));
                 continue;
             }
 
-            std::println(
+            rtsrv::log::info(std::format(
                 "[run] Submitting SingleRouteRequest ({} nni interface(s)) "
-                "for nexthop '{}' to Unix socket…",
+                "for nexthop '{}' to Unix socket...",
                 req.interfaces.size(),
-                gateway);
+                gateway));
             vrfClient.submitAdd(std::move(req));
         }
 
         if (nniCount == 0)
         {
-            std::println("[run] No nni interfaces found in GetAllRoutes "
-                         "response — no route-add request sent");
+            rtsrv::log::warn("[run] No nni interfaces found in GetAllRoutes "
+                             "response — no route-add request sent");
         }
 
         // ── Step 7: Main daemon loop
@@ -4534,13 +4516,13 @@ int main(int argc, char* argv[])
         // (routes, neighbors, nexthops) keep running and update the in-memory
         // tables automatically. The gRPC channel stays open via GrpcProc. The
         // SraUdpClient thread awaits further submit() calls.
-        std::println("[run] Daemon running (Ctrl-C to stop)…");
+        rtsrv::log::info("[run] Daemon running (Ctrl-C to stop)...");
         while (!g_run_stop)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        std::println("[run] Shutdown signal received — stopping");
+        rtsrv::log::info("[run] Shutdown signal received — stopping");
 
         // runSigHandler() already closed the fds and called
         // interruptBackgroundThreads().  The stopNetlinkFd calls below are
@@ -4583,7 +4565,8 @@ int main(int argc, char* argv[])
         const std::string socketPath =
             args.empty() ? "/tmp/ud_server.sock" : args[0];
 
-        std::println("[add-del-list] socket={} — starting", socketPath);
+        rtsrv::log::info(std::format("[add-del-list] socket={} — starting",
+                                     socketPath));
 
         // Install signal handler so CTRL+C triggers a clean shutdown instead
         // of leaving the process stuck in StartupGuard::~StartupGuard().
@@ -4600,45 +4583,46 @@ int main(int argc, char* argv[])
         vrfClient.start();
 
         // ── Step 1: RequestLoopback ──────────────────────────────────────────
-        std::println("[add-del-list] requesting loopback from srmd…");
+        rtsrv::log::info("[add-del-list] requesting loopback from srmd...");
         auto lbResult = client.requestLoopback();
         if (lbResult)
         {
-            std::println("[add-del-list] loopback from srmd: '{}'", *lbResult);
+            rtsrv::log::info(std::format(
+                "[add-del-list] loopback from srmd: '{}'", *lbResult));
             activeLoopback = *lbResult;
         }
         else
         {
-            std::println("[add-del-list] loopback from srmd: {} "
-                         "(using config: '{}')",
-                         lbResult.error(),
-                         activeLoopback);
+            rtsrv::log::info(std::format(
+                "[add-del-list] loopback from srmd: {} (using config: '{}')",
+                lbResult.error(),
+                activeLoopback));
         }
 
         if (activeLoopback.empty())
         {
-            std::println(std::cerr,
-                         "[add-del-list] no loopback available — "
-                         "cannot fetch prefixes");
+            rtsrv::log::err("[add-del-list] no loopback available — "
+                            "cannot fetch prefixes");
             vrfClient.stop();
             return EXIT_FAILURE;
         }
 
         // ── Step 2: GetLoopbacks ─────────────────────────────────────────────
-        std::println("[add-del-list] GetLoopbacks('{}')…", activeLoopback);
+        rtsrv::log::info(std::format(
+            "[add-del-list] GetLoopbacks('{}')...", activeLoopback));
         auto glResult = client.getLoopbacks(activeLoopback);
         if (!glResult)
         {
-            std::println(std::cerr,
-                         "[add-del-list] GetLoopbacks failed: {}",
-                         glResult.error());
+            rtsrv::log::err(std::format("[add-del-list] GetLoopbacks failed: {}",
+                                        glResult.error()));
             vrfClient.stop();
             return EXIT_FAILURE;
         }
 
-        std::println("[add-del-list] GetLoopbacks: {} — {} interface(s)",
-                     glResult->message(),
-                     glResult->interfaces_size());
+        rtsrv::log::info(std::format(
+            "[add-del-list] GetLoopbacks: {} — {} interface(s)",
+            glResult->message(),
+            glResult->interfaces_size()));
 
         // ── Nexthop adjacency check for Loopbacks ────────────────────────────
         // For each interface returned by GetLoopbacks, extract the nexthop IP.
@@ -4655,16 +4639,17 @@ int main(int argc, char* argv[])
                 continue;
             if (!neighborHasIp(startupNeighCtx, nh))
             {
-                std::println("[add-del-list] nexthop '{}' not in adjacency "
-                             "table — sending ICMP echo request",
-                             nh);
+                rtsrv::log::info(std::format(
+                    "[add-del-list] nexthop '{}' not in adjacency table — "
+                    "sending ICMP echo request",
+                    nh));
                 sendIcmpEchoRequest(nh);
             }
             else
             {
-                std::println("[add-del-list] nexthop '{}' already in "
-                             "adjacency table",
-                             nh);
+                rtsrv::log::info(std::format(
+                    "[add-del-list] nexthop '{}' already in adjacency table",
+                    nh));
             }
         }
 
@@ -4683,7 +4668,8 @@ int main(int argc, char* argv[])
                 }
             }
         }
-        std::println("[add-del-list] VRF name: '{}'", vrfsName);
+        rtsrv::log::info(
+            std::format("[add-del-list] VRF name: '{}'", vrfsName));
 
         // ── Step 3: Build SingleRouteRequest (nni interfaces only) ───────────
         cmdproto::SingleRouteRequest singleReq;
@@ -4697,9 +4683,8 @@ int main(int argc, char* argv[])
 
         sra::RedisRib redisRib;
         if (!redisRib.connected())
-            std::println(std::cerr,
-                         "[add-del-list] Redis not available — "
-                         "prefix entries will not be written");
+            rtsrv::log::warn("[add-del-list] Redis not available — "
+                             "prefix entries will not be written");
         else
             redisRib.clear();
 
@@ -4757,10 +4742,10 @@ int main(int argc, char* argv[])
                     if (auto r = netlink::add_nexthop(nhParams); r)
                     {
                         nhId = allocId;
-                        std::println(
+                        rtsrv::log::info(std::format(
                             "[add-del-list]   installed nexthop id={} gw='{}'",
                             nhId,
-                            li.nexthop());
+                            li.nexthop()));
                         // Cache in the in-memory table so other interfaces
                         // sharing the same gateway reuse this ID.
                         NexthopEntry poolEnt;
@@ -4771,22 +4756,20 @@ int main(int argc, char* argv[])
                     }
                     else
                     {
-                        std::println(
-                            std::cerr,
+                        rtsrv::log::err(std::format(
                             "[add-del-list]   add_nexthop id={} gw='{}' "
                             "failed: {}",
                             allocId,
                             li.nexthop(),
-                            r.error().message());
+                            r.error().message()));
                         nhPool.release(allocId);
                     }
                 }
                 else
                 {
-                    std::println(
-                        std::cerr,
+                    rtsrv::log::err(std::format(
                         "[add-del-list]   nexthop pool exhausted for gw='{}'",
-                        li.nexthop());
+                        li.nexthop()));
                 }
             }
 
@@ -4815,10 +4798,11 @@ int main(int argc, char* argv[])
                     redisRib.set(pfxStr, std::to_string(nhId));
             }
 
-            std::println("[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
-                         ifn,
-                         li.nexthop(),
-                         entry.prefixes.size());
+            rtsrv::log::info(std::format(
+                "[add-del-list]   iface='{}' nexthop='{}' prefixes={}",
+                ifn,
+                li.nexthop(),
+                entry.prefixes.size()));
 
             singleReq.interfaces.push_back(std::move(entry));
         }
@@ -4826,14 +4810,15 @@ int main(int argc, char* argv[])
         if (!singleReq.interfaces.empty())
         {
             // ── ROUTE_ADD ────────────────────────────────────────────────────
-            std::println("[add-del-list] [ADD] submitting {} interface(s)"
-                         " to ud_server…",
-                         singleReq.interfaces.size());
+            rtsrv::log::info(std::format(
+                "[add-del-list] [ADD] submitting {} interface(s) to ud_server...",
+                singleReq.interfaces.size()));
             auto savedInterfaces = singleReq.interfaces;
             vrfClient.submitAdd(std::move(singleReq));
 
             // ── ROUTE_DEL (one per prefix) ───────────────────────────────────
-            std::println("[add-del-list] [DEL] deleting each added prefix…");
+            rtsrv::log::info(
+                "[add-del-list] [DEL] deleting each added prefix...");
             for (const auto& iface : savedInterfaces)
             {
                 for (const auto& pfx : iface.prefixes)
@@ -4849,17 +4834,18 @@ int main(int argc, char* argv[])
             }
 
             // ── ROUTE_LIST ───────────────────────────────────────────────────
-            std::println("[add-del-list] [LIST] requesting route table…");
+            rtsrv::log::info("[add-del-list] [LIST] requesting route table...");
             vrfClient.submitList(vrfsName);
         }
         else
         {
-            std::println("[add-del-list] no interfaces to submit");
+            rtsrv::log::info("[add-del-list] no interfaces to submit");
         }
 
         // ── Step 4: List current OSPF /32 routes from kernel routing table ──
 
-        std::println("[add-del-list] reading OSPF /32 routes from kernel…");
+        rtsrv::log::info(
+            "[add-del-list] reading OSPF /32 routes from kernel...");
         // Declared here so its lifetime covers all uses of ospf32 (which stores
         // raw pointers into the vector elements).
         std::expected<std::vector<sra::KernelRoute>, std::string> routesResult;
@@ -4870,14 +4856,15 @@ int main(int argc, char* argv[])
         }
         catch (const std::exception& e)
         {
-            std::println("[add-del-list] RoutingManager exception: {}",
-                         e.what());
+            rtsrv::log::err(std::format(
+                "[add-del-list] RoutingManager exception: {}", e.what()));
         }
 
         if (!routesResult)
         {
-            std::println("[add-del-list] listRoutes (kernel) failed: {}",
-                         routesResult.error());
+            rtsrv::log::err(std::format(
+                "[add-del-list] listRoutes (kernel) failed: {}",
+                routesResult.error()));
         }
         else
         {
@@ -4888,7 +4875,8 @@ int main(int argc, char* argv[])
                     ospf32.push_back(&kr);
             }
 
-            std::println("[add-del-list] OSPF /32 routes: {}", ospf32.size());
+            rtsrv::log::info(std::format("[add-del-list] OSPF /32 routes: {}",
+                                         ospf32.size()));
 
             std::map<uint32_t, NexthopEntry> nhTable;
             {
@@ -4900,9 +4888,9 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    std::println(
-                        "[add-del-list] warning: netlink_nexthop_init "
-                        "failed, nhid-based routes will not be resolved");
+                    rtsrv::log::warn(
+                        "[add-del-list] netlink_nexthop_init failed, "
+                        "nhid-based routes will not be resolved");
                 }
             }
 
@@ -4911,16 +4899,15 @@ int main(int argc, char* argv[])
                 const bool isEcmp = kr->nexthops.size() > 1;
                 const bool isNhid = kr->nexthops.empty() && kr->nhid != 0;
 
-                std::println(
+                rtsrv::log::info(std::format(
                     "[add-del-list] dst={} id={} metric={} table={} "
-                    "proto=ospf"
-                    "  type={}",
+                    "proto=ospf  type={}",
                     kr->destination,
                     kr->nhid,
                     kr->metric,
                     kr->table,
                     isEcmp ? "ecmp"
-                           : (isNhid ? "single-path(nhid)" : "single-path"));
+                           : (isNhid ? "single-path(nhid)" : "single-path")));
 
                 if (isNhid)
                 {
@@ -4934,13 +4921,13 @@ int main(int argc, char* argv[])
                     {
                         for (const auto& nh : resolved)
                         {
-                            std::println(
-                                "\t\t\tnexthop: nhid={} gw={} iface={} "
-                                "iface_idx={}",
+                            rtsrv::log::info(std::format(
+                                "[add-del-list]   nexthop: nhid={} gw={} "
+                                "iface={} iface_idx={}",
                                 kr->nhid,
                                 nh.gateway,
                                 nh.dev,
-                                nh.ifindex);
+                                nh.ifindex));
                         }
                     }
                 }
@@ -4948,39 +4935,42 @@ int main(int argc, char* argv[])
                 {
                     for (const auto& nh : kr->nexthops)
                     {
-                        std::println("\t\t\tnexthop: nhid={} gw={} iface={} "
-                                     "iface_idx={} weight={}",
-                                     nh.hhid,
-                                     nh.gateway,
-                                     nh.interfaceName,
-                                     nh.interfaceIndex,
-                                     nh.weight);
+                        rtsrv::log::info(std::format(
+                            "[add-del-list]   nexthop: nhid={} gw={} iface={} "
+                            "iface_idx={} weight={}",
+                            nh.hhid,
+                            nh.gateway,
+                            nh.interfaceName,
+                            nh.interfaceIndex,
+                            nh.weight));
                     }
                 }
             }
         }
 
         // ── Step 5: GetRemainingLoopbacks ────────────────────────────────────
-        std::println("[add-del-list] fetching remaining nodes from srmd…");
+        rtsrv::log::info(
+            "[add-del-list] fetching remaining nodes from srmd...");
         auto rnResult = client.getRemainingNodes();
         if (!rnResult)
         {
-            std::println("[add-del-list] GetRemainingNodes failed: {}",
-                         rnResult.error());
+            rtsrv::log::warn(std::format(
+                "[add-del-list] GetRemainingNodes failed: {}",
+                rnResult.error()));
         }
         else
         {
-            std::println("[add-del-list] remaining nodes: {}",
-                         rnResult->nodes_size());
+            rtsrv::log::info(std::format("[add-del-list] remaining nodes: {}",
+                                         rnResult->nodes_size()));
             for (const auto& node : rnResult->nodes())
             {
-                std::println(
+                rtsrv::log::info(std::format(
                     "[add-del-list]   hostname='{}' management_ip='{}' "
                     "loopback_ipv4='{}' loopback_ipv6='{}'",
                     node.hostname(),
                     node.management_ip(),
                     node.loopback_ipv4(),
-                    node.loopback_ipv6());
+                    node.loopback_ipv6()));
             }
 
             // ── Step 6: For each remaining node fetch and log all prefixes ───
@@ -4988,28 +4978,30 @@ int main(int argc, char* argv[])
             {
                 const std::string& nodeIp = node.management_ip();
 
-                std::println("[add-del-list] GetLoopbacksByNodeIp: node='{}' "
-                             "node_ip='{}'…",
-                             node.hostname(),
-                             nodeIp);
+                rtsrv::log::info(std::format(
+                    "[add-del-list] GetLoopbacksByNodeIp: node='{}' "
+                    "node_ip='{}'...",
+                    node.hostname(),
+                    nodeIp));
                 auto nodeGl = client.getLoopbacksByNodeIp(nodeIp);
                 if (!nodeGl)
                 {
-                    std::println("[add-del-list]   failed: {}", nodeGl.error());
+                    rtsrv::log::warn(std::format("[add-del-list]   failed: {}",
+                                                 nodeGl.error()));
                     continue;
                 }
 
-                std::println("[add-del-list]   {} prefix(es):",
-                             nodeGl->prefixes_size());
+                rtsrv::log::info(std::format("[add-del-list]   {} prefix(es):",
+                                             nodeGl->prefixes_size()));
                 for (const auto& pfx : nodeGl->prefixes())
                 {
-                    std::println(
+                    rtsrv::log::info(std::format(
                         "[add-del-list]     prefix='{}' weight={} role='{}'"
                         " description='{}'",
                         pfx.prefix(),
                         pfx.weight(),
                         pfx.role(),
-                        pfx.description());
+                        pfx.description()));
                 }
 
                 // ── Save loopback data to global map for the OSPF callback ───
@@ -5044,13 +5036,13 @@ int main(int argc, char* argv[])
                             break;
                         }
                     }
-                    std::println(
+                    rtsrv::log::info(std::format(
                         "[add-del-list] global map: saved loopback='{}'"
                         " hostname='{}' prefixes={} initial_nhid={}",
                         node.loopback_ipv4(),
                         cbEntry.hostname,
                         cbEntry.prefixes.size(),
-                        cbEntry.last_nhid);
+                        cbEntry.last_nhid));
                     g_loopback_cb_map[node.loopback_ipv4()] =
                         std::move(cbEntry);
                 }
@@ -5075,21 +5067,20 @@ int main(int argc, char* argv[])
                         continue;
                     if (!neighborHasIp(startupNeighCtx, krGw))
                     {
-                        std::println(
+                        rtsrv::log::info(std::format(
                             "[add-del-list] nexthop '{}' for node '{}' "
-                            "not in adjacency table — sending ICMP echo "
-                            "request",
+                            "not in adjacency table — sending ICMP echo request",
                             krGw,
-                            node.hostname());
+                            node.hostname()));
                         sendIcmpEchoRequest(krGw);
                     }
                     else
                     {
-                        std::println(
+                        rtsrv::log::info(std::format(
                             "[add-del-list] nexthop '{}' for node '{}' "
                             "already in adjacency table",
                             krGw,
-                            node.hostname());
+                            node.hostname()));
                     }
                 }
 
@@ -5102,15 +5093,17 @@ int main(int argc, char* argv[])
         }
 
         // ── Step 8: OSPF /32 NetLink monitor (background thread) ────────────
-        std::println("[add-del-list] starting OSPF /32 netlink monitor…");
+        rtsrv::log::info(
+            "[add-del-list] starting OSPF /32 netlink monitor...");
         std::thread ospfNlThread;
         {
             const int nlFd = netlink_init();
             if (nlFd < 0)
             {
-                std::println("[add-del-list] netlink_init failed: {} — "
-                             "OSPF monitor disabled",
-                             std::strerror(errno));
+                rtsrv::log::warn(std::format(
+                    "[add-del-list] netlink_init failed: {} — "
+                    "OSPF monitor disabled",
+                    std::strerror(errno)));
             }
             else
             {
@@ -5121,20 +5114,21 @@ int main(int argc, char* argv[])
                     netlink_run(nlFd, addDelListOspfCb, &g_add_del_list_cb_ctx);
                 });
                 g_add_del_list_nl_tid = ospfNlThread.native_handle();
-                std::println("[add-del-list] OSPF /32 netlink monitor active "
-                             "(fd={})",
-                             nlFd);
+                rtsrv::log::info(std::format(
+                    "[add-del-list] OSPF /32 netlink monitor active (fd={})",
+                    nlFd));
             }
         }
 
         // Keep the process (and the SraUdpClient connection) alive until
         // CTRL+C so routes remain programmed in hardware.
-        std::println("[add-del-list] running — press Ctrl-C to stop");
+        rtsrv::log::info("[add-del-list] running — press Ctrl-C to stop");
         while (!g_add_del_list_stop)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        std::println("[add-del-list] shutdown signal received — stopping");
+        rtsrv::log::info(
+            "[add-del-list] shutdown signal received — stopping");
 
         // Signal handler already closed g_add_del_list_nl_fd and sent SIGINT
         // to the monitor thread; join it now that it has exited netlink_run().
@@ -5146,8 +5140,8 @@ int main(int argc, char* argv[])
         return EXIT_SUCCESS;
     }
 
-    std::println(std::cerr, "Unknown command: '{}'", command);
-    std::println(std::cerr, "Run 'sra --help' for usage.");
+    rtsrv::log::err(std::format("Unknown command: '{}'", command));
+    rtsrv::log::err("Run 'sra --help' for usage.");
     return EXIT_FAILURE;
 }
 // std::expected<srmd::v1::GetLoopbacksResponse, std::string> glResult
@@ -5164,9 +5158,11 @@ int prepare_route_add_remain_lb(
     cmdproto::SingleRouteRequest singleReq;
     singleReq.vrfs_name = "RemainLoopbaks";
 
-    std::println("\r\n START for {}\r\n", loopback_ipv4);
+    rtsrv::log::info(
+        std::format("[add-del-list] START for {}", loopback_ipv4));
 
-    std::println("[add-del-list] OSPF /32 routes: {}", ospf32.size());
+    rtsrv::log::info(
+        std::format("[add-del-list] OSPF /32 routes: {}", ospf32.size()));
     for (const auto* kr : ospf32)
     {
         const std::string krGw =
@@ -5175,21 +5171,24 @@ int prepare_route_add_remain_lb(
                                         ? std::string{}
                                         : kr->nexthops[0].interfaceName;
 
-        std::println("[add-del-list]   dst={} via={} dev={} metric={}"
-                     " table={} proto=ospf",
-                     kr->destination,
-                     krGw.empty() ? "(none)" : krGw,
-                     krIface.empty() ? "?" : krIface,
-                     kr->metric,
-                     kr->table);
+        rtsrv::log::info(std::format(
+            "[add-del-list]   dst={} via={} dev={} metric={} table={} "
+            "proto=ospf",
+            kr->destination,
+            krGw.empty() ? "(none)" : krGw,
+            krIface.empty() ? "?" : krIface,
+            kr->metric,
+            kr->table));
 
         if (kr->destination.contains(loopback_ipv4) &&
             (kr->nhid != 0 || !krIface.empty()))
         {
-            std::println("\n{} in {}\r\n", loopback_ipv4, kr->destination);
-            std::println("[add-del-list] prepare_route_add_remain_lb prepare "
-                         "ROUTE_ADD for {}",
-                         loopback_ipv4);
+            rtsrv::log::info(std::format("{} in {}", loopback_ipv4,
+                                         kr->destination));
+            rtsrv::log::info(std::format(
+                "[add-del-list] prepare_route_add_remain_lb prepare "
+                "ROUTE_ADD for {}",
+                loopback_ipv4));
 
             struct in_addr nhAddr
             {};
@@ -5233,45 +5232,39 @@ int prepare_route_add_remain_lb(
                     redisRib.set(pfxStr, std::to_string(kr->nhid));
             }
 
-            std::println("[add-del-list]   iface='unneeded' nexthop={}"
-                         " nhid={} prefixes={}",
-                         loopback_ipv4,
-                         kr->nhid,
-                         entry.prefixes.size());
+            rtsrv::log::info(std::format(
+                "[add-del-list]   iface='unneeded' nexthop={} nhid={} "
+                "prefixes={}",
+                loopback_ipv4,
+                kr->nhid,
+                entry.prefixes.size()));
 
             if (entry.prefixes.empty())
             {
-                std::println(
+                rtsrv::log::info(
                     "[add-del-list]   no prefixes — skipping ROUTE_ADD");
                 continue;
             }
 
             singleReq.interfaces.push_back(std::move(entry));
         }
-        // else
-        //{
-        //     std::println(
-        //     "[add-del-list] prepare_route_add_remain_lb NOT found {}
-        //     loopback", loopback_ipv4
-        //     );
-        // }
     }
 #if 1
     if (!singleReq.interfaces.empty())
     {
         // ── ROUTE_ADD ────────────────────────────────────────────────────
-        std::println("[add-del-list] [ADD] submitting {} interface(s)"
-                     " to ud_server…",
-                     singleReq.interfaces.size());
+        rtsrv::log::info(std::format(
+            "[add-del-list] [ADD] submitting {} interface(s) to ud_server...",
+            singleReq.interfaces.size()));
         auto savedInterfaces = singleReq.interfaces;
         vrfClient.submitAdd(std::move(singleReq));
     }
     else
     {
-        std::println("[add-del-list] no interfaces to submit");
+        rtsrv::log::info("[add-del-list] no interfaces to submit");
     }
 #endif
 
-    std::println("\r\n END for {}\r\n", loopback_ipv4);
+    rtsrv::log::info(std::format("[add-del-list] END for {}", loopback_ipv4));
     return 0;
 }
