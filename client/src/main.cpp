@@ -51,6 +51,7 @@
 #include "client/grpc_proc.hpp"
 #include "client/netlink_neigh.h"
 #include "client/netlink_nexthop.h"
+#include "client/nexthop_group.hpp"
 #include "client/redis_rib.hpp"
 #include "client/route_client.hpp"
 #include "client/routing.hpp"
@@ -920,6 +921,21 @@ struct LoopbackCbEntry
 static std::map<std::string, LoopbackCbEntry> g_loopback_cb_map;
 
 /**
+ * @brief Global ECMP nexthop group manager.
+ *
+ * One EcmpGroup is created for every remote loopback returned by
+ * GetRemainingLoopbacks / getRemainingNodes() during SRA startup.  As netlink
+ * /32 OSPF route events arrive the corresponding group's member list is
+ * updated and its effective_nhid() is used as the nexthop_id_ipv4 in each
+ * ud_server ROUTE_ADD command.
+ *
+ * Written once (create() calls) before the netlink monitor thread starts;
+ * add_member() / remove_member() / update_member() are called exclusively
+ * from the single netlink callback thread, so no concurrent writes occur.
+ */
+static sra::NexhopGroupManager g_ecmp_groups;
+
+/**
  * @brief Context forwarded via the @c user_data pointer to the netlink
  * callback.
  *
@@ -1023,9 +1039,15 @@ static void nlWatchCb(netlink_event_t event,
     };
 
     /* Helper: for every RTM_NEWROUTE / RTM_DELROUTE event whose destination
-     * matches a known remaining loopback, build a ROUTE_ADD and submit it
-     * to ud_server with the current nhid and stored prefix list. */
-    auto sendRouteAdd = [&](uint32_t nhid) {
+     * matches a known remaining loopback, update the ECMP group membership
+     * and submit a ROUTE_ADD to ud_server using the group's effective nhid.
+     *
+     * ADDED  → add_member()    : new path arrived, extend the ECMP group.
+     * CHANGED→ update_member() : kernel reassigned the nhid; replace members.
+     * REMOVED→ remove_member() : path gone; re-programme with remaining nhid
+     *                            (if any still present in the group).
+     */
+    auto sendRouteAdd = [&](netlink_event_t ev, uint32_t nhid) {
         if (!ctx->sraClient)
             return;
         // Strip the prefix length ("/32") to obtain the loopback key.
@@ -1036,16 +1058,36 @@ static void nlWatchCb(netlink_event_t event,
         if (it == g_loopback_cb_map.end())
             return;
         LoopbackCbEntry& entry = it->second;
+
+        // Update the ECMP group according to the event type.
+        if (ev == NETLINK_ROUTE_ADDED)
+            g_ecmp_groups.add_member(loKey, nhid);
+        else if (ev == NETLINK_ROUTE_CHANGED)
+            g_ecmp_groups.update_member(loKey, nhid);
+        else // NETLINK_ROUTE_REMOVED
+            g_ecmp_groups.remove_member(loKey, nhid);
+
+        // Use the group's current effective nhid for the ROUTE_ADD.
+        const uint32_t effectiveNhid = g_ecmp_groups.effective_nhid(loKey);
+
+        const char* evLabel = (ev == NETLINK_ROUTE_ADDED)     ? "ADD"
+                              : (ev == NETLINK_ROUTE_REMOVED) ? "DEL"
+                                                              : "CHG";
         rtsrv::log::info(std::format(
-            "{} [OSPF/32] {} loopback='{}' (hostname='{}') nhid={} — "
-            "sending ROUTE_ADD",
+            "{} [OSPF/32] {} loopback='{}' (hostname='{}') nhid={}"
+            " ecmp_members={} effective_nhid={} — {}",
             ts,
-            (event == NETLINK_ROUTE_ADDED)     ? "ADD"
-            : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
-                                               : "CHG",
+            evLabel,
             loKey,
             entry.hostname,
-            nhid));
+            nhid,
+            g_ecmp_groups.get(loKey).size(),
+            effectiveNhid,
+            effectiveNhid ? "sending ROUTE_ADD" : "group empty, skipping"));
+
+        if (effectiveNhid == 0)
+            return; // group emptied by a REMOVED event — nothing to install
+
         if (entry.prefixes.empty())
         {
             rtsrv::log::info(std::format(
@@ -1065,16 +1107,17 @@ static void nlWatchCb(netlink_event_t event,
              ++k)
             iface_entry.iface_name[k] = kUnneeded[k];
         iface_entry.nexthop_addr_ipv4 = {nb[0], nb[1], nb[2], nb[3]};
-        iface_entry.nexthop_id_ipv4 = nhid;
+        iface_entry.nexthop_id_ipv4 = effectiveNhid;
         iface_entry.prefixes = entry.prefixes;
         cmdproto::SingleRouteRequest req;
         req.vrfs_name = "RemainLoopbaks";
         req.interfaces.push_back(std::move(iface_entry));
         rtsrv::log::info(std::format(
-            "{} [OSPF/32] submitting ROUTE_ADD for '{}' nhid={} prefixes={}",
+            "{} [OSPF/32] submitting ROUTE_ADD for '{}' effective_nhid={}"
+            " prefixes={}",
             ts,
             loKey,
-            nhid,
+            effectiveNhid,
             req.interfaces[0].prefixes.size()));
         ctx->sraClient->submitAdd(std::move(req));
     };
@@ -1159,7 +1202,7 @@ static void nlWatchCb(netlink_event_t event,
                     "{} [ADDED]   {} -> gRPC FAILED: {}",
                     ts, dest, result.error()));
             }
-            sendRouteAdd(route->nhid);
+            sendRouteAdd(NETLINK_ROUTE_ADDED, route->nhid);
         }
         /* ---- CHANGED --------------------------------------------------------
          */
@@ -1203,7 +1246,7 @@ static void nlWatchCb(netlink_event_t event,
                     "{} [CHANGED] {} -> gRPC FAILED: {}",
                     ts, dest, result.error()));
             }
-            sendRouteAdd(route->nhid);
+            sendRouteAdd(NETLINK_ROUTE_CHANGED, route->nhid);
         }
         /* ---- REMOVED --------------------------------------------------------
          */
@@ -1243,7 +1286,7 @@ static void nlWatchCb(netlink_event_t event,
                     }
                 }
             }
-            sendRouteAdd(route->nhid);
+            sendRouteAdd(NETLINK_ROUTE_REMOVED, route->nhid);
         }
 
         /* Publish updated table via UDP (port 9003) instead of printing. */
@@ -1454,6 +1497,30 @@ static void addDelListOspfCb(netlink_event_t event,
     if (!ctx || !ctx->vrfClient)
         return;
 
+    // Update ECMP group membership before deciding what nhid to programme.
+    if (event == NETLINK_ROUTE_ADDED)
+        g_ecmp_groups.add_member(dst, route->nhid);
+    else if (event == NETLINK_ROUTE_CHANGED)
+        g_ecmp_groups.update_member(dst, route->nhid);
+    else // NETLINK_ROUTE_REMOVED
+        g_ecmp_groups.remove_member(dst, route->nhid);
+
+    const uint32_t effectiveNhid = g_ecmp_groups.effective_nhid(dst);
+
+    rtsrv::log::info(std::format(
+        "[add-del-list] [OSPF/32] {} loopback='{}' (hostname='{}') nhid={}"
+        " ecmp_members={} effective_nhid={} — {}",
+        evLabel,
+        dst,
+        entry.hostname,
+        route->nhid,
+        g_ecmp_groups.get(dst).size(),
+        effectiveNhid,
+        effectiveNhid ? "sending ROUTE_ADD" : "group empty, skipping"));
+
+    if (effectiveNhid == 0)
+        return; // group emptied — nothing to programme
+
     if (entry.prefixes.empty())
     {
         rtsrv::log::info(std::format(
@@ -1462,14 +1529,6 @@ static void addDelListOspfCb(netlink_event_t event,
             dst));
         return;
     }
-
-    rtsrv::log::info(std::format(
-        "[add-del-list] [OSPF/32] {} loopback='{}' (hostname='{}') nhid={} — "
-        "sending ROUTE_ADD",
-        evLabel,
-        dst,
-        entry.hostname,
-        route->nhid));
 
     // Build nexthop address bytes from the loopback IP (dst).
     struct in_addr nhAddr
@@ -1484,7 +1543,7 @@ static void addDelListOspfCb(netlink_event_t event,
          ++k)
         iface.iface_name[k] = kUnneeded[k];
     iface.nexthop_addr_ipv4 = {nb[0], nb[1], nb[2], nb[3]};
-    iface.nexthop_id_ipv4 = route->nhid;
+    iface.nexthop_id_ipv4 = effectiveNhid;
     iface.prefixes = entry.prefixes;
 
     cmdproto::SingleRouteRequest req;
@@ -1492,16 +1551,16 @@ static void addDelListOspfCb(netlink_event_t event,
     req.interfaces.push_back(std::move(iface));
 
     rtsrv::log::info(std::format(
-        "[add-del-list] [OSPF/32] submitting ROUTE_ADD for '{}' nhid={} "
-        "prefixes={}",
+        "[add-del-list] [OSPF/32] submitting ROUTE_ADD for '{}'"
+        " effective_nhid={} prefixes={}",
         dst,
-        route->nhid,
+        effectiveNhid,
         req.interfaces[0].prefixes.size()));
 
     if (ctx->redisRib && ctx->redisRib->connected())
     {
         for (const auto& pfxStr : entry.prefix_strings)
-            ctx->redisRib->set(pfxStr, std::to_string(route->nhid));
+            ctx->redisRib->set(pfxStr, std::to_string(effectiveNhid));
     }
 
     ctx->vrfClient->submitAdd(std::move(req));
@@ -1755,6 +1814,21 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                     cbEntry.prefixes.size(),
                     cbEntry.last_nhid));
                 g_loopback_cb_map[loopback] = std::move(cbEntry);
+
+                // Create an ECMP group for this loopback.  If a seed nhid is
+                // available from the kernel route snapshot, add it so the
+                // first ROUTE_ADD can be issued immediately before any new
+                // OSPF event arrives.
+                g_ecmp_groups.create(loopback, node.hostname());
+                if (g_loopback_cb_map[loopback].last_nhid != 0)
+                    g_ecmp_groups.add_member(
+                        loopback, g_loopback_cb_map[loopback].last_nhid);
+                rtsrv::log::info(std::format(
+                    "[Watch] ECMP group created: loopback='{}' hostname='{}'"
+                    " seed_nhid={}",
+                    loopback,
+                    node.hostname(),
+                    g_loopback_cb_map[loopback].last_nhid));
             }
         }
     }
@@ -5045,6 +5119,24 @@ int main(int argc, char* argv[])
                         cbEntry.last_nhid));
                     g_loopback_cb_map[node.loopback_ipv4()] =
                         std::move(cbEntry);
+
+                    // Create an ECMP group for this loopback so that the
+                    // OSPF /32 netlink monitor (Step 8) can look it up
+                    // and update membership on each subsequent route event.
+                    // Seed with last_nhid if already known from the kernel
+                    // route snapshot so the initial ROUTE_ADD carries the
+                    // correct nexthop_id_ipv4 immediately.
+                    const uint32_t seedNhid =
+                        g_loopback_cb_map[node.loopback_ipv4()].last_nhid;
+                    g_ecmp_groups.create(node.loopback_ipv4(), node.hostname());
+                    if (seedNhid != 0)
+                        g_ecmp_groups.add_member(node.loopback_ipv4(), seedNhid);
+                    rtsrv::log::info(std::format(
+                        "[add-del-list] ECMP group created: loopback='{}'"
+                        " hostname='{}' seed_nhid={}",
+                        node.loopback_ipv4(),
+                        node.hostname(),
+                        seedNhid));
                 }
 
                 // ── Nexthop adjacency check for LoopbacksByNodeIp ────────────
@@ -5190,10 +5282,22 @@ int prepare_route_add_remain_lb(
                 "ROUTE_ADD for {}",
                 loopback_ipv4));
 
+            // Register this kernel nhid in the loopback's ECMP group.
+            // The group was created during Step 6 with a seed nhid; calling
+            // add_member() here is idempotent if the same nhid was seeded.
+            if (kr->nhid != 0)
+                g_ecmp_groups.add_member(loopback_ipv4, kr->nhid);
+
+            // Use the ECMP group's effective nhid for the ROUTE_ADD so that
+            // any accumulated members are reflected in the programmed entry.
+            const uint32_t effectiveNhid =
+                g_ecmp_groups.effective_nhid(loopback_ipv4);
+            const uint32_t usedNhid =
+                (effectiveNhid != 0) ? effectiveNhid : kr->nhid;
+
             struct in_addr nhAddr
             {};
-            if (::inet_pton(AF_INET, loopback_ipv4.c_str(), &nhAddr) !=
-                1) // krGw.c_str()
+            if (::inet_pton(AF_INET, loopback_ipv4.c_str(), &nhAddr) != 1)
                 continue;
             const auto* nhBytes =
                 reinterpret_cast<const std::uint8_t*>(&nhAddr.s_addr);
@@ -5204,10 +5308,9 @@ int prepare_route_add_remain_lb(
                  k < cmdproto::IFACE_NAME_SIZE && k < kUnneeded.size();
                  ++k)
                 entry.iface_name[k] = kUnneeded[k];
-            // entry.nexthop_addr_ipv4 = {0, 0, 0, 0}; // loopback_ipv4
             entry.nexthop_addr_ipv4 = {
                 nhBytes[0], nhBytes[1], nhBytes[2], nhBytes[3]};
-            entry.nexthop_id_ipv4 = kr->nhid;
+            entry.nexthop_id_ipv4 = usedNhid;
 
             for (const auto& pfx : prefixes->prefixes())
             {
@@ -5229,14 +5332,15 @@ int prepare_route_add_remain_lb(
                     {pb[0], pb[1], pb[2], pb[3]}, maskLen});
 
                 if (redisRib.connected())
-                    redisRib.set(pfxStr, std::to_string(kr->nhid));
+                    redisRib.set(pfxStr, std::to_string(usedNhid));
             }
 
             rtsrv::log::info(std::format(
-                "[add-del-list]   iface='unneeded' nexthop={} nhid={} "
-                "prefixes={}",
+                "[add-del-list]   iface='unneeded' nexthop={}"
+                " raw_nhid={} effective_nhid={} prefixes={}",
                 loopback_ipv4,
                 kr->nhid,
+                usedNhid,
                 entry.prefixes.size()));
 
             if (entry.prefixes.empty())

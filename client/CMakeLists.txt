@@ -15,6 +15,7 @@ add_executable(
     src/sra_udp_client.cpp
     src/vrf_table.cpp
     src/redis_rib.cpp
+    src/nexthop_group.cpp
     src/netlink_neigh.c
     src/netlink_nexthop.c
     "${CMAKE_SOURCE_DIR}/server/src/netlink.c"
