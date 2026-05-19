@@ -936,6 +936,89 @@ static std::map<std::string, LoopbackCbEntry> g_loopback_cb_map;
 static sra::NexhopGroupManager g_ecmp_groups;
 
 /**
+ * @brief Logs the complete ECMP nexthop group table to the application logger.
+ *
+ * Renders a fixed-width ASCII table with one row per managed loopback.
+ * Each row shows the loopback IP, the remote hostname, the number of kernel
+ * nexthop object IDs currently in the group, the full comma-separated ID
+ * list (with per-member weights when weight ≠ 1), and the effective nhid
+ * that will be placed in the next ud_server ROUTE_ADD command.
+ *
+ * Intended to be called immediately after every /32 OSPF netlink event so
+ * the operator can observe the live state of every ECMP group in a single
+ * snapshot.
+ *
+ * Example output:
+ * @code
+ *   [Watch] ECMP group table (2 group(s)) — after OSPF /32 ADD 2.2.2.2/32
+ *   ────────────────────────────────────────────────────────────────────────────
+ *     Loopback           Hostname               Members  Nhids               Effective
+ *   ────────────────────────────────────────────────────────────────────────────
+ *     2.2.2.2            spine-01                     1  363                       363
+ *     3.3.3.3            spine-02                     0  (none)                      -
+ *   ────────────────────────────────────────────────────────────────────────────
+ * @endcode
+ *
+ * @param trigger  Human-readable description of the event that caused this
+ *                 snapshot (e.g. @c "ADD 2.2.2.2/32" or @c "DEL 3.3.3.3/32").
+ * @param logctx   Log-context prefix prepended to every log line
+ *                 (e.g. @c "[Watch]" or @c "[add-del-list]").
+ */
+static void logEcmpGroupTable(const std::string& trigger,
+                               const std::string& logctx = "[ECMP]")
+{
+    constexpr std::size_t SEP_LEN = 80;
+    const std::string sep(SEP_LEN, '-');
+    const std::size_t total = g_ecmp_groups.size();
+
+    rtsrv::log::info(std::format(
+        "{} ECMP group table ({} group(s)) — after OSPF /32 {}",
+        logctx, total, trigger));
+    rtsrv::log::info(sep);
+    rtsrv::log::info(std::format(
+        "  {:<18} {:<22} {:>7}  {:<22}  {:>9}",
+        "Loopback", "Hostname", "Members", "Nhids", "Effective"));
+    rtsrv::log::info(sep);
+
+    if (total == 0)
+    {
+        rtsrv::log::info(std::format("{}   (no groups registered)", logctx));
+    }
+    else
+    {
+        g_ecmp_groups.for_each(
+            [&](const std::string& loopback, const sra::EcmpGroup& g)
+            {
+                /* Build a compact nhid list: "363,364(w2)" etc. */
+                std::string nhidList;
+                for (const auto& m : g.members)
+                {
+                    if (!nhidList.empty())
+                        nhidList += ',';
+                    nhidList += std::to_string(m.nhid);
+                    if (m.weight != 1)
+                        nhidList += std::format("(w{})", m.weight);
+                }
+                if (nhidList.empty())
+                    nhidList = "(none)";
+
+                const uint32_t eff = g.effective_nhid();
+                const std::string effStr = eff ? std::to_string(eff) : "-";
+
+                rtsrv::log::info(std::format(
+                    "  {:<18} {:<22} {:>7}  {:<22}  {:>9}",
+                    loopback,
+                    g.hostname,
+                    g.members.size(),
+                    nhidList,
+                    effStr));
+            });
+    }
+
+    rtsrv::log::info(sep);
+}
+
+/**
  * @brief Context forwarded via the @c user_data pointer to the netlink
  * callback.
  *
@@ -1289,6 +1372,14 @@ static void nlWatchCb(netlink_event_t event,
             sendRouteAdd(NETLINK_ROUTE_REMOVED, route->nhid);
         }
 
+        /* Log the ECMP group table snapshot after every OSPF /32 event. */
+        {
+            const char* evStr = (event == NETLINK_ROUTE_ADDED)     ? "ADD"
+                                : (event == NETLINK_ROUTE_REMOVED) ? "DEL"
+                                                                    : "CHG";
+            logEcmpGroupTable(std::format("{} {}", evStr, dest), "[Watch]");
+        }
+
         /* Publish updated table via UDP (port 9003) instead of printing. */
         if (ctx->udpServer)
             ctx->udpServer->setRouteData(serializeRouteTable(ctx->routes));
@@ -1564,6 +1655,10 @@ static void addDelListOspfCb(netlink_event_t event,
     }
 
     ctx->vrfClient->submitAdd(std::move(req));
+
+    /* Log the full ECMP group table after every OSPF /32 event so the
+     * operator can track every group's membership in a single snapshot. */
+    logEcmpGroupTable(std::format("{} {}/32", evLabel, dst), "[add-del-list]");
 }
 
 /**
