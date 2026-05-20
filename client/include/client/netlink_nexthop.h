@@ -266,50 +266,6 @@ extern "C"
      */
     int netlink_nexthop_group_delete(uint32_t id);
 
-    /**
-     * @brief Deletes an SRA-owned nexthop (single or ECMP group) from the kernel.
-     *
-     * Works for both individual nexthop objects created by
-     * netlink_nexthop_single_create() and group objects created by
-     * netlink_nexthop_group_create().  Sends RTM_DELNEXTHOP for @p id.
-     *
-     * @param id  NHA_ID of the object to delete.
-     * @return 0 on success, -1 on failure (errno set).
-     */
-    int netlink_nexthop_delete(uint32_t id);
-
-    /**
-     * @brief Creates a single (non-group) SRA-owned nexthop in the kernel.
-     *
-     * Sends RTM_NEWNEXTHOP with NLM_F_CREATE | NLM_F_ECHO so the kernel
-     * assigns a fresh NHA_ID.  The object has NHA_GATEWAY + NHA_OIF attributes
-     * (no NHA_GROUP), making it a single-path nexthop suitable for use as a
-     * member of an SRA-owned ECMP group.
-     *
-     * @param family   AF_INET or AF_INET6.
-     * @param gateway  Gateway IP address string (e.g. "192.168.0.2").
-     * @param oif      Output interface index (> 0).
-     * @return Kernel-assigned NHA_ID of the new nexthop (> 0), or 0 on failure.
-     */
-    uint32_t netlink_nexthop_single_create(uint8_t     family,
-                                           const char* gateway,
-                                           uint32_t    oif);
-
-    /**
-     * @brief Fetches a single nexthop object from the kernel by its NHA_ID.
-     *
-     * Sends RTM_GETNEXTHOP (without NLM_F_DUMP) for the nexthop identified by
-     * @p nhid and parses the kernel's response into @p out.  Used internally by
-     * NexhopGroupManager::add_member() to obtain the gateway address and output
-     * interface of an OSPF-installed nexthop so that a matching SRA-owned
-     * individual nexthop can be created.
-     *
-     * @param nhid  NHA_ID to look up (> 0).
-     * @param out   Filled with the nexthop descriptor on success.
-     * @return 0 on success, -1 on error (errno set; ENOENT if not found).
-     */
-    int netlink_nexthop_get_by_id(uint32_t nhid, netlink_nexthop_t* out);
-
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
