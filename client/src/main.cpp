@@ -1144,6 +1144,7 @@ static void nlWatchCb(netlink_event_t event,
 
         // Update the SRA-owned kernel ECMP group according to the event type.
         // add_member / update_member return the kernel group nhid directly.
+        const uint32_t prevGroupNhid = g_ecmp_groups.group_nhid(loKey);
         uint32_t groupNhid = 0;
         if (ev == NETLINK_ROUTE_ADDED)
             groupNhid = g_ecmp_groups.add_member(loKey, nhid);
@@ -1153,6 +1154,16 @@ static void nlWatchCb(netlink_event_t event,
         {
             g_ecmp_groups.remove_member(loKey, nhid);
             groupNhid = g_ecmp_groups.group_nhid(loKey);
+        }
+
+        // Log when SRA creates a brand-new multi-path nexthop group object.
+        if (prevGroupNhid == 0 && groupNhid != 0)
+        {
+            rtsrv::log::info(std::format(
+                "{} [OSPF/32] *** SRA created new ECMP multi-path nexthop:"
+                " loopback='{}' kernel_nhid={} members={}"
+                " (RTM_NEWNEXTHOP NLM_F_CREATE, kernel-assigned NHA_ID)",
+                ts, loKey, groupNhid, g_ecmp_groups.get(loKey).size()));
         }
 
         const char* evLabel = (ev == NETLINK_ROUTE_ADDED)     ? "ADD"
@@ -1591,6 +1602,7 @@ static void addDelListOspfCb(netlink_event_t event,
         return;
 
     // Update the SRA-owned kernel ECMP group and obtain its NHA_ID.
+    const uint32_t prevGroupNhid = g_ecmp_groups.group_nhid(dst);
     uint32_t groupNhid = 0;
     if (event == NETLINK_ROUTE_ADDED)
         groupNhid = g_ecmp_groups.add_member(dst, route->nhid);
@@ -1600,6 +1612,16 @@ static void addDelListOspfCb(netlink_event_t event,
     {
         g_ecmp_groups.remove_member(dst, route->nhid);
         groupNhid = g_ecmp_groups.group_nhid(dst);
+    }
+
+    // Log when SRA creates a brand-new multi-path nexthop group object.
+    if (prevGroupNhid == 0 && groupNhid != 0)
+    {
+        rtsrv::log::info(std::format(
+            "[add-del-list] *** SRA created new ECMP multi-path nexthop:"
+            " loopback='{}' kernel_nhid={} members={}"
+            " (RTM_NEWNEXTHOP NLM_F_CREATE, kernel-assigned NHA_ID)",
+            dst, groupNhid, g_ecmp_groups.get(dst).size()));
     }
 
     rtsrv::log::info(std::format(
@@ -5385,7 +5407,17 @@ int prepare_route_add_remain_lb(
             // The group was created during Step 6 with a seed nhid; calling
             // add_member() here is idempotent if the same nhid was seeded.
             if (kr->nhid != 0)
-                g_ecmp_groups.add_member(loopback_ipv4, kr->nhid);
+            {
+                const uint32_t prevNhid = g_ecmp_groups.group_nhid(loopback_ipv4);
+                const uint32_t newNhid  = g_ecmp_groups.add_member(loopback_ipv4, kr->nhid);
+                if (prevNhid == 0 && newNhid != 0)
+                    rtsrv::log::info(std::format(
+                        "[add-del-list] *** SRA created new ECMP multi-path nexthop:"
+                        " loopback='{}' kernel_nhid={} members={}"
+                        " (RTM_NEWNEXTHOP NLM_F_CREATE, kernel-assigned NHA_ID)",
+                        loopback_ipv4, newNhid,
+                        g_ecmp_groups.get(loopback_ipv4).size()));
+            }
 
             // Use the SRA-owned ECMP group's kernel NHA_ID for ROUTE_ADD so
             // that any accumulated members are reflected in the programmed entry.
