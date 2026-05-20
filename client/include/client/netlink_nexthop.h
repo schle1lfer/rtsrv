@@ -202,6 +202,70 @@ extern "C"
      */
     void netlink_nexthop_close(int fd);
 
+    /* ---------------------------------------------------------------------------
+     * Nexthop group management — create / update / delete kernel objects
+     *
+     * These functions issue RTM_NEWNEXTHOP / RTM_DELNEXTHOP requests on a
+     * temporary NETLINK_ROUTE socket to manage nexthop group objects that are
+     * owned by SRA (distinct from the nexthop objects installed by the OSPF
+     * routing daemon).
+     *
+     * Each SRA-managed group is an ECMP (mpath) nexthop group whose members
+     * are the individual nexthop object IDs contributed by /32 OSPF route
+     * events for one remote loopback.  The group's kernel-assigned NHA_ID is
+     * then used as the nexthop_id_ipv4 in every ud_server ROUTE_ADD command
+     * for that loopback, giving SRA full, independent control over the ECMP
+     * membership without touching the routing daemon's own nexthop objects.
+     * -------------------------------------------------------------------------
+     */
+
+    /**
+     * @brief Creates a new SRA-owned ECMP nexthop group in the kernel.
+     *
+     * Sends RTM_NEWNEXTHOP with @c NLM_F_CREATE | @c NLM_F_ECHO so the kernel
+     * assigns a fresh NHA_ID and echoes the object back.  The NHA_GROUP
+     * attribute carries @p members and NHA_GROUP_TYPE is set to 0 (mpath /
+     * ECMP).
+     *
+     * Requires at least one member (@p count >= 1).
+     *
+     * @param members  Array of group members (nexthop IDs + weights).
+     * @param count    Number of entries in @p members (1–64).
+     * @return The kernel-assigned NHA_ID of the new group (> 0) on success,
+     *         or 0 on failure (errno is set).
+     */
+    uint32_t
+    netlink_nexthop_group_create(const netlink_nexthop_grp_t* members,
+                                 uint32_t count);
+
+    /**
+     * @brief Replaces the member list of an existing SRA-owned ECMP group.
+     *
+     * Sends RTM_NEWNEXTHOP with @c NLM_F_REPLACE on the group identified by
+     * @p id.  The new member list replaces the previous one atomically.
+     *
+     * @param id       NHA_ID of the group to update (as returned by
+     *                 netlink_nexthop_group_create()).
+     * @param members  New array of group members.
+     * @param count    Number of entries in @p members (1–64).
+     * @return 0 on success, -1 on failure (errno is set).
+     */
+    int netlink_nexthop_group_update(uint32_t id,
+                                     const netlink_nexthop_grp_t* members,
+                                     uint32_t count);
+
+    /**
+     * @brief Deletes an SRA-owned ECMP nexthop group from the kernel.
+     *
+     * Sends RTM_DELNEXTHOP for the group identified by @p id.  After this
+     * call the kernel NHA_ID is invalid and must not be used in any further
+     * route or nexthop operations.
+     *
+     * @param id  NHA_ID of the group to delete.
+     * @return 0 on success, -1 on failure (errno is set).
+     */
+    int netlink_nexthop_group_delete(uint32_t id);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

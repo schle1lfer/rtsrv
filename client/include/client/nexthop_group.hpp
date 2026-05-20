@@ -1,49 +1,63 @@
 /**
  * @file client/include/client/nexthop_group.hpp
- * @brief In-memory ECMP nexthop group manager for SRA.
+ * @brief SRA-owned ECMP nexthop group manager.
  *
- * Provides a thread-safe registry of per-loopback ECMP nexthop groups.
- * Each group is keyed by a remote loopback IPv4 address and accumulates the
- * kernel nexthop object IDs (nhids) reported by netlink /32 OSPF route events.
+ * Manages one kernel nexthop group object per remote loopback.  The group is
+ * created in the Linux kernel via RTM_NEWNEXTHOP (netlink_nexthop_group_create)
+ * and is entirely independent of the nexthop objects installed by the OSPF
+ * routing daemon.  The OSPF-contributed nexthop IDs (nhids) become *members*
+ * of the SRA-owned group; the group's kernel-assigned NHA_ID is what SRA
+ * programmes into the ud_server ROUTE_ADD @c nexthop_id_ipv4 field.
  *
- * The manager is the authoritative source of truth for which nhid SRA should
- * programme into the ud_server ROUTE_ADD @c nexthop_id_ipv4 field.  When the
- * kernel assigns a composite ECMP group nexthop object for a multi-path /32
- * route, the group's NHA_ID is itself the nhid carried by the route event, so
- * a single add_member() call correctly represents any degree of ECMP.
+ * @par Data-plane model
+ * @code
+ *   Kernel OSPF installs:
+ *     nhid=100  via 192.168.0.2  dev Ethernet46   (single path)
+ *     nhid=101  via 192.168.0.6  dev Ethernet47   (single path)
+ *
+ *   SRA creates on first OSPF event:
+ *     nhid=500  GROUP { 100 }   ← SRA-owned ECMP group (kernel object)
+ *
+ *   SRA updates on second OSPF event:
+ *     nhid=500  GROUP { 100, 101 }
+ *
+ *   ud_server ROUTE_ADD for 2.2.2.2 → nexthop_id = 500
+ * @endcode
  *
  * @par Typical SRA lifecycle
  * @code
  *   sra::NexhopGroupManager mgr;
  *
- *   // Startup — one group per remaining loopback returned by
- *   // GetRemainingLoopbacks / getRemainingNodes().
+ *   // Startup: create a tracking entry for every remaining loopback.
  *   mgr.create("2.2.2.2", "spine-01");
- *   mgr.create("3.3.3.3", "spine-02");
  *
- *   // Netlink OSPF /32 ADDED event — seed the group with the kernel nhid
- *   // and immediately obtain the effective id for ROUTE_ADD.
- *   mgr.add_member("2.2.2.2", 363);
- *   uint32_t nhid = mgr.effective_nhid("2.2.2.2");  // → 363
+ *   // OSPF /32 ADDED — first path; creates the kernel group.
+ *   mgr.add_member("2.2.2.2", 100);
+ *   uint32_t id = mgr.group_nhid("2.2.2.2");  // → 500 (kernel-assigned)
  *
- *   // Netlink OSPF /32 CHANGED event — kernel reassigned the nhid.
- *   mgr.update_member("2.2.2.2", 364);
+ *   // OSPF /32 ADDED — second path; updates the kernel group.
+ *   mgr.add_member("2.2.2.2", 101);
  *
- *   // Netlink OSPF /32 REMOVED event.
- *   mgr.remove_member("2.2.2.2", 364);
+ *   // OSPF /32 REMOVED — one path withdrawn; updates the kernel group.
+ *   mgr.remove_member("2.2.2.2", 100);
  *
- *   // Shut-down or node departure.
+ *   // OSPF /32 CHANGED — nhid reassigned; replaces the kernel group members.
+ *   mgr.update_member("2.2.2.2", 102);
+ *
+ *   // Shutdown or node departure — deletes the kernel group.
  *   mgr.remove("2.2.2.2");
  * @endcode
  *
- * @note The manager does NOT create or modify kernel nexthop objects.  It
- *       tracks the IDs of objects that the kernel routing daemon (OSPF) has
- *       already installed.
+ * @note The manager does NOT create or modify the OSPF-installed individual
+ *       nexthop objects; it only manages the SRA-owned group objects that
+ *       reference them.
  *
- * @version 1.0
+ * @version 2.0
  */
 
 #pragma once
+
+#include "client/netlink_nexthop.h"
 
 #include <cstdint>
 #include <functional>
@@ -60,15 +74,14 @@ namespace sra
 // ---------------------------------------------------------------------------
 
 /**
- * @brief One member of an ECMP nexthop group.
+ * @brief One member of an SRA-owned ECMP nexthop group.
  *
- * Represents a single kernel nexthop object that contributes to a loopback's
- * ECMP group.  The @c nhid is the value of the NHA_ID attribute as reported
- * by the kernel via a netlink /32 OSPF route event (RTA_NH_ID).
+ * Represents a single kernel nexthop object (installed by OSPF) that has been
+ * added to the SRA-managed ECMP group for a remote loopback.
  */
 struct EcmpMember
 {
-    uint32_t nhid{0};  ///< Kernel nexthop object ID (NHA_ID); always > 0.
+    uint32_t nhid{0};  ///< OSPF-installed kernel nexthop object ID (NHA_ID).
     uint8_t weight{1}; ///< Relative forwarding weight (1 = equal-cost).
 };
 
@@ -77,36 +90,45 @@ struct EcmpMember
 // ---------------------------------------------------------------------------
 
 /**
- * @brief ECMP nexthop group for one remote loopback.
+ * @brief SRA-owned ECMP nexthop group for one remote loopback.
  *
- * Collects all kernel nexthop object IDs associated with a given remote
- * loopback IP.  Members are added when OSPF /32 ADD or CHANGED events arrive
- * and removed on OSPF /32 REMOVED events.
+ * Holds the kernel NHA_ID of the group object created by SRA (@c kernel_nhid)
+ * and the list of OSPF-contributed member nhids.  The kernel object is a
+ * proper ECMP (mpath) nexthop group; membership changes are pushed to the
+ * kernel via netlink_nexthop_group_update() on every add/remove operation.
  *
- * The @c effective_nhid() method returns the ID to place in the ud_server
- * ROUTE_ADD @c nexthop_id_ipv4 field.  It selects the most recently added
- * member, which is correct in the common single-path case and in the ECMP
- * case where the kernel itself produces a composite group object.
+ * The group is lazily created: @c kernel_nhid is 0 until the first member is
+ * added (since the kernel rejects empty groups).
  */
 struct EcmpGroup
 {
-    std::string loopback_ipv4;       ///< Remote loopback address (group key).
-    std::string hostname;            ///< Human-readable node name.
-    std::vector<EcmpMember> members; ///< Active kernel nhids in arrival order.
+    std::string loopback_ipv4; ///< Remote loopback IPv4 address (group key).
+    std::string hostname;      ///< Human-readable remote node name.
 
     /**
-     * @brief Returns the nexthop ID to programme into ROUTE_ADD.
+     * @brief NHA_ID of the SRA-created kernel nexthop group.
      *
-     * Selects the most recently added member.  Returns 0 when the group has
-     * no members (the group was created but no OSPF event has arrived yet, or
-     * all members have been removed).
+     * 0 while the group has no members (no kernel object exists yet).
+     * Assigned by the kernel on the first add_member() call and remains
+     * stable for the lifetime of the group (the same kernel object is updated
+     * in place when membership changes; it is only deleted on remove()).
      */
-    [[nodiscard]] uint32_t effective_nhid() const noexcept;
+    uint32_t kernel_nhid{0};
 
-    /** @brief Returns true when the member list is empty. */
+    std::vector<EcmpMember> members; ///< OSPF-contributed member nhids.
+
+    /**
+     * @brief Returns the kernel NHA_ID to programme into ROUTE_ADD.
+     *
+     * Returns @c kernel_nhid when the group has at least one member and the
+     * kernel object exists; returns 0 otherwise.
+     */
+    [[nodiscard]] uint32_t group_nhid() const noexcept { return kernel_nhid; }
+
+    /** @brief Returns @c true when the member list is empty. */
     [[nodiscard]] bool empty() const noexcept { return members.empty(); }
 
-    /** @brief Returns the number of member nexthop objects. */
+    /** @brief Returns the number of OSPF member nhids. */
     [[nodiscard]] std::size_t size() const noexcept { return members.size(); }
 };
 
@@ -115,12 +137,16 @@ struct EcmpGroup
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Thread-safe registry of per-loopback ECMP nexthop groups.
+ * @brief Thread-safe manager of SRA-owned per-loopback ECMP nexthop groups.
  *
- * All public methods are safe to call concurrently from multiple threads.
- * Read-only queries (get(), effective_nhid(), contains(), size(), for_each())
- * take a shared lock and may execute in parallel.  Mutating operations take
- * an exclusive lock.
+ * One EcmpGroup is tracked for each remote loopback discovered via
+ * GetRemainingLoopbacks / getRemainingNodes().  Kernel nexthop group objects
+ * are created, updated, and deleted automatically as group membership changes.
+ *
+ * All public methods are thread-safe: reads hold a shared lock, writes hold
+ * an exclusive lock.  Kernel netlink operations are performed while the
+ * exclusive lock is held to keep the in-memory state consistent with the
+ * kernel state.
  *
  * @note @c for_each() holds a shared lock during iteration; the callback must
  *       not call any mutating method on the same manager instance.
@@ -129,7 +155,12 @@ class NexhopGroupManager
 {
 public:
     NexhopGroupManager() = default;
-    ~NexhopGroupManager() = default;
+
+    /**
+     * @brief Destructor — deletes all kernel nexthop group objects that are
+     *        still alive.
+     */
+    ~NexhopGroupManager();
 
     NexhopGroupManager(const NexhopGroupManager&) = delete;
     NexhopGroupManager& operator=(const NexhopGroupManager&) = delete;
@@ -137,99 +168,110 @@ public:
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
     /**
-     * @brief Creates an empty ECMP group for @p loopback_ipv4.
+     * @brief Registers a tracking entry for @p loopback_ipv4.
      *
-     * If a group already exists for the given loopback this call is a no-op;
-     * the existing group and its members are left unchanged.
+     * Creates an in-memory EcmpGroup with no members.  No kernel object is
+     * created yet; the kernel group is created lazily on the first
+     * add_member() call (since the kernel rejects empty groups).
+     *
+     * No-op if an entry already exists for the given loopback.
      *
      * @param loopback_ipv4  Remote loopback IPv4 address (e.g. "2.2.2.2").
-     * @param hostname       Human-readable node name stored in the group
-     *                       for logging and diagnostics.
+     * @param hostname       Human-readable node name for logging.
      */
     void create(const std::string& loopback_ipv4, const std::string& hostname);
 
     /**
-     * @brief Removes the group for @p loopback_ipv4 together with all its
-     *        members.
+     * @brief Removes the group for @p loopback_ipv4 and deletes the
+     *        corresponding kernel nexthop group object (if one exists).
      *
-     * @return @c true if a group existed and was erased; @c false if no group
-     *         was found for the given loopback.
+     * @return @c true if an entry existed and was erased; @c false otherwise.
      */
     bool remove(const std::string& loopback_ipv4);
 
     /**
-     * @brief Removes every group, leaving the manager empty.
+     * @brief Removes all groups and deletes every kernel nexthop group object.
      */
     void clear();
 
     // ── Member management ──────────────────────────────────────────────────
 
     /**
-     * @brief Adds a kernel nexthop object ID to the group for
-     *        @p loopback_ipv4.
+     * @brief Adds an OSPF-installed nexthop ID to the group for
+     *        @p loopback_ipv4 and pushes the change to the kernel.
      *
-     * If @p nhid is already present in the group the existing entry's weight
-     * is updated and no duplicate is appended.  If no group exists for the
-     * loopback a new empty group is created on the fly.
-     *
-     * A value of @p nhid == 0 is silently ignored.
+     * - If this is the first member, creates the kernel nexthop group
+     *   (RTM_NEWNEXTHOP + NLM_F_CREATE) and stores the assigned NHA_ID in
+     *   @c EcmpGroup::kernel_nhid.
+     * - If the group already exists, updates the kernel object with the
+     *   extended member list (RTM_NEWNEXTHOP + NLM_F_REPLACE).
+     * - If @p nhid is already a member, only the weight is updated.
+     * - @p nhid == 0 is silently ignored.
+     * - Creates the tracking entry if it does not yet exist.
      *
      * @param loopback_ipv4  Remote loopback IPv4 address.
-     * @param nhid           Kernel nexthop object ID to add (must be > 0).
-     * @param weight         Relative path weight (1 = equal-cost default).
+     * @param nhid           OSPF-installed nexthop object ID to add (> 0).
+     * @param weight         Path weight (1 = equal-cost default).
+     * @return The kernel NHA_ID of the group (> 0), or 0 on kernel error.
      */
-    void add_member(const std::string& loopback_ipv4,
-                    uint32_t nhid,
-                    uint8_t weight = 1);
+    uint32_t add_member(const std::string& loopback_ipv4,
+                        uint32_t nhid,
+                        uint8_t weight = 1);
 
     /**
-     * @brief Removes the kernel nexthop object ID @p nhid from the group for
-     *        @p loopback_ipv4.
+     * @brief Removes an OSPF-installed nexthop ID from the group and pushes
+     *        the change to the kernel.
      *
-     * @return @c true if the member was found and removed; @c false if the
+     * - If the member list becomes empty after removal, the kernel nexthop
+     *   group object is deleted (RTM_DELNEXTHOP) and @c kernel_nhid is reset
+     *   to 0.
+     * - Otherwise the kernel object is updated with the reduced member list.
+     *
+     * @return @c true if the member was present and removed; @c false if the
      *         group does not exist or @p nhid was not a member.
      */
     bool remove_member(const std::string& loopback_ipv4, uint32_t nhid);
 
     /**
-     * @brief Replaces all members of the group with a single entry
-     *        (@p nhid, @p weight).
+     * @brief Replaces all members with a single new OSPF nexthop ID and
+     *        pushes the change to the kernel.
      *
-     * Equivalent to clearing the member list and calling add_member().
-     * Call this on @c NETLINK_ROUTE_CHANGED events where the kernel has
-     * reassigned the nexthop object ID for a /32 route.
+     * - If a kernel group object already exists it is updated in place
+     *   (RTM_NEWNEXTHOP + NLM_F_REPLACE); @c kernel_nhid is preserved.
+     * - If no kernel object exists yet, one is created.
+     * - @p nhid == 0 is silently ignored.
      *
-     * A value of @p nhid == 0 is silently ignored.
+     * Call this on @c NETLINK_ROUTE_CHANGED events where the OSPF daemon
+     * reassigns the nexthop object ID for a /32 route.
      *
      * @param loopback_ipv4  Remote loopback IPv4 address.
-     * @param nhid           Replacement kernel nexthop object ID (must be > 0).
-     * @param weight         Relative path weight (1 = equal-cost default).
+     * @param nhid           New OSPF nexthop object ID (> 0).
+     * @param weight         Path weight (1 = equal-cost default).
+     * @return The kernel NHA_ID of the group (> 0), or 0 on kernel error.
      */
-    void update_member(const std::string& loopback_ipv4,
-                       uint32_t nhid,
-                       uint8_t weight = 1);
+    uint32_t update_member(const std::string& loopback_ipv4,
+                           uint32_t nhid,
+                           uint8_t weight = 1);
 
     // ── Queries ────────────────────────────────────────────────────────────
 
     /**
      * @brief Returns a copy of the group for @p loopback_ipv4.
      *
-     * @return The group if it exists; a default-constructed (empty) EcmpGroup
-     *         otherwise.
+     * @return The group if it exists; a default-constructed EcmpGroup
+     *         otherwise (with @c kernel_nhid == 0).
      */
     [[nodiscard]] EcmpGroup get(const std::string& loopback_ipv4) const;
 
     /**
-     * @brief Returns the effective nexthop ID for @p loopback_ipv4.
-     *
-     * @return The effective nhid (> 0) from the group's most recent member,
-     *         or 0 if the group is absent or has no members.
+     * @brief Returns the kernel NHA_ID of the SRA-created group for
+     *        @p loopback_ipv4, or 0 if the group is absent or empty.
      */
     [[nodiscard]] uint32_t
-    effective_nhid(const std::string& loopback_ipv4) const;
+    group_nhid(const std::string& loopback_ipv4) const;
 
     /**
-     * @brief Returns @c true if a group exists for @p loopback_ipv4.
+     * @brief Returns @c true if a group entry exists for @p loopback_ipv4.
      */
     [[nodiscard]] bool contains(const std::string& loopback_ipv4) const;
 
@@ -245,12 +287,10 @@ public:
 
     /**
      * @brief Invokes @p fn once for every managed (loopback_ipv4, EcmpGroup)
-     *        pair.
+     *        pair in ascending lexicographic order of @c loopback_ipv4.
      *
-     * The pairs are visited in ascending lexicographic order of
-     * @c loopback_ipv4.  @p fn receives const references and must not call
-     * any mutating method on this manager while the iteration is in progress
-     * (the shared lock is held for the duration of the call).
+     * A shared lock is held for the duration; @p fn must not call any
+     * mutating method on this manager.
      *
      * @param fn  Callable with signature
      *            <tt>void(const std::string&, const EcmpGroup&)</tt>.
@@ -259,6 +299,16 @@ public:
         std::function<void(const std::string&, const EcmpGroup&)> fn) const;
 
 private:
+    /**
+     * @brief Converts the EcmpMember vector to the C array expected by the
+     *        kernel management API.
+     *
+     * @param members  Source vector.
+     * @param out      Destination array (must have capacity ≥ members.size()).
+     */
+    static void toKernelGrp(const std::vector<EcmpMember>& members,
+                             netlink_nexthop_grp_t* out) noexcept;
+
     mutable std::shared_mutex mutex_; ///< Guards @c groups_.
     std::map<std::string, EcmpGroup> groups_; ///< loopback_ipv4 → EcmpGroup.
 };

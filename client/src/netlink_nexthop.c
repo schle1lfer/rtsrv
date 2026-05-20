@@ -395,3 +395,387 @@ void netlink_nexthop_close(int fd)
     if (fd >= 0)
         close(fd);
 }
+
+/* ===========================================================================
+ * Nexthop group management — create / update / delete
+ * =========================================================================*/
+
+/* Maximum wire size for one nexthop group management request:
+ *   nlmsghdr(16) + nl_nhmsg(8) + NHA_ID attr(8) +
+ *   NHA_GROUP attr(4 + 64*8=516) + NHA_GROUP_TYPE attr(8) = 560 → 1024 safe */
+#define NL_MGMT_BUF 1024
+
+/* Monotonically increasing sequence number for management requests.
+ * Start high to avoid colliding with the monitor socket's sequence. */
+static uint32_t g_mgmt_seq = 0x8000;
+
+/**
+ * @brief Opens a temporary NETLINK_ROUTE socket for a single management
+ *        request.  Caller must close() the returned fd.
+ *
+ * @return Non-negative fd on success, -1 on error (errno set).
+ */
+static int nl_mgmt_open(void)
+{
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+    if (fd < 0)
+        return -1;
+
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nl_family = AF_NETLINK;
+
+    if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0)
+    {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    return fd;
+}
+
+/**
+ * @brief Appends an rtattr carrying a uint32 to an in-progress nlmsghdr.
+ *
+ * @param nlh   Message header (nlmsg_len is updated in place).
+ * @param cap   Total buffer capacity.
+ * @param type  Attribute type (NHA_*).
+ * @param val   Value to embed.
+ * @return 0 on success, -1 when the buffer would overflow.
+ */
+static int nl_add_u32(struct nlmsghdr* nlh,
+                      size_t cap,
+                      unsigned short type,
+                      uint32_t val)
+{
+    unsigned int alen = (unsigned int)RTA_LENGTH(sizeof(uint32_t));
+    if (NLMSG_ALIGN(nlh->nlmsg_len) + RTA_ALIGN(alen) > cap)
+        return -1;
+    struct rtattr* rta =
+        (struct rtattr*)((char*)nlh + NLMSG_ALIGN(nlh->nlmsg_len));
+    rta->rta_type = type;
+    rta->rta_len = (unsigned short)alen;
+    memcpy(RTA_DATA(rta), &val, sizeof(val));
+    nlh->nlmsg_len =
+        (uint32_t)(NLMSG_ALIGN(nlh->nlmsg_len) + RTA_ALIGN(alen));
+    return 0;
+}
+
+/**
+ * @brief Appends an rtattr carrying a uint16 to an in-progress nlmsghdr.
+ */
+static int nl_add_u16(struct nlmsghdr* nlh,
+                      size_t cap,
+                      unsigned short type,
+                      uint16_t val)
+{
+    unsigned int alen = (unsigned int)RTA_LENGTH(sizeof(uint16_t));
+    if (NLMSG_ALIGN(nlh->nlmsg_len) + RTA_ALIGN(alen) > cap)
+        return -1;
+    struct rtattr* rta =
+        (struct rtattr*)((char*)nlh + NLMSG_ALIGN(nlh->nlmsg_len));
+    rta->rta_type = type;
+    rta->rta_len = (unsigned short)alen;
+    memcpy(RTA_DATA(rta), &val, sizeof(val));
+    nlh->nlmsg_len =
+        (uint32_t)(NLMSG_ALIGN(nlh->nlmsg_len) + RTA_ALIGN(alen));
+    return 0;
+}
+
+/**
+ * @brief Appends an rtattr carrying raw bytes to an in-progress nlmsghdr.
+ */
+static int nl_add_raw(struct nlmsghdr* nlh,
+                      size_t cap,
+                      unsigned short type,
+                      const void* data,
+                      size_t dlen)
+{
+    unsigned int alen = (unsigned int)RTA_LENGTH(dlen);
+    if (NLMSG_ALIGN(nlh->nlmsg_len) + RTA_ALIGN(alen) > cap)
+        return -1;
+    struct rtattr* rta =
+        (struct rtattr*)((char*)nlh + NLMSG_ALIGN(nlh->nlmsg_len));
+    rta->rta_type = type;
+    rta->rta_len = (unsigned short)alen;
+    if (dlen > 0)
+        memcpy(RTA_DATA(rta), data, dlen);
+    nlh->nlmsg_len =
+        (uint32_t)(NLMSG_ALIGN(nlh->nlmsg_len) + RTA_ALIGN(alen));
+    return 0;
+}
+
+/**
+ * @brief Reads the kernel ACK and (if present) an echoed RTM_NEWNEXTHOP.
+ *
+ * For RTM_NEWNEXTHOP requests with @c NLM_F_ECHO the kernel first sends the
+ * newly created object (so we can recover the NHA_ID), then an NLMSG_ERROR
+ * with @c error == 0 as a positive ACK.
+ *
+ * @param fd      Netlink socket.
+ * @param seq     Expected sequence number.
+ * @param out_id  If non-NULL, filled with the NHA_ID parsed from the echo.
+ * @return 0 on success, -1 on error (errno is set to the kernel error code).
+ */
+static int nl_recv_ack(int fd, uint32_t seq, uint32_t* out_id)
+{
+    char buf[NL_BUF_SIZE];
+
+    for (;;)
+    {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+
+        const struct nlmsghdr* nlh = (const struct nlmsghdr*)buf;
+        for (; NLMSG_OK(nlh, (unsigned int)n); nlh = NLMSG_NEXT(nlh, n))
+        {
+            if (nlh->nlmsg_seq != seq)
+                continue;
+
+            if (nlh->nlmsg_type == NLMSG_ERROR)
+            {
+                const struct nlmsgerr* err =
+                    (const struct nlmsgerr*)NLMSG_DATA(nlh);
+                if (err->error != 0)
+                {
+                    errno = -err->error;
+                    return -1;
+                }
+                return 0; /* positive ACK */
+            }
+
+            /* Echoed RTM_NEWNEXTHOP: extract NHA_ID. */
+            if (nlh->nlmsg_type == RTM_NEWNEXTHOP && out_id != NULL)
+            {
+                if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct nl_nhmsg)))
+                    continue;
+                unsigned int attrlen =
+                    (unsigned int)NL_NHA_PAYLOAD(nlh);
+                const struct rtattr* rta =
+                    NL_NHA_RTA((const struct nl_nhmsg*)NLMSG_DATA(nlh));
+                for (; RTA_OK(rta, attrlen); rta = RTA_NEXT(rta, attrlen))
+                {
+                    if ((rta->rta_type & 0x00ff) == NHA_ID &&
+                        RTA_PAYLOAD(rta) >= sizeof(uint32_t))
+                    {
+                        memcpy(out_id, RTA_DATA(rta), sizeof(uint32_t));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @brief Builds and populates the NHA_GROUP + NHA_GROUP_TYPE attributes in
+ *        @p buf.
+ *
+ * @return 0 on success, -1 on buffer overflow.
+ */
+static int nl_build_group_attrs(struct nlmsghdr* nlh,
+                                size_t cap,
+                                const netlink_nexthop_grp_t* members,
+                                uint32_t count)
+{
+    /* Build the kernel group array on the stack. */
+    struct nl_nexthop_grp grp[NETLINK_NEXTHOP_MAX_GROUP];
+    if (count > NETLINK_NEXTHOP_MAX_GROUP)
+        count = NETLINK_NEXTHOP_MAX_GROUP;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        grp[i].id = members[i].id;
+        grp[i].weight = members[i].weight;
+        grp[i].weight_high = members[i].weight_high;
+        grp[i].resvd = 0;
+    }
+
+    if (nl_add_raw(nlh, cap, NHA_GROUP,
+                   grp, count * sizeof(struct nl_nexthop_grp)) < 0)
+        return -1;
+
+    /* NHA_GROUP_TYPE = 0 → NEXTHOP_GRP_TYPE_MPATH (ECMP). */
+    uint16_t gtype = 0;
+    if (nl_add_u16(nlh, cap, NHA_GROUP_TYPE, gtype) < 0)
+        return -1;
+
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: netlink_nexthop_group_create
+ * ------------------------------------------------------------------------- */
+
+uint32_t netlink_nexthop_group_create(const netlink_nexthop_grp_t* members,
+                                      uint32_t count)
+{
+    if (!members || count == 0)
+    {
+        errno = EINVAL;
+        return 0;
+    }
+
+    int fd = nl_mgmt_open();
+    if (fd < 0)
+        return 0;
+
+    char buf[NL_MGMT_BUF];
+    memset(buf, 0, sizeof(buf));
+
+    const uint32_t seq = ++g_mgmt_seq;
+
+    struct nlmsghdr* nlh = (struct nlmsghdr*)buf;
+    nlh->nlmsg_type = RTM_NEWNEXTHOP;
+    /* NLM_F_ECHO: kernel echoes the created object so we get the NHA_ID. */
+    nlh->nlmsg_flags =
+        NLM_F_REQUEST | NLM_F_CREATE | NLM_F_ECHO | NLM_F_ACK;
+    nlh->nlmsg_seq = seq;
+    nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nl_nhmsg));
+
+    /* nhmsg header — family AF_UNSPEC for a group (no gateway/oif). */
+    struct nl_nhmsg* nhm = (struct nl_nhmsg*)NLMSG_DATA(nlh);
+    nhm->nh_family = AF_UNSPEC;
+
+    /* No NHA_ID: let the kernel assign one; we recover it from the echo. */
+
+    if (nl_build_group_attrs(nlh, sizeof(buf), members, count) < 0)
+    {
+        close(fd);
+        errno = ENOBUFS;
+        return 0;
+    }
+
+    if (send(fd, buf, nlh->nlmsg_len, 0) < 0)
+    {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return 0;
+    }
+
+    uint32_t assigned_id = 0;
+    if (nl_recv_ack(fd, seq, &assigned_id) < 0)
+    {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return 0;
+    }
+
+    close(fd);
+    return assigned_id;
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: netlink_nexthop_group_update
+ * ------------------------------------------------------------------------- */
+
+int netlink_nexthop_group_update(uint32_t id,
+                                 const netlink_nexthop_grp_t* members,
+                                 uint32_t count)
+{
+    if (!members || count == 0 || id == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = nl_mgmt_open();
+    if (fd < 0)
+        return -1;
+
+    char buf[NL_MGMT_BUF];
+    memset(buf, 0, sizeof(buf));
+
+    const uint32_t seq = ++g_mgmt_seq;
+
+    struct nlmsghdr* nlh = (struct nlmsghdr*)buf;
+    nlh->nlmsg_type = RTM_NEWNEXTHOP;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE | NLM_F_ACK;
+    nlh->nlmsg_seq = seq;
+    nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nl_nhmsg));
+
+    struct nl_nhmsg* nhm = (struct nl_nhmsg*)NLMSG_DATA(nlh);
+    nhm->nh_family = AF_UNSPEC;
+
+    /* Specify the existing group ID to replace. */
+    if (nl_add_u32(nlh, sizeof(buf), NHA_ID, id) < 0 ||
+        nl_build_group_attrs(nlh, sizeof(buf), members, count) < 0)
+    {
+        close(fd);
+        errno = ENOBUFS;
+        return -1;
+    }
+
+    if (send(fd, buf, nlh->nlmsg_len, 0) < 0)
+    {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+
+    int rc = nl_recv_ack(fd, seq, NULL);
+    int saved = errno;
+    close(fd);
+    errno = saved;
+    return rc;
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: netlink_nexthop_group_delete
+ * ------------------------------------------------------------------------- */
+
+int netlink_nexthop_group_delete(uint32_t id)
+{
+    if (id == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = nl_mgmt_open();
+    if (fd < 0)
+        return -1;
+
+    char buf[NL_MGMT_BUF];
+    memset(buf, 0, sizeof(buf));
+
+    const uint32_t seq = ++g_mgmt_seq;
+
+    struct nlmsghdr* nlh = (struct nlmsghdr*)buf;
+    nlh->nlmsg_type = RTM_DELNEXTHOP;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+    nlh->nlmsg_seq = seq;
+    nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nl_nhmsg));
+
+    struct nl_nhmsg* nhm = (struct nl_nhmsg*)NLMSG_DATA(nlh);
+    nhm->nh_family = AF_UNSPEC;
+
+    if (nl_add_u32(nlh, sizeof(buf), NHA_ID, id) < 0)
+    {
+        close(fd);
+        errno = ENOBUFS;
+        return -1;
+    }
+
+    if (send(fd, buf, nlh->nlmsg_len, 0) < 0)
+    {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+
+    int rc = nl_recv_ack(fd, seq, NULL);
+    int saved = errno;
+    close(fd);
+    errno = saved;
+    return rc;
+}

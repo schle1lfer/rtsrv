@@ -1,35 +1,69 @@
 /**
  * @file client/src/nexthop_group.cpp
- * @brief Implementation of EcmpGroup and NexhopGroupManager.
+ * @brief Implementation of the SRA-owned ECMP nexthop group manager.
  *
- * All public NexhopGroupManager methods are thread-safe.  Read-only queries
- * take a std::shared_lock; mutating operations take a std::unique_lock on the
- * internal shared_mutex.
+ * Kernel nexthop group objects are managed through the pure-C API declared in
+ * client/include/client/netlink_nexthop.h:
+ *   - netlink_nexthop_group_create() → RTM_NEWNEXTHOP + NLM_F_CREATE
+ *   - netlink_nexthop_group_update() → RTM_NEWNEXTHOP + NLM_F_REPLACE
+ *   - netlink_nexthop_group_delete() → RTM_DELNEXTHOP
  *
- * @see client/include/client/nexthop_group.hpp for API documentation.
+ * The kernel assigns a unique NHA_ID to each SRA-created group; this ID is
+ * stable for the group's lifetime (updates preserve the same NHA_ID) and is
+ * used as nexthop_id_ipv4 in every ud_server ROUTE_ADD for the corresponding
+ * loopback.
+ *
+ * All public NexhopGroupManager methods are thread-safe: the shared_mutex is
+ * held in shared mode for queries and in exclusive mode for mutations.
+ * Kernel netlink calls are issued while holding the exclusive lock to keep
+ * in-memory state and kernel state consistent.
+ *
+ * @see client/include/client/nexthop_group.hpp for full API documentation.
  */
 
 #include "client/nexthop_group.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <mutex>
 #include <shared_mutex>
+#include <vector>
 
 namespace sra
 {
 
 // ---------------------------------------------------------------------------
-// EcmpGroup
+// Private helper
 // ---------------------------------------------------------------------------
 
-uint32_t EcmpGroup::effective_nhid() const noexcept
+void NexhopGroupManager::toKernelGrp(const std::vector<EcmpMember>& members,
+                                      netlink_nexthop_grp_t* out) noexcept
 {
-    if (members.empty())
-        return 0;
-    /* Return the most recently added member — in the ECMP case the kernel
-     * assigns a composite group NHA_ID that is itself the nhid carried by
-     * the /32 route event, so the last-seen value is always the right one. */
-    return members.back().nhid;
+    for (std::size_t i = 0; i < members.size(); ++i)
+    {
+        out[i].id = members[i].nhid;
+        out[i].weight = static_cast<uint8_t>(members[i].weight > 0
+                                                 ? members[i].weight - 1
+                                                 : 0);
+        out[i].weight_high = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NexhopGroupManager — destructor
+// ---------------------------------------------------------------------------
+
+NexhopGroupManager::~NexhopGroupManager()
+{
+    /* Delete every kernel nexthop group object that is still alive. */
+    std::unique_lock lock(mutex_);
+    for (auto& [key, g] : groups_)
+    {
+        if (g.kernel_nhid != 0)
+            netlink_nexthop_group_delete(g.kernel_nhid);
+    }
+    groups_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -41,23 +75,37 @@ void NexhopGroupManager::create(const std::string& loopback_ipv4,
 {
     std::unique_lock lock(mutex_);
     if (groups_.contains(loopback_ipv4))
-        return; /* group already exists — do not overwrite */
+        return; /* already tracked — do not overwrite existing kernel object */
 
     EcmpGroup g;
     g.loopback_ipv4 = loopback_ipv4;
     g.hostname = hostname;
+    /* kernel_nhid stays 0 until the first add_member() call */
     groups_.emplace(loopback_ipv4, std::move(g));
 }
 
 bool NexhopGroupManager::remove(const std::string& loopback_ipv4)
 {
     std::unique_lock lock(mutex_);
-    return groups_.erase(loopback_ipv4) > 0;
+    const auto it = groups_.find(loopback_ipv4);
+    if (it == groups_.end())
+        return false;
+
+    if (it->second.kernel_nhid != 0)
+        netlink_nexthop_group_delete(it->second.kernel_nhid);
+
+    groups_.erase(it);
+    return true;
 }
 
 void NexhopGroupManager::clear()
 {
     std::unique_lock lock(mutex_);
+    for (auto& [key, g] : groups_)
+    {
+        if (g.kernel_nhid != 0)
+            netlink_nexthop_group_delete(g.kernel_nhid);
+    }
     groups_.clear();
 }
 
@@ -65,28 +113,56 @@ void NexhopGroupManager::clear()
 // NexhopGroupManager — member management
 // ---------------------------------------------------------------------------
 
-void NexhopGroupManager::add_member(const std::string& loopback_ipv4,
-                                     uint32_t nhid,
-                                     uint8_t weight)
+uint32_t NexhopGroupManager::add_member(const std::string& loopback_ipv4,
+                                         uint32_t nhid,
+                                         uint8_t weight)
 {
     if (nhid == 0)
-        return;
+        return 0;
 
     std::unique_lock lock(mutex_);
-    auto& g = groups_[loopback_ipv4]; /* inserts a default EcmpGroup if absent */
+    auto& g = groups_[loopback_ipv4]; /* inserts default EcmpGroup if absent */
     if (g.loopback_ipv4.empty())
         g.loopback_ipv4 = loopback_ipv4;
 
-    /* Update weight if nhid is already a member; avoid duplicate entries. */
+    /* Update weight if nhid is already present; no duplicates. */
     for (auto& m : g.members)
     {
         if (m.nhid == nhid)
         {
+            if (m.weight == weight)
+                return g.kernel_nhid; /* nothing changed */
             m.weight = weight;
-            return;
+            /* Fall through to update the kernel object. */
+            goto do_update;
         }
     }
     g.members.push_back({nhid, weight});
+
+do_update:
+    {
+        /* Build the kernel group array. */
+        std::vector<netlink_nexthop_grp_t> kgrp(g.members.size());
+        toKernelGrp(g.members, kgrp.data());
+
+        if (g.kernel_nhid == 0)
+        {
+            /* First member: create the kernel nexthop group. */
+            const uint32_t kid = netlink_nexthop_group_create(
+                kgrp.data(), static_cast<uint32_t>(kgrp.size()));
+            g.kernel_nhid = kid; /* 0 on error — caller checks group_nhid() */
+        }
+        else
+        {
+            /* Subsequent member: update the existing kernel group in place. */
+            netlink_nexthop_group_update(
+                g.kernel_nhid,
+                kgrp.data(),
+                static_cast<uint32_t>(kgrp.size()));
+        }
+    }
+
+    return g.kernel_nhid;
 }
 
 bool NexhopGroupManager::remove_member(const std::string& loopback_ipv4,
@@ -97,22 +173,46 @@ bool NexhopGroupManager::remove_member(const std::string& loopback_ipv4,
     if (it == groups_.end())
         return false;
 
-    auto& members = it->second.members;
-    const auto before = members.size();
-    members.erase(
-        std::remove_if(members.begin(),
-                       members.end(),
+    EcmpGroup& g = it->second;
+    const auto before = g.members.size();
+
+    g.members.erase(
+        std::remove_if(g.members.begin(),
+                       g.members.end(),
                        [nhid](const EcmpMember& m) { return m.nhid == nhid; }),
-        members.end());
-    return members.size() < before;
+        g.members.end());
+
+    if (g.members.size() == before)
+        return false; /* nhid was not a member */
+
+    if (g.members.empty())
+    {
+        /* Group is now empty — delete the kernel nexthop group object. */
+        if (g.kernel_nhid != 0)
+        {
+            netlink_nexthop_group_delete(g.kernel_nhid);
+            g.kernel_nhid = 0;
+        }
+    }
+    else if (g.kernel_nhid != 0)
+    {
+        /* Update the kernel group with the reduced member list. */
+        std::vector<netlink_nexthop_grp_t> kgrp(g.members.size());
+        toKernelGrp(g.members, kgrp.data());
+        netlink_nexthop_group_update(g.kernel_nhid,
+                                     kgrp.data(),
+                                     static_cast<uint32_t>(kgrp.size()));
+    }
+
+    return true;
 }
 
-void NexhopGroupManager::update_member(const std::string& loopback_ipv4,
-                                        uint32_t nhid,
-                                        uint8_t weight)
+uint32_t NexhopGroupManager::update_member(const std::string& loopback_ipv4,
+                                            uint32_t nhid,
+                                            uint8_t weight)
 {
     if (nhid == 0)
-        return;
+        return 0;
 
     std::unique_lock lock(mutex_);
     auto& g = groups_[loopback_ipv4]; /* inserts if absent */
@@ -121,6 +221,21 @@ void NexhopGroupManager::update_member(const std::string& loopback_ipv4,
 
     g.members.clear();
     g.members.push_back({nhid, weight});
+
+    netlink_nexthop_grp_t kgrp;
+    toKernelGrp(g.members, &kgrp);
+
+    if (g.kernel_nhid == 0)
+    {
+        g.kernel_nhid =
+            netlink_nexthop_group_create(&kgrp, 1);
+    }
+    else
+    {
+        netlink_nexthop_group_update(g.kernel_nhid, &kgrp, 1);
+    }
+
+    return g.kernel_nhid;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,13 +252,13 @@ EcmpGroup NexhopGroupManager::get(const std::string& loopback_ipv4) const
 }
 
 uint32_t
-NexhopGroupManager::effective_nhid(const std::string& loopback_ipv4) const
+NexhopGroupManager::group_nhid(const std::string& loopback_ipv4) const
 {
     std::shared_lock lock(mutex_);
     const auto it = groups_.find(loopback_ipv4);
     if (it == groups_.end())
         return 0;
-    return it->second.effective_nhid();
+    return it->second.kernel_nhid;
 }
 
 bool NexhopGroupManager::contains(const std::string& loopback_ipv4) const
