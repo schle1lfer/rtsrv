@@ -976,8 +976,8 @@ static void logEcmpGroupTable(const std::string& trigger,
         logctx, total, trigger));
     rtsrv::log::info(sep);
     rtsrv::log::info(std::format(
-        "  {:<18} {:<22} {:>7}  {:<22}  {:>9}",
-        "Loopback", "Hostname", "Members", "Nhids", "Effective"));
+        "  {:<18} {:<22} {:>7}  {:<32}  {:>10}",
+        "Loopback", "Hostname", "Members", "OSPF nhid → SRA nhid", "Group nhid"));
     rtsrv::log::info(sep);
 
     if (total == 0)
@@ -989,13 +989,13 @@ static void logEcmpGroupTable(const std::string& trigger,
         g_ecmp_groups.for_each(
             [&](const std::string& loopback, const sra::EcmpGroup& g)
             {
-                /* Build a compact nhid list: "363,364(w2)" etc. */
+                /* Build member list: "100→200,101→201(w2)" per entry. */
                 std::string nhidList;
                 for (const auto& m : g.members)
                 {
                     if (!nhidList.empty())
                         nhidList += ',';
-                    nhidList += std::to_string(m.nhid);
+                    nhidList += std::format("{}→{}", m.ospf_nhid, m.sra_nhid);
                     if (m.weight != 1)
                         nhidList += std::format("(w{})", m.weight);
                 }
@@ -1006,7 +1006,7 @@ static void logEcmpGroupTable(const std::string& trigger,
                 const std::string effStr = eff ? std::to_string(eff) : "-";
 
                 rtsrv::log::info(std::format(
-                    "  {:<18} {:<22} {:>7}  {:<22}  {:>9}",
+                    "  {:<18} {:<22} {:>7}  {:<32}  {:>10}",
                     loopback,
                     g.hostname,
                     g.members.size(),

@@ -11,15 +11,16 @@
  *
  * @par Data-plane model
  * @code
- *   Kernel OSPF installs:
+ *   Kernel OSPF installs (OSPF-owned):
  *     nhid=100  via 192.168.0.2  dev Ethernet46   (single path)
  *     nhid=101  via 192.168.0.6  dev Ethernet47   (single path)
  *
- *   SRA creates on first OSPF event:
- *     nhid=500  GROUP { 100 }   ← SRA-owned ECMP group (kernel object)
+ *   SRA allocates its own nexthops (mirrors of OSPF paths, SRA-owned):
+ *     nhid=200  via 192.168.0.2  dev Ethernet46   (RTM_NEWNEXTHOP, single)
+ *     nhid=201  via 192.168.0.6  dev Ethernet47   (RTM_NEWNEXTHOP, single)
  *
- *   SRA updates on second OSPF event:
- *     nhid=500  GROUP { 100, 101 }
+ *   SRA creates ECMP group whose members are the SRA nexthop IDs:
+ *     nhid=500  GROUP { 200, 201 }               (RTM_NEWNEXTHOP + NHA_GROUP)
  *
  *   ud_server ROUTE_ADD for 2.2.2.2 → nexthop_id = 500
  * @endcode
@@ -81,8 +82,24 @@ namespace sra
  */
 struct EcmpMember
 {
-    uint32_t nhid{0};  ///< OSPF-installed kernel nexthop object ID (NHA_ID).
-    uint8_t weight{1}; ///< Relative forwarding weight (1 = equal-cost).
+    /**
+     * @brief OSPF-installed nexthop ID — used only as a lookup key to match
+     *        route events.  Never placed directly into the SRA ECMP group.
+     */
+    uint32_t ospf_nhid{0};
+
+    /**
+     * @brief NHA_ID of the SRA-created single-path nexthop that mirrors the
+     *        OSPF nexthop (same gateway + oif).  This is the actual member
+     *        placed inside the SRA-owned ECMP group.
+     */
+    uint32_t sra_nhid{0};
+
+    uint8_t     family{AF_INET}; ///< AF_INET or AF_INET6.
+    std::string gateway;         ///< Gateway IP string (for logging).
+    uint32_t    oif{0};          ///< Output interface index.
+    std::string oif_name;        ///< Interface name (for logging).
+    uint8_t     weight{1};       ///< Relative forwarding weight.
 };
 
 // ---------------------------------------------------------------------------

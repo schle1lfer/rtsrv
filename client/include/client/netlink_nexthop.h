@@ -266,6 +266,47 @@ extern "C"
      */
     int netlink_nexthop_group_delete(uint32_t id);
 
+    /**
+     * @brief Deletes any SRA-owned nexthop (single-path or ECMP group).
+     *
+     * Thin wrapper around netlink_nexthop_group_delete() that works for both
+     * single nexthop objects and group objects.
+     *
+     * @param id  NHA_ID to delete.
+     * @return 0 on success, -1 on failure (errno set).
+     */
+    int netlink_nexthop_delete(uint32_t id);
+
+    /**
+     * @brief Creates a single-path (non-group) SRA-owned nexthop in the kernel.
+     *
+     * Sends RTM_NEWNEXTHOP with NLM_F_CREATE | NLM_F_ECHO.  No NHA_GROUP
+     * attribute — produces a single-path nexthop object suitable for use as an
+     * individual member of an SRA-owned ECMP group.  The kernel assigns a fresh
+     * NHA_ID which is recovered from the echo reply.
+     *
+     * @param family   AF_INET or AF_INET6.
+     * @param gateway  Gateway address string (e.g. "192.168.0.2").
+     * @param oif      Output interface index (> 0).
+     * @return Kernel-assigned NHA_ID (> 0) on success, 0 on error.
+     */
+    uint32_t netlink_nexthop_single_create(uint8_t     family,
+                                           const char* gateway,
+                                           uint32_t    oif);
+
+    /**
+     * @brief Fetches a single nexthop object from the kernel by NHA_ID.
+     *
+     * Sends RTM_GETNEXTHOP (no NLM_F_DUMP) and parses the reply into @p out.
+     * Used by NexhopGroupManager::add_member() to obtain gateway + oif from
+     * the OSPF nexthop so that a matching SRA-owned nexthop can be created.
+     *
+     * @param nhid  NHA_ID to look up (> 0).
+     * @param out   Output: filled on success.
+     * @return 0 on success, -1 on error (errno: ENOENT if not found).
+     */
+    int netlink_nexthop_get_by_id(uint32_t nhid, netlink_nexthop_t* out);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
