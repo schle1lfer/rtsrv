@@ -12,14 +12,15 @@
  * @par Data-plane model
  * @code
  *   Kernel OSPF installs:
- *     nhid=100  via 192.168.0.2  dev Ethernet46   (single path)
- *     nhid=101  via 192.168.0.6  dev Ethernet47   (single path)
+ *     nhid=100  via 192.168.0.2  dev Ethernet46   (OSPF-owned, single path)
+ *     nhid=101  via 192.168.0.6  dev Ethernet47   (OSPF-owned, single path)
  *
- *   SRA creates on first OSPF event:
- *     nhid=500  GROUP { 100 }   ← SRA-owned ECMP group (kernel object)
+ *   SRA creates its own individual nexthops (mirrors of OSPF ones):
+ *     nhid=200  via 192.168.0.2  dev Ethernet46   (SRA-owned single nexthop)
+ *     nhid=201  via 192.168.0.6  dev Ethernet47   (SRA-owned single nexthop)
  *
- *   SRA updates on second OSPF event:
- *     nhid=500  GROUP { 100, 101 }
+ *   SRA creates ECMP group whose members are the SRA nexthop IDs:
+ *     nhid=500  GROUP { 200, 201 }               (SRA-owned ECMP group)
  *
  *   ud_server ROUTE_ADD for 2.2.2.2 → nexthop_id = 500
  * @endcode
@@ -81,8 +82,31 @@ namespace sra
  */
 struct EcmpMember
 {
-    uint32_t nhid{0};  ///< OSPF-installed kernel nexthop object ID (NHA_ID).
-    uint8_t weight{1}; ///< Relative forwarding weight (1 = equal-cost).
+    /**
+     * @brief OSPF-installed kernel nexthop ID used to identify and match
+     *        route events (RTM_NEWNEXTHOP / RTM_DELNEXTHOP from OSPF).
+     *
+     * This ID is owned by the routing daemon and must NOT be placed inside
+     * the SRA-owned ECMP group — it is used only as a lookup key.
+     */
+    uint32_t ospf_nhid{0};
+
+    /**
+     * @brief NHA_ID of the SRA-created individual kernel nexthop object
+     *        (RTM_NEWNEXTHOP without NHA_GROUP) that mirrors the OSPF nexthop.
+     *
+     * This is the actual member placed inside the SRA-owned ECMP group.  It is
+     * created by netlink_nexthop_single_create() using the gateway and oif
+     * obtained from the OSPF nexthop via netlink_nexthop_get_by_id(), and is
+     * deleted by netlink_nexthop_delete() when removed from the group.
+     */
+    uint32_t sra_nhid{0};
+
+    uint8_t     family{AF_INET}; ///< AF_INET or AF_INET6.
+    std::string gateway;         ///< Gateway IP address string (for logging).
+    uint32_t    oif{0};          ///< Output interface index.
+    std::string oif_name;        ///< Interface name (for logging).
+    uint8_t     weight{1};       ///< Relative forwarding weight (1 = equal-cost).
 };
 
 // ---------------------------------------------------------------------------
@@ -197,22 +221,27 @@ public:
     // ── Member management ──────────────────────────────────────────────────
 
     /**
-     * @brief Adds an OSPF-installed nexthop ID to the group for
-     *        @p loopback_ipv4 and pushes the change to the kernel.
+     * @brief Creates an SRA-owned individual kernel nexthop object that mirrors
+     *        the OSPF nexthop identified by @p nhid, then adds it to the SRA
+     *        ECMP group.
      *
+     * - Calls netlink_nexthop_get_by_id() to look up the OSPF nexthop gateway
+     *   and oif.  Returns 0 if the lookup fails.
+     * - Calls netlink_nexthop_single_create() to create the SRA-owned individual
+     *   nexthop.  Returns 0 if creation fails.
      * - If this is the first member, creates the kernel nexthop group
      *   (RTM_NEWNEXTHOP + NLM_F_CREATE) and stores the assigned NHA_ID in
      *   @c EcmpGroup::kernel_nhid.
      * - If the group already exists, updates the kernel object with the
      *   extended member list (RTM_NEWNEXTHOP + NLM_F_REPLACE).
      * - If @p nhid is already a member, only the weight is updated.
-     * - @p nhid == 0 is silently ignored.
+     * - @p nhid == 0 is silently ignored (returns 0).
      * - Creates the tracking entry if it does not yet exist.
      *
      * @param loopback_ipv4  Remote loopback IPv4 address.
      * @param nhid           OSPF-installed nexthop object ID to add (> 0).
      * @param weight         Path weight (1 = equal-cost default).
-     * @return The kernel NHA_ID of the group (> 0), or 0 on kernel error.
+     * @return The kernel NHA_ID of the group (> 0), or 0 on error.
      */
     uint32_t add_member(const std::string& loopback_ipv4,
                         uint32_t nhid,
@@ -226,6 +255,8 @@ public:
      *   group object is deleted (RTM_DELNEXTHOP) and @c kernel_nhid is reset
      *   to 0.
      * - Otherwise the kernel object is updated with the reduced member list.
+     * - The SRA-owned individual nexthop (sra_nhid) is deleted after the group
+     *   is updated.
      *
      * @return @c true if the member was present and removed; @c false if the
      *         group does not exist or @p nhid was not a member.
@@ -236,9 +267,8 @@ public:
      * @brief Replaces all members with a single new OSPF nexthop ID and
      *        pushes the change to the kernel.
      *
-     * - If a kernel group object already exists it is updated in place
-     *   (RTM_NEWNEXTHOP + NLM_F_REPLACE); @c kernel_nhid is preserved.
-     * - If no kernel object exists yet, one is created.
+     * - If a kernel group object already exists it is deleted and recreated;
+     *   all existing SRA-owned individual nexthops are also deleted.
      * - @p nhid == 0 is silently ignored.
      *
      * Call this on @c NETLINK_ROUTE_CHANGED events where the OSPF daemon
