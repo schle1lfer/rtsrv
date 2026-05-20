@@ -110,44 +110,17 @@ enum
  * ------------------------------------------------------------------------- */
 
 /**
- * @brief Parses one RTM_NEWNEXTHOP / RTM_DELNEXTHOP message and fires @p cb.
- *
- * @param nlh       Pointer to the netlink message header.
- * @param cb        Caller-supplied event callback.
- * @param user_data Forwarded to @p cb.
+ * @brief Parses nhmsg header and NHA_* attributes into @p nh (must be zeroed).
  */
-static void nl_nexthop_dispatch(const struct nlmsghdr* nlh,
-                                netlink_nexthop_cb_t cb,
-                                void* user_data)
+static void nl_nexthop_parse(const struct nlmsghdr* nlh, netlink_nexthop_t* nh)
 {
-    if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct nl_nhmsg)))
-        return;
-
     const struct nl_nhmsg* nhm = (const struct nl_nhmsg*)NLMSG_DATA(nlh);
 
-    /* Map message type + flags to event. */
-    netlink_nexthop_event_t event;
-    if (nlh->nlmsg_type == RTM_NEWNEXTHOP)
-    {
-        event = (nlh->nlmsg_flags & NLM_F_REPLACE) ? NETLINK_NEXTHOP_CHANGED
-                                                   : NETLINK_NEXTHOP_ADDED;
-    }
-    else if (nlh->nlmsg_type == RTM_DELNEXTHOP)
-    {
-        event = NETLINK_NEXTHOP_REMOVED;
-    }
-    else
-    {
-        return;
-    }
-
-    /* Populate descriptor from the nhmsg header. */
-    netlink_nexthop_t nh;
-    memset(&nh, 0, sizeof(nh));
-    nh.family = nhm->nh_family;
-    nh.scope = nhm->nh_scope;
-    nh.protocol = nhm->nh_protocol;
-    nh.flags = nhm->nh_flags;
+    /* Copy fields from nhmsg header. */
+    nh->family   = nhm->nh_family;
+    nh->scope    = nhm->nh_scope;
+    nh->protocol = nhm->nh_protocol;
+    nh->flags    = nhm->nh_flags;
 
     /* Walk NHA_* attributes. */
     unsigned int attrlen = (unsigned int)NL_NHA_PAYLOAD(nlh);
@@ -161,47 +134,47 @@ static void nl_nexthop_dispatch(const struct nlmsghdr* nlh,
         {
         case NHA_ID:
             if (RTA_PAYLOAD(rta) >= sizeof(uint32_t))
-                memcpy(&nh.id, RTA_DATA(rta), sizeof(uint32_t));
+                memcpy(&nh->id, RTA_DATA(rta), sizeof(uint32_t));
             break;
 
         case NHA_OIF:
             if (RTA_PAYLOAD(rta) >= sizeof(uint32_t))
             {
-                memcpy(&nh.oif, RTA_DATA(rta), sizeof(uint32_t));
-                if (nh.oif > 0)
-                    if_indextoname(nh.oif, nh.oif_name);
+                memcpy(&nh->oif, RTA_DATA(rta), sizeof(uint32_t));
+                if (nh->oif > 0)
+                    if_indextoname(nh->oif, nh->oif_name);
             }
             break;
 
         case NHA_GATEWAY:
-            if (nh.family == AF_INET &&
+            if (nh->family == AF_INET &&
                 RTA_PAYLOAD(rta) >= sizeof(struct in_addr))
             {
                 inet_ntop(
-                    AF_INET, RTA_DATA(rta), nh.gateway, sizeof(nh.gateway));
+                    AF_INET, RTA_DATA(rta), nh->gateway, sizeof(nh->gateway));
             }
-            else if (nh.family == AF_INET6 &&
+            else if (nh->family == AF_INET6 &&
                      RTA_PAYLOAD(rta) >= sizeof(struct in6_addr))
             {
                 inet_ntop(
-                    AF_INET6, RTA_DATA(rta), nh.gateway, sizeof(nh.gateway));
+                    AF_INET6, RTA_DATA(rta), nh->gateway, sizeof(nh->gateway));
             }
             break;
 
         case NHA_BLACKHOLE:
-            nh.blackhole = 1;
+            nh->blackhole = 1;
             break;
 
         case NHA_FDB:
-            nh.fdb = 1;
+            nh->fdb = 1;
             break;
 
         case NHA_MASTER:
             if (RTA_PAYLOAD(rta) >= sizeof(uint32_t))
             {
-                memcpy(&nh.master, RTA_DATA(rta), sizeof(uint32_t));
-                if (nh.master > 0)
-                    if_indextoname(nh.master, nh.master_name);
+                memcpy(&nh->master, RTA_DATA(rta), sizeof(uint32_t));
+                if (nh->master > 0)
+                    if_indextoname(nh->master, nh->master_name);
             }
             break;
 
@@ -216,29 +189,54 @@ static void nl_nexthop_dispatch(const struct nlmsghdr* nlh,
                 (const struct nl_nexthop_grp*)RTA_DATA(rta);
             for (size_t i = 0; i < count; ++i)
             {
-                nh.group[i].id = grp[i].id;
-                nh.group[i].weight = grp[i].weight;
-                nh.group[i].weight_high = grp[i].weight_high;
+                nh->group[i].id          = grp[i].id;
+                nh->group[i].weight      = grp[i].weight;
+                nh->group[i].weight_high = grp[i].weight_high;
             }
-            nh.group_count = (uint32_t)count;
+            nh->group_count = (uint32_t)count;
             break;
         }
 
         case NHA_GROUP_TYPE:
             if (RTA_PAYLOAD(rta) >= sizeof(uint16_t))
-                memcpy(&nh.group_type, RTA_DATA(rta), sizeof(uint16_t));
+                memcpy(&nh->group_type, RTA_DATA(rta), sizeof(uint16_t));
             break;
 
         case NHA_ENCAP_TYPE:
             if (RTA_PAYLOAD(rta) >= sizeof(uint16_t))
-                memcpy(&nh.encap_type, RTA_DATA(rta), sizeof(uint16_t));
+                memcpy(&nh->encap_type, RTA_DATA(rta), sizeof(uint16_t));
             break;
 
         default:
             break;
         }
     }
+}
 
+/**
+ * @brief Parses one RTM_NEWNEXTHOP / RTM_DELNEXTHOP message and fires @p cb.
+ *
+ * @param nlh       Pointer to the netlink message header.
+ * @param cb        Caller-supplied event callback.
+ * @param user_data Forwarded to @p cb.
+ */
+static void nl_nexthop_dispatch(const struct nlmsghdr* nlh,
+                                netlink_nexthop_cb_t cb,
+                                void* user_data)
+{
+    if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(struct nl_nhmsg)))
+        return;
+    netlink_nexthop_event_t event;
+    if (nlh->nlmsg_type == RTM_NEWNEXTHOP)
+        event = (nlh->nlmsg_flags & NLM_F_REPLACE) ? NETLINK_NEXTHOP_CHANGED
+                                                   : NETLINK_NEXTHOP_ADDED;
+    else if (nlh->nlmsg_type == RTM_DELNEXTHOP)
+        event = NETLINK_NEXTHOP_REMOVED;
+    else
+        return;
+    netlink_nexthop_t nh;
+    memset(&nh, 0, sizeof(nh));
+    nl_nexthop_parse(nlh, &nh);
     cb(event, &nh, user_data);
 }
 
@@ -777,5 +775,180 @@ int netlink_nexthop_group_delete(uint32_t id)
     int saved = errno;
     close(fd);
     errno = saved;
+    return rc;
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: netlink_nexthop_delete  (generic — works for single and group objects)
+ * ------------------------------------------------------------------------- */
+
+int netlink_nexthop_delete(uint32_t id)
+{
+    return netlink_nexthop_group_delete(id);
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: netlink_nexthop_single_create
+ *
+ * Creates a single-path (non-group) SRA-owned nexthop with the given gateway
+ * address and output interface.  The kernel assigns a fresh NHA_ID which is
+ * returned via NLM_F_ECHO.
+ * ------------------------------------------------------------------------- */
+
+uint32_t netlink_nexthop_single_create(uint8_t     family,
+                                       const char* gateway,
+                                       uint32_t    oif)
+{
+    if (!gateway || gateway[0] == '\0' || oif == 0)
+    {
+        errno = EINVAL;
+        return 0;
+    }
+
+    int fd = nl_mgmt_open();
+    if (fd < 0)
+        return 0;
+
+    char buf[NL_MGMT_BUF];
+    memset(buf, 0, sizeof(buf));
+    const uint32_t seq = ++g_mgmt_seq;
+
+    struct nlmsghdr* nlh = (struct nlmsghdr*)buf;
+    nlh->nlmsg_type  = RTM_NEWNEXTHOP;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_ECHO | NLM_F_ACK;
+    nlh->nlmsg_seq   = seq;
+    nlh->nlmsg_len   = NLMSG_LENGTH(sizeof(struct nl_nhmsg));
+
+    struct nl_nhmsg* nhm2 = (struct nl_nhmsg*)NLMSG_DATA(nlh);
+    nhm2->nh_family   = family;
+    nhm2->nh_protocol = RTPROT_STATIC;
+
+    if (nl_add_u32(nlh, sizeof(buf), NHA_OIF, oif) < 0)
+    {
+        close(fd); errno = ENOBUFS; return 0;
+    }
+
+    if (family == AF_INET)
+    {
+        struct in_addr gw;
+        if (inet_pton(AF_INET, gateway, &gw) != 1)
+        {
+            close(fd); errno = EINVAL; return 0;
+        }
+        if (nl_add_raw(nlh, sizeof(buf), NHA_GATEWAY, &gw, sizeof(gw)) < 0)
+        {
+            close(fd); errno = ENOBUFS; return 0;
+        }
+    }
+    else
+    {
+        struct in6_addr gw6;
+        if (inet_pton(AF_INET6, gateway, &gw6) != 1)
+        {
+            close(fd); errno = EINVAL; return 0;
+        }
+        if (nl_add_raw(nlh, sizeof(buf), NHA_GATEWAY, &gw6, sizeof(gw6)) < 0)
+        {
+            close(fd); errno = ENOBUFS; return 0;
+        }
+    }
+
+    if (send(fd, buf, nlh->nlmsg_len, 0) < 0)
+    {
+        int saved = errno; close(fd); errno = saved; return 0;
+    }
+
+    uint32_t assigned_id = 0;
+    if (nl_recv_ack(fd, seq, &assigned_id) < 0)
+    {
+        int saved = errno; close(fd); errno = saved; return 0;
+    }
+    close(fd);
+    return assigned_id;
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: netlink_nexthop_get_by_id
+ *
+ * Sends RTM_GETNEXTHOP for a specific nhid (no NLM_F_DUMP) and parses the
+ * kernel reply into @p out.  Returns 0 on success, -1 on error.
+ * ------------------------------------------------------------------------- */
+
+int netlink_nexthop_get_by_id(uint32_t nhid, netlink_nexthop_t* out)
+{
+    if (nhid == 0 || !out)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = nl_mgmt_open();
+    if (fd < 0)
+        return -1;
+
+    char buf[NL_MGMT_BUF];
+    memset(buf, 0, sizeof(buf));
+    const uint32_t seq = ++g_mgmt_seq;
+
+    struct nlmsghdr* nlh = (struct nlmsghdr*)buf;
+    nlh->nlmsg_type  = RTM_GETNEXTHOP;
+    nlh->nlmsg_flags = NLM_F_REQUEST;
+    nlh->nlmsg_seq   = seq;
+    nlh->nlmsg_len   = NLMSG_LENGTH(sizeof(struct nl_nhmsg));
+
+    struct nl_nhmsg* nhm3 = (struct nl_nhmsg*)NLMSG_DATA(nlh);
+    nhm3->nh_family = AF_UNSPEC;
+
+    if (nl_add_u32(nlh, sizeof(buf), NHA_ID, nhid) < 0)
+    {
+        close(fd); errno = ENOBUFS; return -1;
+    }
+
+    if (send(fd, buf, nlh->nlmsg_len, 0) < 0)
+    {
+        int saved = errno; close(fd); errno = saved; return -1;
+    }
+
+    int rc = -1;
+    errno  = ENOENT;
+
+    for (;;)
+    {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n < 0)
+        {
+            if (errno == EINTR) continue;
+            break;
+        }
+        int done = 0;
+        const struct nlmsghdr* rnlh = (const struct nlmsghdr*)buf;
+        for (; NLMSG_OK(rnlh, (unsigned int)n) && !done;
+               rnlh = NLMSG_NEXT(rnlh, n))
+        {
+            if (rnlh->nlmsg_seq != seq)
+                continue;
+            if (rnlh->nlmsg_type == RTM_NEWNEXTHOP &&
+                rnlh->nlmsg_len >= NLMSG_LENGTH(sizeof(struct nl_nhmsg)))
+            {
+                memset(out, 0, sizeof(*out));
+                nl_nexthop_parse(rnlh, out);
+                rc = 0; done = 1;
+            }
+            else if (rnlh->nlmsg_type == NLMSG_ERROR)
+            {
+                const struct nlmsgerr* err =
+                    (const struct nlmsgerr*)NLMSG_DATA(rnlh);
+                errno = (err->error != 0) ? -err->error : ENOENT;
+                done = 1;
+            }
+            else if (rnlh->nlmsg_type == NLMSG_DONE)
+            {
+                done = 1;
+            }
+        }
+        break;
+    }
+
+    close(fd);
     return rc;
 }
