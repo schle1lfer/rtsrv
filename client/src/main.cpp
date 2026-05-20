@@ -1142,18 +1142,19 @@ static void nlWatchCb(netlink_event_t event,
             return;
         LoopbackCbEntry& entry = it->second;
 
-        // Update the SRA-owned kernel ECMP group according to the event type.
-        // add_member / update_member return the kernel group nhid directly.
+        // Sync the SRA-owned ECMP group for this loopback from the OSPF nexthop.
+        // sync_from_ospf() fetches the OSPF nhid (single or group), creates
+        // SRA-owned individual nexthop mirrors for each ECMP path, and keeps
+        // the SRA ECMP group in sync.  On REMOVED, clear all SRA state.
         const uint32_t prevGroupNhid = g_ecmp_groups.group_nhid(loKey);
         uint32_t groupNhid = 0;
-        if (ev == NETLINK_ROUTE_ADDED)
-            groupNhid = g_ecmp_groups.add_member(loKey, nhid);
-        else if (ev == NETLINK_ROUTE_CHANGED)
-            groupNhid = g_ecmp_groups.update_member(loKey, nhid);
+        if (ev == NETLINK_ROUTE_ADDED || ev == NETLINK_ROUTE_CHANGED)
+            groupNhid = g_ecmp_groups.sync_from_ospf(loKey, nhid);
         else // NETLINK_ROUTE_REMOVED
         {
-            g_ecmp_groups.remove_member(loKey, nhid);
-            groupNhid = g_ecmp_groups.group_nhid(loKey);
+            g_ecmp_groups.remove(loKey);
+            g_ecmp_groups.create(loKey, it->second.hostname);
+            groupNhid = 0;
         }
 
         // Log when SRA creates a brand-new multi-path nexthop group object.
@@ -1161,9 +1162,10 @@ static void nlWatchCb(netlink_event_t event,
         {
             rtsrv::log::info(std::format(
                 "{} [OSPF/32] *** SRA created new ECMP multi-path nexthop:"
-                " loopback='{}' kernel_nhid={} members={}"
+                " loopback='{}' kernel_nhid={} ospf_root={} members={}"
                 " (RTM_NEWNEXTHOP NLM_F_CREATE, kernel-assigned NHA_ID)",
-                ts, loKey, groupNhid, g_ecmp_groups.get(loKey).size()));
+                ts, loKey, groupNhid, nhid,
+                g_ecmp_groups.get(loKey).size()));
         }
 
         const char* evLabel = (ev == NETLINK_ROUTE_ADDED)     ? "ADD"

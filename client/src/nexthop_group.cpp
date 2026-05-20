@@ -296,6 +296,258 @@ uint32_t NexhopGroupManager::update_member(const std::string& loopback_ipv4,
     return g.kernel_nhid;
 }
 
+uint32_t NexhopGroupManager::sync_from_ospf(const std::string& loopback_ipv4,
+                                              uint32_t           ospf_nhid)
+{
+    if (ospf_nhid == 0)
+        return 0;
+
+    /* Fetch the OSPF nexthop to determine if it is a single path or a group. */
+    netlink_nexthop_t ospf_nh;
+    if (netlink_nexthop_get_by_id(ospf_nhid, &ospf_nh) < 0)
+        return 0;
+
+    /* Build the list of individual OSPF path nhids to mirror. */
+    std::vector<std::pair<uint32_t, uint8_t>> paths; /* {nhid, weight} */
+    if (ospf_nh.group_count > 0)
+    {
+        /* OSPF installed an ECMP group — expand all members. */
+        for (uint32_t i = 0; i < ospf_nh.group_count; ++i)
+            paths.push_back({ospf_nh.group[i].id,
+                             static_cast<uint8_t>(ospf_nh.group[i].weight + 1)});
+    }
+    else if (ospf_nh.gateway[0] != '\0' && ospf_nh.oif != 0)
+    {
+        /* Single-path nexthop — use directly. */
+        paths.push_back({ospf_nhid, 1});
+    }
+    else
+    {
+        return 0; /* nexthop has no usable gateway/oif */
+    }
+
+    std::unique_lock lock(mutex_);
+    auto& g = groups_[loopback_ipv4];
+    if (g.loopback_ipv4.empty())
+        g.loopback_ipv4 = loopback_ipv4;
+    g.ospf_root_nhid = ospf_nhid;
+
+    /* Determine which OSPF path nhids were added and which were removed. */
+    std::vector<uint32_t> to_remove;
+    for (const auto& m : g.members)
+    {
+        bool still_present = false;
+        for (const auto& [pid, pw] : paths)
+            if (pid == m.ospf_nhid) { still_present = true; break; }
+        if (!still_present)
+            to_remove.push_back(m.ospf_nhid);
+    }
+
+    /* Remove withdrawn members (collect sra_nhids to delete after group update). */
+    std::vector<uint32_t> sra_to_delete;
+    for (uint32_t old_ospf : to_remove)
+    {
+        g.members.erase(
+            std::remove_if(g.members.begin(), g.members.end(),
+                           [old_ospf, &sra_to_delete](const EcmpMember& m)
+                           {
+                               if (m.ospf_nhid == old_ospf)
+                               {
+                                   sra_to_delete.push_back(m.sra_nhid);
+                                   return true;
+                               }
+                               return false;
+                           }),
+            g.members.end());
+    }
+
+    /* Add new members. */
+    for (const auto& [pid, pw] : paths)
+    {
+        bool already = false;
+        for (const auto& m : g.members)
+            if (m.ospf_nhid == pid) { already = true; break; }
+        if (already)
+            continue;
+
+        /* Fetch the individual OSPF path nexthop to get gateway + oif. */
+        netlink_nexthop_t path_nh;
+        if (netlink_nexthop_get_by_id(pid, &path_nh) < 0)
+            continue;
+        if (path_nh.gateway[0] == '\0' || path_nh.oif == 0)
+            continue;
+
+        const uint32_t sra_id = netlink_nexthop_single_create(
+            path_nh.family, path_nh.gateway, path_nh.oif);
+        if (sra_id == 0)
+            continue;
+
+        EcmpMember mem;
+        mem.ospf_nhid = pid;
+        mem.sra_nhid  = sra_id;
+        mem.family    = path_nh.family;
+        mem.gateway   = path_nh.gateway;
+        mem.oif       = path_nh.oif;
+        mem.oif_name  = path_nh.oif_name;
+        mem.weight    = pw;
+        g.members.push_back(std::move(mem));
+    }
+
+    /* Push the new member list to the kernel ECMP group. */
+    if (!g.members.empty())
+    {
+        std::vector<netlink_nexthop_grp_t> kgrp(g.members.size());
+        toKernelGrp(g.members, kgrp.data());
+
+        if (g.kernel_nhid == 0)
+            g.kernel_nhid = netlink_nexthop_group_create(
+                kgrp.data(), static_cast<uint32_t>(kgrp.size()));
+        else
+            netlink_nexthop_group_update(
+                g.kernel_nhid,
+                kgrp.data(),
+                static_cast<uint32_t>(kgrp.size()));
+    }
+    else if (g.kernel_nhid != 0)
+    {
+        netlink_nexthop_delete(g.kernel_nhid);
+        g.kernel_nhid = 0;
+    }
+
+    /* Delete orphaned SRA nexthops after the group no longer references them. */
+    for (uint32_t sra : sra_to_delete)
+        netlink_nexthop_delete(sra);
+
+    return g.kernel_nhid;
+}
+
+uint32_t NexhopGroupManager::sync_ospf_group_change(
+    uint32_t                     ospf_nhid,
+    const netlink_nexthop_grp_t* members,
+    uint32_t                     count)
+{
+    /* Find the loopback that owns this OSPF root nhid. */
+    std::string loopback;
+    {
+        std::shared_lock rlock(mutex_);
+        for (const auto& [key, g] : groups_)
+        {
+            if (g.ospf_root_nhid == ospf_nhid)
+            {
+                loopback = key;
+                break;
+            }
+        }
+    }
+    if (loopback.empty())
+        return 0; /* not a tracked root */
+
+    /* Build new path list from the event. */
+    std::vector<std::pair<uint32_t, uint8_t>> paths;
+    for (uint32_t i = 0; i < count; ++i)
+        paths.push_back({members[i].id,
+                         static_cast<uint8_t>(members[i].weight + 1)});
+
+    std::unique_lock lock(mutex_);
+    auto it = groups_.find(loopback);
+    if (it == groups_.end())
+        return 0;
+    EcmpGroup& g = it->second;
+
+    /* Collect members to remove. */
+    std::vector<uint32_t> to_remove;
+    for (const auto& m : g.members)
+    {
+        bool still_present = false;
+        for (const auto& [pid, pw] : paths)
+            if (pid == m.ospf_nhid) { still_present = true; break; }
+        if (!still_present)
+            to_remove.push_back(m.ospf_nhid);
+    }
+
+    std::vector<uint32_t> sra_to_delete;
+    for (uint32_t old_ospf : to_remove)
+    {
+        g.members.erase(
+            std::remove_if(g.members.begin(), g.members.end(),
+                           [old_ospf, &sra_to_delete](const EcmpMember& m)
+                           {
+                               if (m.ospf_nhid == old_ospf)
+                               {
+                                   sra_to_delete.push_back(m.sra_nhid);
+                                   return true;
+                               }
+                               return false;
+                           }),
+            g.members.end());
+    }
+
+    /* Add new members. */
+    for (const auto& [pid, pw] : paths)
+    {
+        bool already = false;
+        for (const auto& m : g.members)
+            if (m.ospf_nhid == pid) { already = true; break; }
+        if (already)
+            continue;
+
+        netlink_nexthop_t path_nh;
+        if (netlink_nexthop_get_by_id(pid, &path_nh) < 0)
+            continue;
+        if (path_nh.gateway[0] == '\0' || path_nh.oif == 0)
+            continue;
+
+        const uint32_t sra_id = netlink_nexthop_single_create(
+            path_nh.family, path_nh.gateway, path_nh.oif);
+        if (sra_id == 0)
+            continue;
+
+        EcmpMember mem;
+        mem.ospf_nhid = pid;
+        mem.sra_nhid  = sra_id;
+        mem.family    = path_nh.family;
+        mem.gateway   = path_nh.gateway;
+        mem.oif       = path_nh.oif;
+        mem.oif_name  = path_nh.oif_name;
+        mem.weight    = pw;
+        g.members.push_back(std::move(mem));
+    }
+
+    /* Update the kernel ECMP group. */
+    if (!g.members.empty())
+    {
+        std::vector<netlink_nexthop_grp_t> kgrp(g.members.size());
+        toKernelGrp(g.members, kgrp.data());
+        if (g.kernel_nhid == 0)
+            g.kernel_nhid = netlink_nexthop_group_create(
+                kgrp.data(), static_cast<uint32_t>(kgrp.size()));
+        else
+            netlink_nexthop_group_update(
+                g.kernel_nhid,
+                kgrp.data(),
+                static_cast<uint32_t>(kgrp.size()));
+    }
+    else if (g.kernel_nhid != 0)
+    {
+        netlink_nexthop_delete(g.kernel_nhid);
+        g.kernel_nhid = 0;
+    }
+
+    for (uint32_t sra : sra_to_delete)
+        netlink_nexthop_delete(sra);
+
+    return g.kernel_nhid;
+}
+
+std::string NexhopGroupManager::find_by_ospf_root(uint32_t nhid) const
+{
+    std::shared_lock lock(mutex_);
+    for (const auto& [key, g] : groups_)
+        if (g.ospf_root_nhid == nhid)
+            return key;
+    return {};
+}
+
 // ---------------------------------------------------------------------------
 // NexhopGroupManager — queries
 // ---------------------------------------------------------------------------

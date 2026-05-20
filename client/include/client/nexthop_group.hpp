@@ -123,6 +123,15 @@ struct EcmpGroup
     std::string hostname;      ///< Human-readable remote node name.
 
     /**
+     * @brief NHA_ID of the OSPF nexthop referenced by the loopback's /32 route.
+     *
+     * May be a single-path nexthop or an OSPF ECMP group.  Stored so that
+     * incoming RTM_NEWNEXTHOP/CHANGED events can be matched to the owning
+     * loopback without re-scanning all routes.
+     */
+    uint32_t ospf_root_nhid{0};
+
+    /**
      * @brief NHA_ID of the SRA-created kernel nexthop group.
      *
      * 0 while the group has no members (no kernel object exists yet).
@@ -269,6 +278,56 @@ public:
     uint32_t update_member(const std::string& loopback_ipv4,
                            uint32_t nhid,
                            uint8_t weight = 1);
+
+    /**
+     * @brief Synchronises the SRA ECMP group for @p loopback_ipv4 from an
+     *        OSPF nexthop object.
+     *
+     * Called on every /32 OSPF route ADD or CHANGED event.  Fetches the OSPF
+     * nexthop identified by @p ospf_nhid via RTM_GETNEXTHOP:
+     *
+     * - If it is an ECMP group, all member nhids are expanded; an SRA-owned
+     *   single nexthop is created for each member.
+     * - If it is a single-path nexthop, one SRA nexthop is created.
+     *
+     * The resulting SRA nexthop IDs are placed in the SRA ECMP group (created
+     * if it does not yet exist, updated in place otherwise).  The OSPF nhid is
+     * stored as @c EcmpGroup::ospf_root_nhid so that subsequent nexthop-change
+     * events can be routed back to this loopback via @c sync_ospf_group_change().
+     *
+     * @param loopback_ipv4  Remote loopback address.
+     * @param ospf_nhid      NHA_ID from the OSPF /32 route (single or group).
+     * @return The SRA ECMP group NHA_ID (> 0), or 0 on error.
+     */
+    uint32_t sync_from_ospf(const std::string& loopback_ipv4,
+                            uint32_t           ospf_nhid);
+
+    /**
+     * @brief Updates the SRA ECMP group for the loopback whose
+     *        @c ospf_root_nhid equals @p ospf_nhid.
+     *
+     * Called when a RTM_NEWNEXTHOP CHANGED event arrives for an OSPF nexthop
+     * that is the root of a tracked loopback.  Computes the diff between the
+     * current SRA members and the new OSPF member list, creates SRA mirrors
+     * for added members, removes them for withdrawn members, and updates the
+     * kernel ECMP group accordingly.
+     *
+     * @param ospf_nhid  The OSPF nexthop NHA_ID that changed.
+     * @param members    New member array from the OSPF nexthop event.
+     * @param count      Number of entries in @p members.
+     * @return The SRA ECMP group NHA_ID of the affected loopback (> 0),
+     *         or 0 if @p ospf_nhid is not a tracked root.
+     */
+    uint32_t sync_ospf_group_change(uint32_t                    ospf_nhid,
+                                    const netlink_nexthop_grp_t* members,
+                                    uint32_t                    count);
+
+    /**
+     * @brief Returns the loopback_ipv4 whose @c ospf_root_nhid equals @p nhid.
+     *
+     * Returns an empty string if no tracked group has that root.
+     */
+    [[nodiscard]] std::string find_by_ospf_root(uint32_t nhid) const;
 
     // ── Queries ────────────────────────────────────────────────────────────
 
