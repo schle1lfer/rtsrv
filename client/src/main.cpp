@@ -1603,17 +1603,16 @@ static void addDelListOspfCb(netlink_event_t event,
     if (!ctx || !ctx->vrfClient)
         return;
 
-    // Update the SRA-owned kernel ECMP group and obtain its NHA_ID.
+    // Sync the SRA-owned ECMP group for this loopback from the OSPF nexthop.
     const uint32_t prevGroupNhid = g_ecmp_groups.group_nhid(dst);
     uint32_t groupNhid = 0;
-    if (event == NETLINK_ROUTE_ADDED)
-        groupNhid = g_ecmp_groups.add_member(dst, route->nhid);
-    else if (event == NETLINK_ROUTE_CHANGED)
-        groupNhid = g_ecmp_groups.update_member(dst, route->nhid);
+    if (event == NETLINK_ROUTE_ADDED || event == NETLINK_ROUTE_CHANGED)
+        groupNhid = g_ecmp_groups.sync_from_ospf(dst, route->nhid);
     else // NETLINK_ROUTE_REMOVED
     {
-        g_ecmp_groups.remove_member(dst, route->nhid);
-        groupNhid = g_ecmp_groups.group_nhid(dst);
+        g_ecmp_groups.remove(dst);
+        g_ecmp_groups.create(dst, entry.hostname);
+        groupNhid = 0;
     }
 
     // Log when SRA creates a brand-new multi-path nexthop group object.
@@ -1621,9 +1620,9 @@ static void addDelListOspfCb(netlink_event_t event,
     {
         rtsrv::log::info(std::format(
             "[add-del-list] *** SRA created new ECMP multi-path nexthop:"
-            " loopback='{}' kernel_nhid={} members={}"
+            " loopback='{}' kernel_nhid={} ospf_root={} members={}"
             " (RTM_NEWNEXTHOP NLM_F_CREATE, kernel-assigned NHA_ID)",
-            dst, groupNhid, g_ecmp_groups.get(dst).size()));
+            dst, groupNhid, route->nhid, g_ecmp_groups.get(dst).size()));
     }
 
     rtsrv::log::info(std::format(
@@ -1944,7 +1943,7 @@ static int cmdNetlinkWatch(sra::RouteClient& client,
                 // OSPF event arrives.
                 g_ecmp_groups.create(loopback, node.hostname());
                 if (g_loopback_cb_map[loopback].last_nhid != 0)
-                    g_ecmp_groups.add_member(
+                    g_ecmp_groups.sync_from_ospf(
                         loopback, g_loopback_cb_map[loopback].last_nhid);
                 rtsrv::log::info(std::format(
                     "[Watch] ECMP group created: loopback='{}' hostname='{}'"
@@ -3547,6 +3546,24 @@ static void startupNexthopLiveCb(netlink_nexthop_event_t event,
 
     if (ctx->udpServer)
         ctx->udpServer->setNexthopData(serializeNexthopTable(ctx->nexthops));
+
+    /* If the changed nexthop is the OSPF root for a tracked loopback,
+     * sync the SRA ECMP group membership to match the new OSPF group. */
+    if ((event == NETLINK_NEXTHOP_CHANGED || event == NETLINK_NEXTHOP_ADDED)
+        && nh->group_count > 0)
+    {
+        const uint32_t sra_gid = g_ecmp_groups.sync_ospf_group_change(
+            nh->id, nh->group, nh->group_count);
+        if (sra_gid != 0)
+        {
+            const std::string lb = g_ecmp_groups.find_by_ospf_root(nh->id);
+            rtsrv::log::info(std::format(
+                "[Watch] OSPF nexthop nhid={} changed → synced SRA ECMP"
+                " group for loopback='{}' sra_group_nhid={} members={}",
+                nh->id, lb, sra_gid,
+                g_ecmp_groups.get(lb).size()));
+        }
+    }
 
     // For every event (ADDED / CHANGED / REMOVED) check the VRF table and
     // re-apply routes if this nexthop is referenced.
@@ -5253,7 +5270,7 @@ int main(int argc, char* argv[])
                         g_loopback_cb_map[node.loopback_ipv4()].last_nhid;
                     g_ecmp_groups.create(node.loopback_ipv4(), node.hostname());
                     if (seedNhid != 0)
-                        g_ecmp_groups.add_member(node.loopback_ipv4(), seedNhid);
+                        g_ecmp_groups.sync_from_ospf(node.loopback_ipv4(), seedNhid);
                     rtsrv::log::info(std::format(
                         "[add-del-list] ECMP group created: loopback='{}'"
                         " hostname='{}' seed_nhid={}",
@@ -5405,19 +5422,20 @@ int prepare_route_add_remain_lb(
                 "ROUTE_ADD for {}",
                 loopback_ipv4));
 
-            // Register this kernel nhid in the loopback's ECMP group.
-            // The group was created during Step 6 with a seed nhid; calling
-            // add_member() here is idempotent if the same nhid was seeded.
+            // Sync the SRA ECMP group for this loopback from the OSPF /32 nhid.
+            // sync_from_ospf() expands OSPF ECMP groups to their individual
+            // path members and creates SRA-owned mirrors for each.
             if (kr->nhid != 0)
             {
                 const uint32_t prevNhid = g_ecmp_groups.group_nhid(loopback_ipv4);
-                const uint32_t newNhid  = g_ecmp_groups.add_member(loopback_ipv4, kr->nhid);
+                const uint32_t newNhid  =
+                    g_ecmp_groups.sync_from_ospf(loopback_ipv4, kr->nhid);
                 if (prevNhid == 0 && newNhid != 0)
                     rtsrv::log::info(std::format(
                         "[add-del-list] *** SRA created new ECMP multi-path nexthop:"
-                        " loopback='{}' kernel_nhid={} members={}"
+                        " loopback='{}' kernel_nhid={} ospf_root={} members={}"
                         " (RTM_NEWNEXTHOP NLM_F_CREATE, kernel-assigned NHA_ID)",
-                        loopback_ipv4, newNhid,
+                        loopback_ipv4, newNhid, kr->nhid,
                         g_ecmp_groups.get(loopback_ipv4).size()));
             }
 
